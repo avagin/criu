@@ -20,6 +20,7 @@
 #include <sys/shm.h>
 #include <sys/mount.h>
 #include <sys/prctl.h>
+#include <linux/securebits.h>
 
 #include <sched.h>
 
@@ -1603,8 +1604,13 @@ static int prepare_task_entries()
 	return 0;
 }
 
+#define SECURE_SET_EXE_FILE 6
+#define SECBIT_SET_EXE_FILE (issecure_mask(SECURE_SET_EXE_FILE))
+
 int cr_restore_tasks(void)
 {
+	int secbits;
+
 	int ret = -1;
 
 	if (cr_plugin_init())
@@ -1618,6 +1624,12 @@ int cr_restore_tasks(void)
 
 	if (kerndat_init_rst())
 		goto err;
+
+	secbits = prctl(PR_GET_SECUREBITS, 0, 0, 0, 0);
+	if (prctl(PR_SET_SECUREBITS, secbits | SECBIT_SET_EXE_FILE, 0, 0, 0)) {
+		pr_perror("PR_SET_SECUREBITS");
+		goto err;
+	}
 
 	timing_start(TIME_RESTORE);
 
