@@ -7,6 +7,7 @@
 #include <string.h>
 #include <sched.h>
 #include <netinet/in.h>
+#include <libnet.h>
 
 #include "cr_options.h"
 #include "util.h"
@@ -378,6 +379,16 @@ static int dump_tcp_conn_state(struct inet_sk_desc *sk)
 	tse.outq_len = sk->wqlen;
 	tse.unsq_len = sk->uwqlen;
 	tse.has_unsq_len = true;
+
+	/* Don't account the fin packet. It doesn't countain real data. */
+	if (sk->state == TCP_FIN_WAIT1 ||
+	    sk->state == TCP_LAST_ACK ||
+	    sk->state == TCP_CLOSING) {
+		BUG_ON(tse.outq_len == 0);
+		tse.outq_len--;
+		tse.unsq_len = tse.unsq_len ? tse.unsq_len - 1 : 0;
+	}
+
 	ret = tcp_stream_get_queue(sk->rfd, TCP_SEND_QUEUE,
 			&tse.outq_seq, tse.outq_len, &out_buf);
 	if (ret < 0)
@@ -655,7 +666,7 @@ static int restore_tcp_opts(int sk, TcpStreamEntry *tse)
 	return 0;
 }
 
-static int restore_tcp_window(int sk, TcpStreamEntry *tse)
+static int restore_tcp_window(int sk, int state, TcpStreamEntry *tse)
 {
 	struct tcp_repair_window opt = {
 		.snd_wl1 = tse->snd_wl1,
@@ -664,6 +675,13 @@ static int restore_tcp_window(int sk, TcpStreamEntry *tse)
 		.rcv_wnd = tse->rcv_wnd,
 		.rcv_wup = tse->rcv_wup,
 	};
+
+	if ((1 << state) & ((1 << TCP_CLOSE_WAIT) |
+			    (1 << TCP_LAST_ACK) |
+			    (1 << TCP_CLOSE))) {
+		opt.rcv_wup--;
+		opt.rcv_wnd++;
+	}
 
 	if (!kdat.has_tcp_window || !tse->has_snd_wnd) {
 		pr_warn_once("Window parameters are not restored\n");
@@ -678,11 +696,98 @@ static int restore_tcp_window(int sk, TcpStreamEntry *tse)
 	return 0;
 }
 
+static int send_fin(int sk, struct inet_sk_info *ii, TcpStreamEntry *tse)
+{
+	int ret, exit_code = -1;
+	char errbuf[LIBNET_ERRBUF_SIZE];
+	libnet_t *l;
+	int mark = 0xc114;
+	int libnet_type = ii->ie->family == AF_INET6 ? LIBNET_RAW6 : LIBNET_RAW4;
+
+	l = libnet_init(
+		libnet_type,                            /* injection type */
+		NULL,                                   /* network interface */
+		errbuf);                                /* errbuf */
+	if (l == NULL)
+		return -1;
+
+	if (setsockopt(l->fd, SOL_SOCKET, SO_MARK, &mark, sizeof(mark)))
+		goto err;
+
+	ret = libnet_build_tcp(
+		ii->ie->dst_port,		/* source port */
+		ii->ie->src_port,		/* destination port */
+		tse->inq_seq,			/* sequence number */
+		tse->outq_seq -  tse->outq_len,	/* acknowledgement num */
+		TH_FIN | TH_ACK,		/* control flags */
+		tse->rcv_wnd,			/* window size */
+		0,				/* checksum */
+		10,				/* urgent pointer */
+		LIBNET_TCP_H + 20,		/* TCP packet size */
+		NULL,				/* payload */
+		0,				/* payload size */
+		l,				/* libnet handle */
+		0);				/* libnet id */
+	if (ret == -1) {
+		pr_err("Can't build TCP header: %s\n", libnet_geterror(l));
+		goto err;
+	}
+
+	if (ii->ie->family == AF_INET6) {
+		struct libnet_in6_addr src, dst;
+
+		memcpy(&dst, ii->ie->dst_addr, sizeof(dst));
+		memcpy(&src, ii->ie->src_addr, sizeof(src));
+
+		ret = libnet_build_ipv6(
+			0, 0,
+			LIBNET_TCP_H,	/* length */
+			IPPROTO_TCP,	/* protocol */
+			64,		/* hop limit */
+			dst,		/* source IP */
+			src,		/* destination IP */
+			NULL,		/* payload */
+			0,		/* payload size */
+			l,		/* libnet handle */
+			0);		/* libnet id */
+	} else
+		ret = libnet_build_ipv4(
+			LIBNET_IPV4_H + LIBNET_TCP_H + 20,	/* length */
+			0,			/* TOS */
+			242,			/* IP ID */
+			0,			/* IP Frag */
+			64,			/* TTL */
+			IPPROTO_TCP,		/* protocol */
+			0,			/* checksum */
+			ii->ie->dst_addr[0],	/* source IP */
+			ii->ie->src_addr[0],	/* destination IP */
+			NULL,			/* payload */
+			0,			/* payload size */
+			l,			/* libnet handle */
+			0);			/* libnet id */
+	if (ret == -1) {
+		pr_err("Can't build IP header: %s\n", libnet_geterror(l));
+		goto err;
+	}
+
+	ret = libnet_write(l);
+	if (ret == -1) {
+		pr_err("Unable to send a fin packet: %s", libnet_geterror(l));
+		goto err;
+	}
+
+	exit_code = 0;
+err:
+	libnet_destroy(l);
+	return exit_code;
+}
+
 static int restore_tcp_conn_state(int sk, struct inet_sk_info *ii)
 {
 	int aux;
 	struct cr_img *img;
 	TcpStreamEntry *tse;
+	int mstate = 1 << ii->ie->state;
 
 	pr_info("Restoring TCP connection id %x ino %x\n", ii->ie->id, ii->ie->ino);
 
@@ -692,6 +797,14 @@ static int restore_tcp_conn_state(int sk, struct inet_sk_info *ii)
 
 	if (pb_read_one(img, &tse, PB_TCP_STREAM) < 0)
 		goto err_c;
+
+	if (mstate & (TCPF_CLOSE_WAIT | TCPF_LAST_ACK | TCPF_CLOSE))
+		tse->inq_seq--;
+
+	/* outq_seq is adjusted due to not accointing the fin packet */
+	if (mstate & (TCPF_FIN_WAIT1 | TCPF_FIN_WAIT2 |
+			TCPF_LAST_ACK | TCPF_CLOSING | TCPF_CLOSE))
+		tse->outq_seq--;
 
 	if (restore_tcp_seqs(sk, tse))
 		goto err_c;
@@ -711,8 +824,27 @@ static int restore_tcp_conn_state(int sk, struct inet_sk_info *ii)
 	if (restore_tcp_queues(sk, tse, img))
 		goto err_c;
 
-	if (restore_tcp_window(sk, tse))
+	if (restore_tcp_window(sk, ii->ie->state, tse))
 		goto err_c;
+
+	if (ii->ie->state != TCP_ESTABLISHED)
+		tcp_repair_off(sk);
+
+	if (ii->ie->state == TCP_CLOSING) {
+		shutdown(sk, SHUT_WR);
+	}
+	if (mstate & (TCPF_CLOSE_WAIT | TCPF_LAST_ACK | TCPF_CLOSE)) {
+		if (send_fin(sk, ii, tse) < 0)
+			goto err_c;
+	}
+
+	if (mstate & (TCPF_LAST_ACK | TCPF_FIN_WAIT1 |
+			TCPF_FIN_WAIT2 | TCPF_CLOSE)) {
+		shutdown(sk, SHUT_WR);
+	}
+
+	if (ii->ie->state != TCP_ESTABLISHED)
+		tcp_repair_on(sk);
 
 	if (tse->has_nodelay && tse->nodelay) {
 		aux = 1;
@@ -781,7 +913,8 @@ int restore_one_tcp(int fd, struct inet_sk_info *ii)
 
 void tcp_locked_conn_add(struct inet_sk_info *ii)
 {
-	list_add_tail(&ii->rlist, &rst_tcp_repair_sockets);
+	if (ii->ie->dst_port != TCP_CLOSE)
+		list_add_tail(&ii->rlist, &rst_tcp_repair_sockets);
 	ii->sk_fd = -1;
 }
 

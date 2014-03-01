@@ -1549,6 +1549,7 @@ static int network_lock_internal()
 				":CRIU - [0:0]\n"
 				"-I INPUT -j CRIU\n"
 				"-I OUTPUT -j CRIU\n"
+				"-A CRIU -m mark --mark 0xc114 -j ACCEPT\n"
 				"-A CRIU -j DROP\n"
 				"COMMIT\n";
 	int ret = 0, nsret;

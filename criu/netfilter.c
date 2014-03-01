@@ -22,7 +22,7 @@ static char buf[512];
  */
 
 #define NF_CONN_CMD	"%s %s -t filter %s %s --protocol tcp " \
-	"--source %s --sport %d --destination %s --dport %d -j DROP"
+	"-m mark ! --mark 0xc114 --source %s --sport %d --destination %s --dport %d -j DROP"
 
 static char iptable_cmd_ipv4[] = "iptables";
 static char iptable_cmd_ipv6[] = "ip6tables";
