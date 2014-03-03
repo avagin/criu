@@ -75,6 +75,8 @@ TST_NOFILE	:=				\
 		socket-closed-tcp		\
 		socket-tcp-fin-wait1		\
 		socket-tcp-fin-wait2		\
+		socket-tcp-close-wait		\
+		socket-tcp-last-ack		\
 		sock_opts00			\
 		sock_opts01			\
 		sk-unix-unconn			\
@@ -412,6 +414,8 @@ stopped12:	override CFLAGS += -DZDTM_STOPPED_KILL -DZDTM_STOPPED_TKILL
 
 socket-tcp-fin-wait1:	override CFLAGS += -D ZDTM_TCP_FIN_WAIT1
 socket-tcp-fin-wait2:	override CFLAGS += -D ZDTM_TCP_FIN_WAIT2
+socket-tcp-close-wait:	override CFLAGS += -D ZDTM_TCP_CLOSE_WAIT
+socket-tcp-last-ack:		override CFLAGS += -D ZDTM_TCP_LAST_ACK
 
 $(LIB):	force
 	$(Q) $(MAKE) -C $(LIBDIR)
