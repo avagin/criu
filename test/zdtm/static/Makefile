@@ -73,6 +73,8 @@ TST_NOFILE	:=				\
 		socket-tcpbuf6-local		\
 		socket-tcpbuf6			\
 		socket-closed-tcp		\
+		socket-tcp-fin-wait1		\
+		socket-tcp-fin-wait2		\
 		sock_opts00			\
 		sock_opts01			\
 		sk-unix-unconn			\
@@ -407,6 +409,9 @@ sk-freebind-false:	override CFLAGS += -DZDTM_FREEBIND_FALSE
 stopped01:	override CFLAGS += -DZDTM_STOPPED_KILL
 stopped02:	override CFLAGS += -DZDTM_STOPPED_TKILL
 stopped12:	override CFLAGS += -DZDTM_STOPPED_KILL -DZDTM_STOPPED_TKILL
+
+socket-tcp-fin-wait1:	override CFLAGS += -D ZDTM_TCP_FIN_WAIT1
+socket-tcp-fin-wait2:	override CFLAGS += -D ZDTM_TCP_FIN_WAIT2
 
 $(LIB):	force
 	$(Q) $(MAKE) -C $(LIBDIR)
