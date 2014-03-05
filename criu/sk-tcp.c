@@ -103,6 +103,11 @@ static int refresh_inet_sk(struct inet_sk_desc *sk, struct tcp_info *ti)
 
 	switch (ti->tcpi_state) {
 	case TCP_ESTABLISHED:
+	case TCP_FIN_WAIT1:
+	case TCP_FIN_WAIT2:
+	case TCP_CLOSE_WAIT:
+	case TCP_LAST_ACK:
+	case TCP_CLOSING:
 	case TCP_CLOSE:
 		break;
 	default:
@@ -465,7 +470,7 @@ err_r:
 
 int dump_one_tcp(int fd, struct inet_sk_desc *sk)
 {
-	if (sk->state != TCP_ESTABLISHED)
+	if (sk->dst_port == 0)
 		return 0;
 
 	pr_info("Dumping TCP connection\n");
