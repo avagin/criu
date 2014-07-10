@@ -63,6 +63,7 @@ TST_NOFILE	=				\
 		socket-tcp-fin-wait2		\
 		socket-tcp-close-wait		\
 		socket-tcp-last-ack		\
+		socket-tcp-last-ack-01		\
 		socket-tcp-closing		\
 		sock_opts00			\
 		sock_opts01			\
@@ -290,6 +291,7 @@ socket-tcp-fin-wait1-01:	override CFLAGS += -D ZDTM_TCP_FIN_WAIT1
 socket-tcp-fin-wait2:	override CFLAGS += -D ZDTM_TCP_FIN_WAIT2
 socket-tcp-close-wait:	override CFLAGS += -D ZDTM_TCP_CLOSE_WAIT
 socket-tcp-last-ack:		override CFLAGS += -D ZDTM_TCP_LAST_ACK
+socket-tcp-last-ack01:		override CFLAGS += -D ZDTM_TCP_LAST_ACK
 
 $(LIB):	force
 	$(Q) $(MAKE) -C $(LIBDIR)
