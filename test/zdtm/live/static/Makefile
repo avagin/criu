@@ -59,6 +59,7 @@ TST_NOFILE	=				\
 		socket-tcpbuf-local		\
 		socket-tcpbuf6			\
 		socket-tcp-fin-wait1		\
+		socket-tcp-fin-wait1-01		\
 		socket-tcp-fin-wait2		\
 		socket-tcp-close-wait		\
 		socket-tcp-last-ack		\
@@ -284,6 +285,7 @@ socket_listen6: override CFLAGS += -D ZDTM_IPV6
 sigpending:		override LDLIBS += -lrt
 
 socket-tcp-fin-wait1:	override CFLAGS += -D ZDTM_TCP_FIN_WAIT1
+socket-tcp-fin-wait1-01:	override CFLAGS += -D ZDTM_TCP_FIN_WAIT1
 socket-tcp-fin-wait2:	override CFLAGS += -D ZDTM_TCP_FIN_WAIT2
 socket-tcp-close-wait:	override CFLAGS += -D ZDTM_TCP_CLOSE_WAIT
 socket-tcp-last-ack:		override CFLAGS += -D ZDTM_TCP_LAST_ACK
