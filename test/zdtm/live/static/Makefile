@@ -65,6 +65,7 @@ TST_NOFILE	=				\
 		socket-tcp-last-ack		\
 		socket-tcp-last-ack-01		\
 		socket-tcp-closing		\
+		socket-tcp-syn-sent		\
 		sock_opts00			\
 		sock_opts01			\
 		sk-unix-unconn			\
