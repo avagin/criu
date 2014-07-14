@@ -214,6 +214,7 @@ clean_mntns
 deleted_dev
 socket-tcp-fin-wait1-01
 socket-tcp-last-ack-01
+socket-tcp-syn-sent
 "
 
 source $(readlink -f `dirname $0`/env.sh) || exit 1

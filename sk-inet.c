@@ -134,6 +134,7 @@ static int can_dump_inet_sk(const struct inet_sk_desc *sk, int proto)
 		}
 		break;
 	case TCP_ESTABLISHED:
+	case TCP_SYN_SENT:
 	case TCP_FIN_WAIT2:
 	case TCP_FIN_WAIT1:
 	case TCP_CLOSE_WAIT:
@@ -388,6 +389,7 @@ static inline int tcp_connection(InetSkEntry *ie)
 {
 	return ie->proto == IPPROTO_TCP &&
 			(ie->state == TCP_ESTABLISHED ||
+			 ie->state == TCP_SYN_SENT    ||
 			 ie->state == TCP_FIN_WAIT1   ||
 			 ie->state == TCP_FIN_WAIT2   ||
 			 ie->state == TCP_CLOSE_WAIT  ||
@@ -623,12 +625,15 @@ int inet_bind(int sk, struct inet_sk_info *ii)
 int inet_connect(int sk, struct inet_sk_info *ii)
 {
 	union sockaddr_inet addr;
-	int addr_size;
+	int addr_size, ret;
 
 	addr_size = restore_sockaddr(&addr, ii->ie->family,
 			ii->ie->dst_port, ii->ie->dst_addr);
 
-	if (connect(sk, (struct sockaddr *)&addr, addr_size) == -1) {
+	/* EINPROGRESS is returned, if a socket restored in the TCP_SYN_SENT state */
+
+	ret = connect(sk, (struct sockaddr *)&addr, addr_size);
+	if (ret == -1 && errno != EINPROGRESS) {
 		pr_perror("Can't connect inet socket back");
 		return -1;
 	}

@@ -85,6 +85,7 @@ static int refresh_inet_sk(struct inet_sk_desc *sk)
 	case TCP_CLOSE_WAIT:
 	case TCP_LAST_ACK:
 	case TCP_CLOSING:
+	case TCP_SYN_SENT:
 	case TCP_CLOSE:
 		break;
 	default:
@@ -357,7 +358,8 @@ static int dump_tcp_conn_state(struct inet_sk_desc *sk)
 	if (sk->state == TCP_FIN_WAIT1 ||
 	    sk->state == TCP_FIN_WAIT2 ||
 	    sk->state == TCP_LAST_ACK ||
-	    sk->state == TCP_CLOSING)
+	    sk->state == TCP_CLOSING ||
+	    sk->state == TCP_SYN_SENT)
 		tse.outq_seq--;
 
 	/*
@@ -525,9 +527,6 @@ static int restore_tcp_queues(int sk, TcpStreamEntry *tse, int fd)
 {
 	u32 len;
 
-	if (restore_prepare_socket(sk))
-		return -1;
-
 	len = tse->inq_len;
 	if (len && send_tcp_queue(sk, TCP_RECV_QUEUE, len, fd))
 		return -1;
@@ -629,8 +628,17 @@ static int restore_tcp_conn_state(int sk, struct inet_sk_info *ii)
 	if (inet_bind(sk, ii))
 		goto err_c;
 
+	if (restore_prepare_socket(sk))
+		goto err_c;
+
+	if (ii->ie->state == TCP_SYN_SENT)
+		tcp_repair_off(sk);
+
 	if (inet_connect(sk, ii))
 		goto err_c;
+
+	if (ii->ie->state == TCP_SYN_SENT)
+		tcp_repair_on(sk);
 
 	if (restore_tcp_opts(sk, tse))
 		goto err_c;
@@ -651,7 +659,8 @@ static int restore_tcp_conn_state(int sk, struct inet_sk_info *ii)
 	}
 
 	val = ii->ie->state;
-	if (setsockopt(sk, SOL_TCP, TCP_REPAIR_STATE, &val, sizeof(val)) < 0) {
+	if (val != TCP_SYN_SENT &&
+	    setsockopt(sk, SOL_TCP, TCP_REPAIR_STATE, &val, sizeof(val)) < 0) {
 		pr_perror("Can't set repair state");
 		return -1;
 	}
