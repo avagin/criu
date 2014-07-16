@@ -73,8 +73,9 @@ static int create_ghost(struct ghost_file *gf, GhostFileEntry *gfe, char *root, 
 	int gfd, ghost_flags, ret = -1;
 	char path[PATH_MAX];
 
+	snprintf(path, sizeof(path), "%s/%s", root, gf->remap.path);
 	if (S_ISFIFO(gfe->mode)) {
-		if (mknod(gf->remap.path, gfe->mode, 0)) {
+		if (mknod(path, gfe->mode, 0)) {
 			pr_perror("Can't create node for ghost file");
 			goto err;
 		}
@@ -85,13 +86,13 @@ static int create_ghost(struct ghost_file *gf, GhostFileEntry *gfe, char *root, 
 			goto err;
 		}
 
-		if (mknod(gf->remap.path, gfe->mode, gfe->rdev)) {
+		if (mknod(path, gfe->mode, gfe->rdev)) {
 			pr_perror("Can't create node for ghost dev");
 			goto err;
 		}
 		ghost_flags = O_WRONLY;
 	} else if (S_ISDIR(gfe->mode)) {
-		if (mkdir(gf->remap.path, gfe->mode)) {
+		if (mkdir(path, gfe->mode)) {
 			pr_perror("Can't make ghost dir");
 			goto err;
 		}
@@ -99,7 +100,6 @@ static int create_ghost(struct ghost_file *gf, GhostFileEntry *gfe, char *root, 
 	} else
 		ghost_flags = O_WRONLY | O_CREAT | O_EXCL;
 
-	snprintf(path, sizeof(path), "%s/%s", root, gf->remap.path);
 	gfd = open(path, ghost_flags, gfe->mode);
 	if (gfd < 0) {
 		pr_perror("Can't open ghost file %s", path);
@@ -183,6 +183,7 @@ static int open_remap_ghost(struct reg_file_info *rfi,
 	gf->id = rfe->remap_id;
 	gf->remap.users = 0;
 	gf->remap.is_dir = S_ISDIR(gfe->mode);
+	gf->remap.mnt_id = rfi->rfe->mnt_id;
 	list_add_tail(&gf->list, &ghost_files);
 gf_found:
 	rfi->remap = &gf->remap;
@@ -313,8 +314,19 @@ void remap_put(struct file_remap *remap)
 {
 	mutex_lock(ghost_file_mutex);
 	if (--remap->users == 0) {
+		struct ns_id *ns;
+		int mntns_root;
+
+		ns = lookup_nsid_by_mnt_id(remap->mnt_id);
+		if (ns == NULL)
+			return;
+
+		mntns_root = mntns_get_root_fd(ns);
+		if (mntns_root < 0)
+			return;
+
 		pr_info("Unlink the ghost %s\n", remap->path);
-		unlink(remap->path);
+		unlinkat(mntns_root, remap->path, 0);
 	}
 	mutex_unlock(ghost_file_mutex);
 }
@@ -667,9 +679,9 @@ const struct fdtype_ops regfile_dump_ops = {
  * files, directories, fifos, etc.
  */
 
-static inline int rfi_remap(struct reg_file_info *rfi)
+static inline int rfi_remap(int root, struct reg_file_info *rfi)
 {
-	return link(rfi->remap->path, rfi->path);
+	return linkat(root, rfi->remap->path, root, rfi->path, 0);
 }
 
 int open_path(struct file_desc *d,
@@ -682,6 +694,12 @@ int open_path(struct file_desc *d,
 
 	rfi = container_of(d, struct reg_file_info, d);
 
+	ns = lookup_nsid_by_mnt_id(rfi->rfe->mnt_id);
+	if (ns == NULL)
+		return -1;
+
+	mntns_root = mntns_get_root_fd(ns);
+
 	if (rfi->remap) {
 		mutex_lock(ghost_file_mutex);
 		if (rfi->remap->is_dir) {
@@ -691,7 +709,7 @@ int open_path(struct file_desc *d,
 			 */
 			orig_path = rfi->path;
 			rfi->path = rfi->remap->path;
-		} else if (rfi_remap(rfi) < 0) {
+		} else if (rfi_remap(mntns_root, rfi) < 0) {
 			static char tmp_path[PATH_MAX];
 
 			if (errno != EEXIST) {
@@ -715,18 +733,12 @@ int open_path(struct file_desc *d,
 			snprintf(tmp_path, sizeof(tmp_path), "%s.cr_link", orig_path);
 			pr_debug("Fake %s -> %s link\n", rfi->path, rfi->remap->path);
 
-			if (rfi_remap(rfi) < 0) {
+			if (rfi_remap(mntns_root, rfi) < 0) {
 				pr_perror("Can't create even fake link!");
 				return -1;
 			}
 		}
 	}
-
-	ns = lookup_nsid_by_mnt_id(rfi->rfe->mnt_id);
-	if (ns == NULL)
-		return -1;
-
-	mntns_root = mntns_get_root_fd(ns);
 
 	tmp = open_cb(mntns_root, rfi, arg);
 	if (tmp < 0) {
@@ -759,15 +771,15 @@ int open_path(struct file_desc *d,
 
 	if (rfi->remap) {
 		if (!rfi->remap->is_dir)
-			unlink(rfi->path);
+			unlinkat(mntns_root, rfi->path, 0);
 
 		BUG_ON(!rfi->remap->users);
 		if (--rfi->remap->users == 0) {
 			pr_info("Unlink the ghost %s\n", rfi->remap->path);
 			if (rfi->remap->is_dir)
-				rmdir(rfi->remap->path);
+				unlinkat(mntns_root, rfi->remap->path, AT_REMOVEDIR);
 			else
-				unlink(rfi->remap->path);
+				unlinkat(mntns_root, rfi->remap->path, 0);
 		}
 
 		if (orig_path)

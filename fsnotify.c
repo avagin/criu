@@ -39,6 +39,8 @@
 #include "lock.h"
 #include "irmap.h"
 #include "cr_options.h"
+#include "namespaces.h"
+#include "pstree.h"
 
 #include "protobuf.h"
 #include "protobuf/fsnotify.pb-c.h"
@@ -337,17 +339,36 @@ static char *get_mark_path(const char *who, struct file_remap *remap,
 	char *path = NULL;
 
 	if (remap) {
+		struct ns_id *ns;
+		int  mntns_root;
+
+		ns = lookup_nsid_by_mnt_id(remap->mnt_id);
+		if (ns == NULL)
+			goto err;
+
+		mntns_root = mntns_get_root_fd(ns);
+		if (mntns_root < 0)
+			goto err;
 		pr_debug("\t\tRestore %s watch for 0x%08x:0x%016lx (via %s)\n",
 			 who, s_dev, i_ino, remap->path);
-		return remap->path;
-	}
+		*target = openat(mntns_root, remap->path, O_PATH);
+	} else if (f_handle->path) {
+		struct ns_id *ns;
+		int  mntns_root;
 
-	if (f_handle->path) {
+		ns = lookup_ns_by_id(root_item->ids->mnt_ns_id, &mnt_ns_desc);
+		if (ns == NULL)
+			goto err;
+
+		mntns_root = mntns_get_root_fd(ns);
+		if (mntns_root < 0)
+			goto err;
+
 		pr_debug("\t\tRestore with path hint %s\n", f_handle->path);
-		return f_handle->path;
-	}
+		*target = openat(mntns_root, f_handle->path, O_PATH);
+	} else
+		*target = open_handle(s_dev, i_ino, f_handle);
 
-	*target = open_handle(s_dev, i_ino, f_handle);
 	if (*target < 0)
 		goto err;
 
