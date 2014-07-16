@@ -179,6 +179,7 @@ static/netns
 static/cgroup00
 static/cgroup01
 ns/static/clean_mntns
+ns/static/mntns_open
 "
 
 TEST_CR_KERNEL="
@@ -215,6 +216,7 @@ deleted_dev
 socket-tcp-fin-wait1-01
 socket-tcp-last-ack-01
 socket-tcp-syn-sent
+mntns_open
 "
 
 source $(readlink -f `dirname $0`/env.sh) || exit 1
@@ -397,7 +399,7 @@ start_test()
 			mkdir -p dump
 			ZDTM_ROOT=`mktemp -d /tmp/criu-root.XXXXXX`
 			ZDTM_ROOT=`readlink -f $ZDTM_ROOT`
-			mount --bind . $ZDTM_ROOT || return 1
+			mount --make-private --bind . $ZDTM_ROOT || return 1
 		fi
 		construct_root $ZDTM_ROOT $tdir/$tname || return 1
 		export ZDTM_NEWNS=1
