@@ -179,6 +179,7 @@ static/netns
 static/cgroup00
 static/cgroup01
 ns/static/clean_mntns
+mntns_open
 "
 
 TEST_CR_KERNEL="
@@ -215,6 +216,7 @@ deleted_dev
 socket-tcp-fin-wait1-01
 socket-tcp-last-ack-01
 socket-tcp-syn-sent
+mntns_open
 "
 
 source $(readlink -f `dirname $0`/env.sh) || exit 1

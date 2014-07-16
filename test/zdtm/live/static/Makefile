@@ -99,6 +99,7 @@ TST_NOFILE	=				\
 		tty02				\
 		tty03				\
 		mountpoints			\
+		mntns_open			\
 		netns				\
 		session01			\
 		session02			\
