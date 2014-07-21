@@ -73,8 +73,9 @@ static int create_ghost(struct ghost_file *gf, GhostFileEntry *gfe, char *root, 
 	int gfd, ghost_flags, ret = -1;
 	char path[PATH_MAX];
 
+	snprintf(path, sizeof(path), "%s/%s", root, gf->remap.path);
 	if (S_ISFIFO(gfe->mode)) {
-		if (mknod(gf->remap.path, gfe->mode, 0)) {
+		if (mknod(path, gfe->mode, 0)) {
 			pr_perror("Can't create node for ghost file");
 			goto err;
 		}
@@ -85,13 +86,13 @@ static int create_ghost(struct ghost_file *gf, GhostFileEntry *gfe, char *root, 
 			goto err;
 		}
 
-		if (mknod(gf->remap.path, gfe->mode, gfe->rdev)) {
+		if (mknod(path, gfe->mode, gfe->rdev)) {
 			pr_perror("Can't create node for ghost dev");
 			goto err;
 		}
 		ghost_flags = O_WRONLY;
 	} else if (S_ISDIR(gfe->mode)) {
-		if (mkdir(gf->remap.path, gfe->mode)) {
+		if (mkdir(path, gfe->mode)) {
 			pr_perror("Can't make ghost dir");
 			goto err;
 		}
@@ -99,7 +100,6 @@ static int create_ghost(struct ghost_file *gf, GhostFileEntry *gfe, char *root, 
 	} else
 		ghost_flags = O_WRONLY | O_CREAT | O_EXCL;
 
-	snprintf(path, sizeof(path), "%s/%s", root, gf->remap.path);
 	gfd = open(path, ghost_flags, gfe->mode);
 	if (gfd < 0) {
 		pr_perror("Can't open ghost file %s", path);
@@ -154,6 +154,7 @@ static int open_remap_ghost(struct reg_file_info *rfi,
 	if (!gf)
 		return -1;
 	gf->remap.path = xmalloc(PATH_MAX);
+	gf->remap.mnt_id = rfi->rfe->mnt_id;
 	if (!gf->remap.path)
 		goto err;
 
@@ -221,6 +222,7 @@ static int open_remap_linked(struct reg_file_info *rfi,
 	rm->path = rrfi->path;
 	rm->users = 0;
 	rm->is_dir = false;
+	rm->mnt_id = rfi->rfe->mnt_id;
 	rfi->remap = rm;
 	return 0;
 }
@@ -313,8 +315,12 @@ void remap_put(struct file_remap *remap)
 {
 	mutex_lock(ghost_file_mutex);
 	if (--remap->users == 0) {
+		int mntns_root;
+
 		pr_info("Unlink the ghost %s\n", remap->path);
-		unlink(remap->path);
+
+		mntns_root = mntns_get_root_by_mnt_id(remap->mnt_id);
+		unlinkat(mntns_root, remap->path, 0);
 	}
 	mutex_unlock(ghost_file_mutex);
 }
@@ -439,6 +445,7 @@ static int create_link_remap(char *path, int len, int lfd,
 	rfe.pos		= 0;
 	rfe.fown	= &fwn;
 	rfe.name	= link_name + 1;
+	rfe.has_mnt_id  = true;
 
 	/* Any 'unique' name works here actually. Remap works by reg-file ids. */
 	snprintf(tmp + 1, sizeof(link_name) - (size_t)(tmp - link_name - 1), "link_remap.%d", rfe.id);
@@ -669,7 +676,45 @@ const struct fdtype_ops regfile_dump_ops = {
 
 static inline int rfi_remap(struct reg_file_info *rfi)
 {
-	return link(rfi->remap->path, rfi->path);
+	struct mount_info *mi, *rmi, *tmi;
+	int off, roff;
+	char path[PATH_MAX], rpath[PATH_MAX];
+	int mntns_root;
+
+	mi = lookup_mnt_id(rfi->rfe->mnt_id);
+
+	if (mi == NULL) {
+		mntns_root = mntns_get_root_by_mnt_id(-1);
+		return linkat(mntns_root, rfi->remap->path, mntns_root, rfi->path, 0);
+	}
+
+	/*
+	 * mi->mountpoint	./zdtm/live/static/mntns_link_ghost.test/1
+	 * + mi->rst_off	/zdtm/live/static/mntns_link_ghost.test/1
+	 * rfi->path		zdtm/live/static/mntns_link_ghost.test/1/F (deleted)
+	 */
+	rmi = lookup_mnt_id(rfi->remap->mnt_id);
+	off = strlen(mi->mountpoint + mi->rst_off + 1);
+	roff = strlen(rmi->mountpoint + rmi->rst_off + 1);
+
+	/* Find the lowest common bind-mount */
+	for (tmi = mi; tmi->bind; tmi = tmi->bind);
+
+	/* Create paths relative to this mount */
+	snprintf(path, sizeof(path), "%s/%s/%s",
+				tmi->mountpoint + tmi->rst_off + 1,
+				mi->root + strlen(tmi->root),
+				rfi->path + off);
+	snprintf(rpath, sizeof(rpath), "%s/%s/%s",
+				tmi->mountpoint + tmi->rst_off + 1,
+				rmi->root + strlen(tmi->root),
+				rfi->remap->path + roff);
+
+	pr_debug("%d: Link %s -> %s\n", tmi->mnt_id, path, rpath);
+
+	mntns_root = mntns_get_root_by_mnt_id(tmi->mnt_id);
+
+	return linkat(mntns_root, rpath, mntns_root, path, 0);
 }
 
 int open_path(struct file_desc *d,
@@ -752,16 +797,15 @@ int open_path(struct file_desc *d,
 	}
 
 	if (rfi->remap) {
-		if (!rfi->remap->is_dir)
-			unlink(rfi->path);
+		if (!rfi->remap->is_dir) {
+			unlinkat(mntns_root, rfi->path, 0);
+		}
 
 		BUG_ON(!rfi->remap->users);
 		if (--rfi->remap->users == 0) {
 			pr_info("Unlink the ghost %s\n", rfi->remap->path);
-			if (rfi->remap->is_dir)
-				rmdir(rfi->remap->path);
-			else
-				unlink(rfi->remap->path);
+			mntns_root = mntns_get_root_by_mnt_id(rfi->remap->mnt_id);
+			unlinkat(mntns_root, rfi->remap->path, rfi->remap->is_dir ? AT_REMOVEDIR : 0);
 		}
 
 		if (orig_path)
