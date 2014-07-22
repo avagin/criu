@@ -173,6 +173,8 @@ TST_DIR		=				\
 		rmdir_open			\
 		cgroup01			\
 		mntns_open			\
+		mntns_link_remap		\
+		mntns_link_ghost		\
 
 TST_DIR_FILE	=				\
 		chroot				\
@@ -287,6 +289,7 @@ socket-tcpbuf-local: override CFLAGS += -D ZDTM_TCP_LOCAL
 socket_listen6: override CFLAGS += -D ZDTM_IPV6
 sigpending:		override LDLIBS += -lrt
 vdso01:			override LDLIBS += -lrt
+mntns_link_remap:	override CFLAGS += -DZDTM_LINK_REMAP
 
 socket-tcp-fin-wait1:	override CFLAGS += -D ZDTM_TCP_FIN_WAIT1
 socket-tcp-fin-wait1-01:	override CFLAGS += -D ZDTM_TCP_FIN_WAIT1
