@@ -2123,7 +2123,25 @@ int collect_mnt_namespaces(void)
 int dump_mnt_namespaces(void)
 {
 	int n = 0;
-	return walk_mnt_ns(dump_mnt_ns, &n);
+	struct mount_info *pm = NULL, *m, *ml = NULL;
+
+	if (!(root_ns_mask & CLONE_NEWNS))
+		return 0;
+
+	for (ml = m = mntinfo; m; pm = m, m = m->next) {
+		if (ml->nsid == m->nsid)
+			continue;
+
+		pm->next = NULL;
+		if (dump_mnt_ns(ml->nsid, ml, &n))
+			return -1;
+		pm->next = m;
+		ml = m;
+	}
+	if (dump_mnt_ns(ml->nsid, ml, &n))
+		return -1;
+
+	return 0;
 }
 
 struct ns_desc mnt_ns_desc = NS_DESC_ENTRY(CLONE_NEWNS, "mnt");
