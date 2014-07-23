@@ -112,6 +112,7 @@ struct mount_info {
 	 * a temporary copy.
 	 */
 	char		*mountpoint;
+	int		rst_off;
 	unsigned	flags;
 	int		master_id;
 	int		shared_id;
