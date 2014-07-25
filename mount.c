@@ -2493,27 +2493,24 @@ int prepare_mnt_ns(void)
 		if (clean_mnt_ns(ns.mnt.mntinfo_tree))
 			return -1;
 	} else {
-		struct mount_info *mi;
-
-		/* moving a mount residing under a shared mount is invalid. */
-		mi = mount_resolve_path(ns.mnt.mntinfo_tree, opts.root);
-		if (mi == NULL) {
-			pr_err("Unable to find mount point for %s\n", opts.root);
+		char buf[] = "/proc/self/fd/XXXXXXXXXX";
+		int fd;
+		fd = open(opts.root, O_DIRECTORY | O_PATH);
+		if (fd < 0) {
+			pr_perror("Unable to open %s", opts.root);
 			return -1;
 		}
-		if (mi->parent == NULL) {
-			pr_err("New root and old root are the same\n");
+		if (mount(opts.root, opts.root, NULL, MS_BIND, NULL)) {
+			pr_perror("Unable to bind-mount %s", opts.root);
 			return -1;
 		}
-
-		/* Our root is mounted over the parent (in the same directory) */
-		if (!strcmp(mi->parent->mountpoint, mi->mountpoint)) {
-			pr_err("The parent of the new root is unreachable\n");
-			return -1;
-		}
-
-		if (mount("none", mi->parent->mountpoint + 1, "none", MS_SLAVE, NULL)) {
+		snprintf(buf, sizeof(buf), "/proc/self/fd/%d", fd);
+		if (mount("none", buf, "none", MS_SLAVE, NULL)) {
 			pr_perror("Can't remount the parent of the new root with MS_SLAVE");
+			return -1;
+		}
+		if (chdir(opts.root)) {
+			pr_perror("chdir(%s) failed", opts.root);
 			return -1;
 		}
 
