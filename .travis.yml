@@ -1,7 +1,10 @@
 language: c
 env:
-  - ARCH=arm
-  - ARCH=x86_64
+  global:
+   - ARCH=x86_64
+   # The next declaration is the encrypted COVERITY_SCAN_TOKEN, created
+   #   via the "travis encrypt" command using the project repo's public key
+   - secure: "eUwf+wMiO+lq+PxvA7YtLQ+bK6LUKP5FhK2jtH8+SpwxrhBSYlxD8xnAjg1Lqa7aaxBFuxVLp9wfAA3A135nzke9KUDpFv2yBvSq9ANSoSE6v6GjmM757Njcxa2IChG1tFr20Fsa4kHKtXwu1mQcasUCJXt06Fu+s6GVMFtRh6Y="
 compiler:
   - gcc
 before_install:
@@ -9,3 +12,12 @@ before_install:
   - sudo apt-get install -qq protobuf-c-compiler libprotobuf-c0-dev libaio-dev libprotobuf-dev protobuf-compiler python-ipaddr libcap-dev
 script:
   - "bash -ex scripts/travis-ci.sh"
+addons:
+  coverity_scan:
+    project:
+      name: "avagin/criu"
+      description: "Checkpoint/Restore tool http://criu.org"
+    notification_email: avagin@gmail.com
+    build_command_prepend: true
+    build_command:   make
+    branch_pattern: coverity_scan
