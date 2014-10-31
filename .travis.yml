@@ -1,42 +1,26 @@
 language: c
 sudo: required
 dist: xenial
-cache: ccache
-services:
-  - docker
 env:
-  - TR_ARCH=local
-  - TR_ARCH=local       CLANG=1
-  - TR_ARCH=local       COMPAT_TEST=y
-  - TR_ARCH=local       CLANG=1 COMPAT_TEST=y
-  - TR_ARCH=alpine
-  - TR_ARCH=fedora-asan
-  - TR_ARCH=x86_64
-  - TR_ARCH=x86_64      CLANG=1
-  - TR_ARCH=armv7hf
-  - TR_ARCH=aarch64
-  - TR_ARCH=ppc64le
-  - TR_ARCH=s390x
-  - TR_ARCH=armv7hf     CLANG=1
-  - TR_ARCH=aarch64     CLANG=1
-  - TR_ARCH=ppc64le     CLANG=1
-  - TR_ARCH=alpine      CLANG=1
-  - TR_ARCH=docker-test
-  - TR_ARCH=fedora-rawhide
-  - TR_ARCH=fedora-rawhide-aarch64
-  - TR_ARCH=centos
-matrix:
-  allow_failures:
-    - env: TR_ARCH=docker-test
-    - env: TR_ARCH=fedora-rawhide
-    - env: TR_ARCH=fedora-rawhide-aarch64
-    - env: TR_ARCH=s390x
-    - env: TR_ARCH=local       GCOV=1
-    - env: TR_ARCH=local       COMPAT_TEST=y
-    - env: TR_ARCH=local       CLANG=1 COMPAT_TEST=y
+  global:
+   # The next declaration is the encrypted COVERITY_SCAN_TOKEN, created
+   #   via the "travis encrypt" command using the project repo's public key
+   - secure: "eUwf+wMiO+lq+PxvA7YtLQ+bK6LUKP5FhK2jtH8+SpwxrhBSYlxD8xnAjg1Lqa7aaxBFuxVLp9wfAA3A135nzke9KUDpFv2yBvSq9ANSoSE6v6GjmM757Njcxa2IChG1tFr20Fsa4kHKtXwu1mQcasUCJXt06Fu+s6GVMFtRh6Y="
+compiler:
+  - gcc
+before_install:
+  - sudo apt-get update -qq
+  - sudo apt-get install -qq protobuf-c-compiler libprotobuf-c0-dev libaio-dev libprotobuf-dev protobuf-compiler python-ipaddr libcap-dev libnl-3-dev gcc-multilib libc6-dev-i386 libnet-dev libnl-route-3-dev
+  - echo -n | openssl s_client -connect scan.coverity.com:443 | sed -ne '/-BEGIN CERTIFICATE-/,/-END CERTIFICATE-/p' | sudo tee -a /etc/ssl/certs/ca-certificates.crt
 script:
-  - sudo make CCACHE=1 -C scripts/travis $TR_ARCH
-after_success:
-  - ccache -s
-  - make -C scripts/travis after_success
+  - make
+addons:
+  coverity_scan:
+    project:
+      name: "avagin/criu"
+      description: "Checkpoint/Restore tool http://criu.org"
+    notification_email: avagin@gmail.com
+    build_command_prepend: true
+    build_command:   make
+    branch_pattern: coverity_scan
 group: deprecated-2017Q2
