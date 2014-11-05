@@ -384,7 +384,7 @@ no_server:
 	return ret;
 
 out:
-	close(sk);
+	close_safe(&sk);
 	return -1;
 }
 
