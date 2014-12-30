@@ -116,7 +116,10 @@ int collect_mappings(pid_t pid, struct vm_area_list *vma_area_list)
 	pr_info("Collecting mappings (pid: %d)\n", pid);
 	pr_info("----------------------------------------\n");
 
-	ret = parse_smaps(pid, vma_area_list);
+//	ret = parse_smaps(pid, vma_area_list);
+	timing_start(TIME_VMA);
+	ret = parse_pid_status(pid, NULL, vma_area_list);
+	timing_stop(TIME_VMA);
 	if (ret < 0)
 		goto err;
 

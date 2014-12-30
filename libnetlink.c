@@ -74,6 +74,7 @@ int do_rtnl_req(int nl, void *req, int size,
 	struct sockaddr_nl nladdr;
 	struct iovec iov;
 	static char buf[4096];
+	struct nlmsghdr *n = req;
 	int err;
 
 	if (!error_callback)
@@ -125,6 +126,8 @@ int do_rtnl_req(int nl, void *req, int size,
 		if (err < 0)
 			goto err;
 		if (err == 0)
+			break;
+		if ((n->nlmsg_flags & NLM_F_DUMP) == 0)
 			break;
 	}
 

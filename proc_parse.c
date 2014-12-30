@@ -27,11 +27,16 @@
 #include "proc_parse.h"
 #include "cr_options.h"
 #include "sysfs_parse.h"
+#include "libnetlink.h"
 #include "protobuf.h"
 #include "protobuf/fdinfo.pb-c.h"
 #include "protobuf/mnt.pb-c.h"
 
 #include <stdlib.h>
+
+#include <linux/genetlink.h>
+#include "taskstats.h"
+#include "taskdiag.h"
 
 struct buffer {
 	char buf[PAGE_SIZE];
@@ -178,6 +183,71 @@ static int parse_vmflags(char *buf, struct vma_area *vma_area)
 	return 0;
 }
 
+static int parse_diag_vmflags(unsigned long long vmflags, struct vma_area *vma_area)
+{
+	bool shared = false;
+	bool maywrite = false;
+
+	/* open() block */
+	if (vmflags & TASK_DIAG_VMA_F_SHARED)
+		shared = true;
+	if (vmflags & TASK_DIAG_VMA_F_MAYWRITE)
+		maywrite = true;
+
+	/* mmap() block */
+	if (vmflags & TASK_DIAG_VMA_F_GROWSDOWN)
+		vma_area->e->flags |= MAP_GROWSDOWN;
+	if (vmflags & TASK_DIAG_VMA_F_LOCKED)
+	   vma_area->e->flags |= MAP_LOCKED;
+	if (vmflags & TASK_DIAG_VMA_F_NORESERVE)
+	   vma_area->e->flags |= MAP_NORESERVE;
+	if (vmflags & TASK_DIAG_VMA_F_HUGETLB)
+		vma_area->e->flags |= MAP_HUGETLB;
+
+	/* madvise() block */
+	if (vmflags & TASK_DIAG_VMA_F_SEQ_READ)
+		vma_area->e->madv |= (1ul << MADV_SEQUENTIAL);
+	if (vmflags & TASK_DIAG_VMA_F_RAND_READ)
+	   vma_area->e->madv |= (1ul << MADV_RANDOM);
+	if (vmflags & TASK_DIAG_VMA_F_DONTCOPY)
+	   vma_area->e->madv |= (1ul << MADV_DONTFORK);
+	if (vmflags & TASK_DIAG_VMA_F_DONTDUMP)
+	   vma_area->e->madv |= (1ul << MADV_DONTDUMP);
+	if (vmflags & TASK_DIAG_VMA_F_MERGEABLE)
+	   vma_area->e->madv |= (1ul << MADV_MERGEABLE);
+	if (vmflags & TASK_DIAG_VMA_F_HUGEPAGE)
+	   vma_area->e->madv |= (1ul << MADV_HUGEPAGE);
+	if (vmflags & TASK_DIAG_VMA_F_NOHUGEPAGE)
+		vma_area->e->madv |= (1ul << MADV_NOHUGEPAGE);
+
+	/* vmsplice doesn't work for VM_IO and VM_PFNMAP mappings. */
+	if (vmflags & (TASK_DIAG_VMA_F_IO | TASK_DIAG_VMA_F_PFNMAP)) {
+#ifdef CONFIG_VDSO
+		/*
+		 * VVAR area mapped by the kernel as
+		 * VM_IO | VM_PFNMAP| VM_DONTEXPAND | VM_DONTDUMP
+		 */
+		if (!vma_area_is(vma_area, VMA_AREA_VVAR))
+#endif
+			vma_area->e->status |= VMA_UNSUPP;
+	}
+
+	/*
+	 * Anything else is just ignored.
+	 */
+
+
+	if (shared && maywrite)
+		vma_area->e->fdflags = O_RDWR;
+	else
+		vma_area->e->fdflags = O_RDONLY;
+	vma_area->e->has_fdflags = true;
+
+	if (vma_area->e->madv)
+		vma_area->e->has_madv = true;
+
+	return 0;
+}
 static inline int is_anon_shmem_map(dev_t dev)
 {
 	return kdat.shmem_dev == dev;
@@ -257,7 +327,7 @@ static int vma_get_mapfile(char *fname, struct vma_area *vma, DIR *mfd,
 				return 0;
 			}
 
-			if ((buf.st_mode & S_IFMT) == 0 && !strcmp(fname, AIO_FNAME)) {
+			if ((buf.st_mode & S_IFMT) == 0 && !strncmp(fname, AIO_FNAME, sizeof(AIO_FNAME) - 1)) {
 				/* AIO ring, let's try */
 				close(vma->vm_file_fd);
 				vma->aio_nr_req = -1;
@@ -717,34 +787,332 @@ err:
 	return -1;
 }
 
-static int ids_parse(char *str, unsigned int *arr)
-{
-	char *end;
+/*
+ * Generic macros for dealing with netlink sockets. Might be duplicated
+ * elsewhere. It is recommended that commercial grade applications use
+ * libnl or libnetlink and use the interfaces provided by the library
+ */
+#define GENLMSG_DATA(glh)	((void *)(NLMSG_DATA(glh) + GENL_HDRLEN))
+#define GENLMSG_PAYLOAD(glh)	(NLMSG_PAYLOAD(glh, 0) - GENL_HDRLEN)
+#define NLA_DATA(na)		((void *)((char*)(na) + NLA_HDRLEN))
+#define NLA_PAYLOAD(len)	(len - NLA_HDRLEN)
+/* Maximum size of response requested or message sent */
+#define MAX_MSG_SIZE	(4096 * 4)
+/* Maximum number of cpus expected to be specified in a cpumask */
+#define MAX_CPUS	32
 
-	arr[0] = strtol(str, &end, 10);
-	arr[1] = strtol(end + 1, &end, 10);
-	arr[2] = strtol(end + 1, &end, 10);
-	arr[3] = strtol(end + 1, &end, 10);
-	if (*end)
+struct msgtemplate {
+	struct nlmsghdr n;
+	struct genlmsghdr g;
+	char buf[MAX_MSG_SIZE];
+};
+
+/*
+ * Create a raw netlink socket and bind
+ */
+static int create_nl_socket(int protocol)
+{
+	int fd;
+	struct sockaddr_nl local;
+	int rcvbufsz;
+
+	fd = socket(AF_NETLINK, SOCK_RAW, protocol);
+	if (fd < 0)
 		return -1;
-	else
-		return 0;
+
+	if (rcvbufsz)
+		if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF,
+				&rcvbufsz, sizeof(rcvbufsz)) < 0) {
+			fprintf(stderr, "Unable to set socket rcv buf size to %d\n",
+				rcvbufsz);
+			goto error;
+		}
+
+	memset(&local, 0, sizeof(local));
+	local.nl_family = AF_NETLINK;
+
+	if (bind(fd, (struct sockaddr *) &local, sizeof(local)) < 0)
+		goto error;
+
+	return fd;
+error:
+	close(fd);
+	return -1;
 }
 
-static int cap_parse(char *str, unsigned int *res)
+static int send_cmd(int sd, __u16 nlmsg_type, __u32 nlmsg_pid,
+	     __u8 genl_cmd, __u16 nla_type,
+	     void *nla_data, int nla_len, bool dump,
+	     int (*receive_callback)(struct nlmsghdr *h, void *),
+	     int (*error_callback)(int err, void *), void *arg)
 {
-	int i, ret;
+	struct nlattr *na;
+	int buflen;
+	char *buf;
 
-	for (i = 0; i < PROC_CAP_SIZE; i++) {
-		ret = sscanf(str, "%08x", &res[PROC_CAP_SIZE - 1 - i]);
-		if (ret != 1)
-			return -1;
-		str += 8;
+	struct msgtemplate msg;
+
+	msg.n.nlmsg_len = NLMSG_LENGTH(GENL_HDRLEN);
+	msg.n.nlmsg_type = nlmsg_type;
+	msg.n.nlmsg_flags = NLM_F_REQUEST;
+	msg.n.nlmsg_seq = 0;
+	msg.n.nlmsg_pid = nlmsg_pid;
+	msg.g.cmd = genl_cmd;
+	msg.g.version = 0x1;
+	if (dump)
+		msg.n.nlmsg_flags |= NLM_F_DUMP;
+	na = (struct nlattr *) GENLMSG_DATA(&msg);
+	na->nla_type = nla_type;
+	na->nla_len = nla_len + 1 + NLA_HDRLEN;
+	memcpy(NLA_DATA(na), nla_data, nla_len);
+	msg.n.nlmsg_len += NLMSG_ALIGN(na->nla_len);
+
+	buf = (char *) &msg;
+	buflen = msg.n.nlmsg_len ;
+
+	if (dump)
+		msg.n.nlmsg_flags |= NLM_F_DUMP;
+	msg.n.nlmsg_seq	= CR_NLMSG_SEQ;
+
+	return do_rtnl_req(sd, buf, buflen, receive_callback, error_callback, arg);
+}
+
+
+/*
+ * Probe the controller in genetlink to find the family id
+ * for the TASKDIAG family
+ */
+
+int receive_family(struct nlmsghdr *h, void *arg)
+{
+	struct msgtemplate *msg;
+	struct nlattr *na;
+
+	int *id = arg;
+
+	msg = (struct msgtemplate *)h;
+	na = (struct nlattr *) GENLMSG_DATA(msg);
+
+	na = (struct nlattr *) ((char *) na + NLA_ALIGN(na->nla_len));
+	if (na->nla_type == CTRL_ATTR_FAMILY_ID) {
+		*id = *(__u16 *) NLA_DATA(na);
+		return 0;
 	}
 
-	return 0;
+	*id = -1;
+	return -1;
 }
 
+struct receive_args {
+	struct proc_status_creds *cr;
+	struct vm_area_list *vma_area_list;
+	DIR *map_files_dir;
+	struct vma_file_info *prev_vfi;
+	unsigned long *prev_end;
+	pid_t pid;
+};
+
+int receive_data(struct nlmsghdr *h, void *arg)
+{
+	struct receive_args *args = arg;
+	struct proc_status_creds *cr = args->cr;
+	struct vm_area_list *vma_area_list = args->vma_area_list;
+	DIR *map_files_dir = args->map_files_dir;
+	struct vma_file_info vfi;
+
+	int msg_len; 
+	struct msgtemplate *msg;
+	struct nlattr *na;
+	int len;
+
+
+	msg_len = GENLMSG_PAYLOAD(h);
+
+	msg = (struct msgtemplate *)h;
+	na = (struct nlattr *) GENLMSG_DATA(msg);
+	len = 0;
+	while (len < msg_len) {
+		len += NLA_ALIGN(na->nla_len);
+		switch (na->nla_type) {
+		case TASK_DIAG_PID:
+			break;
+		case TASK_DIAG_MSG:
+		{
+			struct task_diag_msg *msg;
+
+			/* For nested attributes, na follows */
+			msg = (struct task_diag_msg *) NLA_DATA(na);
+			cr->ppid = msg->ppid;
+			cr->state = msg->state;
+			break;
+		}
+		case TASK_DIAG_CRED:
+		{
+			struct task_diag_creds *creds;
+			int i;
+			creds = (struct task_diag_creds *) NLA_DATA(na);
+			cr->uids[0] = creds->uid;
+			cr->uids[1] = creds->euid;
+			cr->uids[2] = creds->suid;
+			cr->uids[3] = creds->fsuid;
+			cr->gids[0] = creds->uid;
+			cr->gids[1] = creds->egid;
+			cr->gids[2] = creds->sgid;
+			cr->gids[3] = creds->fsgid;
+			for (i = 0; i < PROC_CAP_SIZE; i++) {
+				cr->cap_inh[i] = creds->cap_inheritable.cap[i];
+				cr->cap_eff[i] = creds->cap_effective.cap[i];
+				cr->cap_prm[i] = creds->cap_permitted.cap[i];
+				cr->cap_bnd[i] = creds->cap_bset.cap[i];
+			}
+			break;
+		}
+		case TASK_DIAG_VMA:
+		{
+			struct nlattr *na_name;
+			struct task_diag_vma *vma;
+			char *file_path = "";
+			struct vma_area *vma_area = NULL;
+
+			vma_area = alloc_vma_area(); //FIXME
+			if (vma_area == NULL)
+				goto err;
+
+			vma = (struct task_diag_vma *) NLA_DATA(na);
+			vma_area->e->start = vma->start;
+			vma_area->e->end = vma->end;
+			vma_area->e->pgoff = vma->pgoff;
+			vma_area->e->prot = PROT_NONE;
+			vfi.dev_maj = vma->major;
+			vfi.dev_min = vma->minor;
+			vfi.ino = vma->inode;
+			if (vma->vm_flags & TASK_DIAG_VMA_F_READ)
+				vma_area->e->prot |= PROT_READ;
+			if (vma->vm_flags & TASK_DIAG_VMA_F_WRITE)
+				vma_area->e->prot |= PROT_WRITE;
+			if (vma->vm_flags & TASK_DIAG_VMA_F_EXEC)
+				vma_area->e->prot |= PROT_EXEC;
+
+			if (vma->vm_flags & TASK_DIAG_VMA_F_MAYSHARE)
+				vma_area->e->flags = MAP_SHARED;
+			else
+				vma_area->e->flags = MAP_PRIVATE;
+
+			if (len < msg_len) {
+				na_name = (struct nlattr *) (GENLMSG_DATA(msg) + len);
+				if (na_name->nla_type == TASK_DIAG_VMA_NAME) {
+					file_path = NLA_DATA(na_name);
+					len += NLA_ALIGN(na_name->nla_len);
+				}
+			}
+
+			if (handle_vma(args->pid, vma_area, file_path, map_files_dir, &vfi, args->prev_vfi, vma_area_list))
+				goto err;
+
+			if (parse_diag_vmflags(vma->vm_flags, vma_area))
+				goto err;
+
+			if (vma_list_add(vma_area, vma_area_list, args->prev_end, &vfi, args->prev_vfi))
+				goto err;
+		}
+		break;
+		default:
+			pr_err("Unknown nla_type %d\n",
+				na->nla_type);
+		}
+		na = (struct nlattr *) (GENLMSG_DATA(msg) + len);
+	}
+	return 0;
+err:
+	return -1; // FIXME
+}
+static int get_family_id(int sd)
+{
+	char name[100];
+
+	int id = 0, rc;
+
+	strcpy(name, TASKSTATS_GENL_NAME);
+	rc = send_cmd(sd, GENL_ID_CTRL, getpid(), CTRL_CMD_GETFAMILY,
+			CTRL_ATTR_FAMILY_NAME, (void *)name,
+			strlen(TASKSTATS_GENL_NAME)+1, false,
+			receive_family, NULL, &id);
+	if (rc < 0) {
+		pr_perror("Unable to send request");
+		return -1;	/* sendto() failure? */
+	}
+
+	return id;
+}
+
+int parse_pid_status(pid_t pid, struct proc_status_creds *cr, struct vm_area_list *vma_area_list)
+{
+	static int nl_sd = -1;
+	int rc;
+	__u16 id;
+	__u32 mypid;
+	struct task_diag_pid pid_req = {
+		.pid = pid,
+		.show_flags = TASK_DIAG_SHOW_CRED | TASK_DIAG_SHOW_MSG,
+		.dump_stratagy = TASK_DIAG_DUMP_ONE,
+	};
+
+	struct vma_file_info prev_vfi = {};
+	unsigned long prev_end = 0;
+	DIR *map_files_dir = NULL;
+	struct receive_args args = {.cr = cr, .vma_area_list = vma_area_list, .prev_vfi = &prev_vfi, .prev_end = &prev_end, .pid = pid};
+
+
+	if (nl_sd < 0)
+		nl_sd = create_nl_socket(NETLINK_GENERIC);
+	if (nl_sd < 0) {
+		pr_perror("error creating Netlink socket");
+		return -1;
+	}
+
+	if (vma_area_list) {
+		vma_area_list->nr = 0;
+		vma_area_list->nr_aios = 0;
+		vma_area_list->longest = 0;
+		vma_area_list->priv_size = 0;
+		INIT_LIST_HEAD(&vma_area_list->h);
+		pid_req.show_flags = TASK_DIAG_SHOW_VMA;
+
+		map_files_dir = opendir_proc(pid, "map_files");
+		if (!map_files_dir) /* old kernel? */
+			return -1;
+		args.map_files_dir = map_files_dir;
+	}
+
+	mypid = getpid();
+	id = get_family_id(nl_sd);
+	if (id < 0) {
+		pr_perror("Error getting family id");
+		goto err;
+	}
+	pr_info("family id %d\n", id);
+
+	rc = send_cmd(nl_sd, id, mypid, TASKDIAG_CMD_GET,
+		      TASKDIAG_CMD_ATTR_GET, &pid_req, sizeof(pid_req), true,
+			receive_data, NULL, &args);
+	pr_info("Sent pid/tgid, retval %d\n", rc);
+	if (rc < 0) {
+		pr_err("error sending tid/tgid cmd\n");
+		goto err;
+	}
+
+	if (map_files_dir)
+		closedir(map_files_dir);
+
+	return 0;
+err:
+	if (map_files_dir)
+		closedir(map_files_dir);
+//	close(nl_sd);
+	return -1;
+}
+
+/*
 int parse_pid_status(pid_t pid, struct proc_status_creds *cr)
 {
 	struct bfd f;
@@ -827,6 +1195,7 @@ err_parse:
 	bclose(&f);
 	return ret;
 }
+*/
 
 struct opt2flag {
 	char *opt;

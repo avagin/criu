@@ -20,6 +20,7 @@
 #include "proc_parse.h"
 #include "crtools.h"
 #include "security.h"
+#include "taskdiag.h"
 
 int unseize_task(pid_t pid, int orig_st, int st)
 {
@@ -86,7 +87,7 @@ try_again:
 		wait_errno = errno;
 	}
 
-	ret2 = parse_pid_status(pid, &cr);
+	ret2 = parse_pid_status(pid, &cr, NULL);
 	if (ret2)
 		goto err;
 
@@ -96,7 +97,7 @@ try_again:
 	}
 
 	if (ret < 0) {
-		if (cr.state != 'Z') {
+		if (cr.state != TASK_DIAG_ZOMBIE) {
 			if (pid == getpid())
 				pr_err("The criu itself is within dumped tree.\n");
 			else

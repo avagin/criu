@@ -82,7 +82,7 @@ struct proc_status_creds {
 	u32 cap_eff[PROC_CAP_SIZE];
 	u32 cap_bnd[PROC_CAP_SIZE];
 
-	char			state;
+	int			state;
 	int			ppid;
 };
 
@@ -159,7 +159,7 @@ extern struct mount_info *parse_mountinfo(pid_t pid, struct ns_id *nsid, bool fo
 extern int parse_pid_stat(pid_t pid, struct proc_pid_stat *s);
 extern int parse_smaps(pid_t pid, struct vm_area_list *vma_area_list);
 extern int parse_self_maps_lite(struct vm_area_list *vms);
-extern int parse_pid_status(pid_t pid, struct proc_status_creds *);
+extern int parse_pid_status(pid_t pid, struct proc_status_creds *, struct vm_area_list *vma_area_list);
 
 struct inotify_wd_entry {
 	InotifyWdEntry e;
