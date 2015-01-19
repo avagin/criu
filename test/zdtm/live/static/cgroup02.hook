@@ -8,7 +8,7 @@ rmroots() {
 	mount -t cgroup none $tname -o "$1"
 
 	for d in "$tname/oldroot" "$tname/newroot" "$tname/zdtmtstroot"; do
-		test -d "$d" && rmdir "$d"
+		test -d "$d" && find "$d" -type d && rmdir "$d"
 	done
 
 	echo "Left there is:"
