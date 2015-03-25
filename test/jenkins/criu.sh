@@ -1,6 +1,6 @@
 source `dirname $0`/criu-lib.sh &&
 prep &&
-bash test/zdtm.sh -C &&
+make -C test -j 2 zdtm &&
 true || fail
 
 # Execute tests for each new commit
