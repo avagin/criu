@@ -605,7 +605,7 @@ int criu_local_add_enable_fs(criu_opts *opts, char *fs)
 {
 	int nr;
 	char *str = NULL;
-	char **ptr = NULL;
+	char **ptr;
 
 	str = strdup(fs);
 	if (!str)
@@ -626,8 +626,6 @@ int criu_local_add_enable_fs(criu_opts *opts, char *fs)
 err:
 	if (str)
 		free(str);
-	if (ptr)
-		free(ptr);
 
 	return -ENOMEM;
 }
@@ -642,7 +640,7 @@ int criu_local_add_skip_mnt(criu_opts *opts, char *mnt)
 {
 	int nr;
 	char *str = NULL;
-	char **ptr = NULL;
+	char **ptr;
 
 	str = strdup(mnt);
 	if (!str)
@@ -663,8 +661,6 @@ int criu_local_add_skip_mnt(criu_opts *opts, char *mnt)
 err:
 	if (str)
 		free(str);
-	if (ptr)
-		free(ptr);
 
 	return -ENOMEM;
 }
