@@ -56,11 +56,16 @@ static bool freezer_thawed;
 
 static int freezer_restore_state(void)
 {
-	int fd;
-	char path[PATH_MAX];
-
 	if (!opts.freeze_cgroup || freezer_thawed)
 		return 0;
+
+	return freeze_cgroup();
+}
+
+int freeze_cgroup()
+{
+	char path[PATH_MAX];
+	int fd;
 
 	snprintf(path, sizeof(path), "%s/freezer.state", opts.freeze_cgroup);
 	fd = open(path, O_RDWR);

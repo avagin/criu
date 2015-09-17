@@ -783,7 +783,7 @@ EOF
 		fi
 		if [ -n "$FREEZE_CGROUP" ]; then
 			cpt_args="$cpt_args --freeze-cgroup $FREEZE_CGROUP --manage-cgroups"
-			rst_args="$rst_args --manage-cgroups"
+			rst_args="$rst_args --manage-cgroups --leave-frozen --freeze-cgroup $FREEZE_CGROUP"
 		fi
 
 		[ -n "$dump_only" ] && cpt_args="$cpt_args $POSTDUMP"
@@ -873,6 +873,10 @@ EOF
 			# Restore fails if --pidfile exists, so remove it.
 			rm -f $TPID || true
 
+			if [ -n "$FREEZE_CGROUP" ]; then
+				cat $FREEZE_CGROUP/freezer.state
+				echo THAWED > $FREEZE_CGROUP/freezer.state
+			fi
 			echo Restore
 			setsid $CRIU restore -D $ddump -o restore.log -v4 -d $gen_args $rst_args || return 2
 			cat $ddump/restore.log* | grep Error

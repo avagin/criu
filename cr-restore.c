@@ -1676,16 +1676,15 @@ static void finalize_restore(int status)
 {
 	struct pstree_item *item;
 
+	if (status  < 0)
+		goto detach;
+
 	for_each_pstree_item(item) {
 		pid_t pid = item->pid.real;
 		struct parasite_ctl *ctl;
-		int i;
 
 		if (!task_alive(item))
 			continue;
-
-		if (status  < 0)
-			goto detach;
 
 		/* Unmap the restorer blob */
 
@@ -1709,7 +1708,19 @@ static void finalize_restore(int status)
 
 		if (item->state == TASK_STOPPED)
 			kill(item->pid.real, SIGSTOP);
+	}
+
+	if (opts.final_state == TASK_FROZEN)
+		freeze_cgroup();
+
 detach:
+	for_each_pstree_item(item) {
+		pid_t pid = item->pid.real;
+		int i;
+
+		if (!task_alive(item))
+			continue;
+
 		for (i = 0; i < item->nr_threads; i++) {
 			pid = item->threads[i].real;
 			if (pid < 0) {
