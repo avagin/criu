@@ -610,9 +610,18 @@ int inet_bind(int sk, struct inet_sk_info *ii)
 {
 	union sockaddr_inet addr;
 	int addr_size;
+	int val, level;
 
 	addr_size = restore_sockaddr(&addr, ii->ie->family,
 			ii->ie->src_port, ii->ie->src_addr);
+
+		level = SOL_IP;
+
+	val = 1;
+	if (setsockopt(sk, level, IP_FREEBIND, &val, sizeof(int))) {
+		pr_perror("Unable to set IP_FREEBIND");
+		return -1;
+	}
 
 	if (bind(sk, (struct sockaddr *)&addr, addr_size) == -1) {
 		pr_perror("Can't bind inet socket");
