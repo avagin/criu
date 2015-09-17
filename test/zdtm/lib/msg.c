@@ -19,7 +19,7 @@ int test_log_init(const char *fname, const char *suffix)
 	snprintf(path, sizeof(path), "%s%s", fname, suffix);
 	logfd = open(path, O_WRONLY | O_EXCL | O_CREAT | O_APPEND, 0644);
 	if (logfd < 0) {
-		err("Can't open file %s", fname);
+		err("Can't open file %s", path);
 		return -1;
 	}
 
