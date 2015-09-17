@@ -823,6 +823,66 @@ int netns_keep_nsfd(void)
 	return 0;
 }
 
+static int network_lock_internal(void)
+{
+	int exit_code = -1, nsret = -1, i;
+	char *cmds[][10] = {
+			{"iptables",  "-N", "CRIU",	NULL},
+			{"iptables",  "-A", "CRIU",	"-t", "filter", "-j", "DROP", NULL},
+			{"iptables",  "-I", "INPUT",	"-j", "CRIU", NULL},
+			{"iptables",  "-I", "OUTPUT",	"-j", "CRIU", NULL},
+			{"ip6tables", "-N", "CRIU",	NULL},
+			{"ip6tables", "-A", "CRIU",	"-t", "filter", "-j", "DROP", NULL},
+			{"ip6tables", "-I", "INPUT",	"-j", "CRIU", NULL},
+			{"ip6tables", "-I", "OUTPUT",	"-j", "CRIU", NULL},
+		};
+	/*
+	 * These rules will be dumped and restore, so we don't need
+	 * to block internal network on restore.
+	 */
+
+	if (switch_ns(root_item->pid.real, &net_ns_desc, &nsret))
+		return -1;
+
+	for (i = 0; i < sizeof(cmds) / sizeof(cmds[1]); i++) {
+		if (cr_system(-1, -1, -1, cmds[i][0], cmds[i]))
+			goto err;
+	}
+
+	exit_code = 0;
+err:
+	if (restore_ns(nsret, &net_ns_desc))
+		return -1;
+
+	return exit_code;
+}
+
+static int network_unlock_internal(void)
+{
+	int ret = 0, nsret = -1, i;
+	char *cmds[][10] = {
+			{"iptables", "-D",  "INPUT",	"-j", "CRIU", NULL},
+			{"iptables", "-D",  "OUTPUT",	"-j", "CRIU", NULL},
+			{"iptables", "-D",  "CRIU",	"-t", "filter", "-j", "DROP", NULL},
+			{"iptables", "-X",  "CRIU",	NULL},
+			{"ip6tables", "-D", "INPUT",	"-j", "CRIU", NULL},
+			{"ip6tables", "-D", "OUTPUT",	"-j", "CRIU", NULL},
+			{"ip6tables", "-D", "CRIU",	"-t", "filter", "-j", "DROP", NULL},
+			{"ip6tables", "-X", "CRIU",	NULL},
+		};
+
+	if (switch_ns(root_item->pid.real, &net_ns_desc, &nsret))
+		return -1;
+
+	for (i = 0; i < sizeof(cmds) / sizeof(cmds[1]); i++)
+		ret |= cr_system(-1, -1, -1, cmds[i][0], cmds[i]);
+
+	if (restore_ns(nsret, &net_ns_desc))
+		return -1;
+
+	return ret;
+}
+
 int network_lock(void)
 {
 	pr_info("Lock network\n");
@@ -831,7 +891,10 @@ int network_lock(void)
 	if  (!(root_ns_mask & CLONE_NEWNET))
 		return 0;
 
-	return run_scripts(ACT_NET_LOCK);
+	if (run_scripts(ACT_NET_LOCK))
+		return -1;
+
+	return network_lock_internal();
 }
 
 void network_unlock(void)
@@ -841,8 +904,10 @@ void network_unlock(void)
 	cpt_unlock_tcp_connections();
 	rst_unlock_tcp_connections();
 
-	if (root_ns_mask & CLONE_NEWNET)
+	if (root_ns_mask & CLONE_NEWNET) {
 		run_scripts(ACT_NET_UNLOCK);
+		network_unlock_internal();
+	}
 }
 
 int veth_pair_add(char *in, char *out)
