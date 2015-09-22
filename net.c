@@ -553,7 +553,14 @@ static inline int dump_ifaddr(struct cr_imgset *fds)
 static inline int dump_route(struct cr_imgset *fds)
 {
 	struct cr_img *img = img_from_set(fds, CR_FD_ROUTE);
-	return run_ip_tool("route", "save", -1, img_raw_fd(img));
+
+	if (cr_system(-1, img_raw_fd(img), -1, "ip",
+				(char *[]) { "ip", "-B", "route", "save", NULL })) {
+		pr_err("IP tool failed on -B route save\n");
+		return -1;
+	}
+
+	return 0;
 }
 
 static inline int dump_iptables(struct cr_imgset *fds)
