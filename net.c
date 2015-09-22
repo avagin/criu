@@ -750,6 +750,11 @@ int prepare_net_ns(int pid)
 	if (!ret)
 		ret = restore_iptables(pid);
 
+       cr_system(-1, -1, -1, "ip", (char *[]){"ip", "a", NULL});
+       cr_system(-1, -1, -1, "ip", (char *[]){"ip", "r", NULL});
+       cr_system(-1, -1, -1, "ip", (char *[]){"ip", "-6", "r", NULL});
+       cr_system(-1, -1, -1, "sysctl", (char *[]){"sysctl", "-a", NULL});
+
 	close(ns_fd);
 
 	return ret;
