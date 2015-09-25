@@ -21,3 +21,5 @@ list](https://lists.openvz.org/mailman/listinfo/criu);
 * Spread the word about CRIU in [social networks](http://criu.org/Contacts);
 
 [![Build Status](https://ci.openvz.org/job/CRIU-x86_64/badge/icon)](https://ci.openvz.org/job/CRIU-x86_64/)
+
+test
