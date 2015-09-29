@@ -28,4 +28,5 @@ message inet_sk_entry {
 	required fown_entry		fown		= 13;
 	required sk_opts_entry		opts		= 14;
 	optional bool			v6only		= 15;
+	optional bool			freebind	= 16;
 }

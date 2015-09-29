@@ -235,7 +235,7 @@ static int do_dump_one_inet_fd(int lfd, u32 id, const struct fd_parms *p, int fa
 	struct inet_sk_desc *sk;
 	InetSkEntry ie = INET_SK_ENTRY__INIT;
 	SkOptsEntry skopts = SK_OPTS_ENTRY__INIT;
-	int ret = -1, err = -1, proto;
+	int ret = -1, err = -1, proto, val;
 
 	ret = do_dump_opt(lfd, SOL_SOCKET, SO_PROTOCOL,
 					&proto, sizeof(proto));
@@ -276,7 +276,6 @@ static int do_dump_one_inet_fd(int lfd, u32 id, const struct fd_parms *p, int fa
 	ie.n_src_addr = PB_ALEN_INET;
 	ie.n_dst_addr = PB_ALEN_INET;
 	if (ie.family == AF_INET6) {
-		int val;
 
 		ie.n_src_addr = PB_ALEN_INET6;
 		ie.n_dst_addr = PB_ALEN_INET6;
@@ -297,6 +296,13 @@ static int do_dump_one_inet_fd(int lfd, u32 id, const struct fd_parms *p, int fa
 
 	memcpy(ie.src_addr, sk->src_addr, pb_repeated_size(&ie, src_addr));
 	memcpy(ie.dst_addr, sk->dst_addr, pb_repeated_size(&ie, dst_addr));
+
+	ret = dump_opt(lfd, SOL_IP, IP_FREEBIND, &val);
+	if (ret < 0)
+		goto err;
+
+	ie.has_freebind = true;
+	ie.freebind = val;
 
 	if (dump_socket_opts(lfd, &skopts))
 		goto err;
@@ -565,6 +571,14 @@ done:
 	if (rst_file_params(sk, ie->fown, ie->flags))
 		goto err;
 
+	{
+		int val = ie->freebind;
+
+		if (restore_opt(sk, SOL_IP, IP_FREEBIND, &val)) {
+			pr_perror("Unable to set IP_FREEBIND\n");
+			goto err;
+		}
+	}
 	if (restore_socket_opts(sk, ie->opts))
 		goto err;
 
@@ -610,15 +624,13 @@ int inet_bind(int sk, struct inet_sk_info *ii)
 {
 	union sockaddr_inet addr;
 	int addr_size;
-	int val, level;
+	int val;
 
 	addr_size = restore_sockaddr(&addr, ii->ie->family,
 			ii->ie->src_port, ii->ie->src_addr);
 
-		level = SOL_IP;
-
 	val = 1;
-	if (setsockopt(sk, level, IP_FREEBIND, &val, sizeof(int))) {
+	if (setsockopt(sk, SOL_IP, IP_FREEBIND, &val, sizeof(int))) {
 		pr_perror("Unable to set IP_FREEBIND");
 		return -1;
 	}
