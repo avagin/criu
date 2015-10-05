@@ -196,6 +196,7 @@ static int __userns_sysctl_op(void *arg, int unused, pid_t pid)
 	struct sysctl_userns_req *userns_req = arg;
 	int op = userns_req->op;
 	struct sysctl_req *req, **reqs = NULL;
+	sigset_t blockmask, oldmask;
 	pid_t worker;
 
 	// fix up the pointer
@@ -266,6 +267,16 @@ static int __userns_sysctl_op(void *arg, int unused, pid_t pid)
 		req = (struct sysctl_req *) (((char *) req) + total_len);
 	}
 
+	/*
+	 * Don't let the sigchld_handler() mess with us
+	 * calling waitpid() on the exited worker. The
+	 * same is done in cr_system().
+	 */
+
+	sigemptyset(&blockmask);
+	sigaddset(&blockmask, SIGCHLD);
+	sigprocmask(SIG_BLOCK, &blockmask, &oldmask);
+
 	worker = fork();
 	if (worker < 0)
 		goto out;
@@ -310,6 +321,8 @@ static int __userns_sysctl_op(void *arg, int unused, pid_t pid)
 	ret = 0;
 
 out:
+	sigprocmask(SIG_BLOCK, &oldmask, NULL);
+
 	if (fds) {
 		for (i = 0; i < userns_req->nr_req; i++) {
 			if (fds[i] < 0)
