@@ -91,7 +91,24 @@ static void show_one_inet_img(const char *act, const InetSkEntry *e)
 		e->state, src_addr);
 }
 
-static int can_dump_inet_sk(const struct inet_sk_desc *sk, int proto)
+static int can_dump_ipproto(int ino, int proto)
+{
+	/* Make sure it's a proto we support */
+	switch (proto) {
+	case IPPROTO_IP:
+	case IPPROTO_TCP:
+	case IPPROTO_UDP:
+	case IPPROTO_UDPLITE:
+		break;
+	default:
+		pr_err("Unsupported proto %d for socket %x\n", proto, ino);
+		return 0;
+	}
+
+	return 1;
+}
+
+static int can_dump_inet_sk(const struct inet_sk_desc *sk)
 {
 	BUG_ON((sk->sd.family != AF_INET) && (sk->sd.family != AF_INET6));
 
@@ -147,18 +164,6 @@ static int can_dump_inet_sk(const struct inet_sk_desc *sk, int proto)
 		break;
 	default:
 		pr_err("Unknown inet socket %x state %d\n", sk->sd.ino, sk->state);
-		return 0;
-	}
-
-	/* Make sure it's a proto we support */
-	switch (proto) {
-	case IPPROTO_IP:
-	case IPPROTO_TCP:
-	case IPPROTO_UDP:
-	case IPPROTO_UDPLITE:
-		break;
-	default:
-		pr_err("Unsupported proto %d for socket %x\n", proto, sk->sd.ino);
 		return 0;
 	}
 
@@ -230,11 +235,14 @@ static int do_dump_one_inet_fd(int lfd, u32 id, const struct fd_parms *p, int fa
 	struct inet_sk_desc *sk;
 	InetSkEntry ie = INET_SK_ENTRY__INIT;
 	SkOptsEntry skopts = SK_OPTS_ENTRY__INIT;
-	int ret = -1, err = -1, proto;
+	int ret = -1, err = -1, proto, val;
 
 	ret = do_dump_opt(lfd, SOL_SOCKET, SO_PROTOCOL,
 					&proto, sizeof(proto));
 	if (ret)
+		goto err;
+
+	if (!can_dump_ipproto(p->stat.st_ino, proto))
 		goto err;
 
 	sk = (struct inet_sk_desc *)lookup_socket(p->stat.st_ino, family, proto);
@@ -246,7 +254,7 @@ static int do_dump_one_inet_fd(int lfd, u32 id, const struct fd_parms *p, int fa
 			goto err;
 	}
 
-	if (!can_dump_inet_sk(sk, proto))
+	if (!can_dump_inet_sk(sk))
 		goto err;
 
 	BUG_ON(sk->sd.already_dumped);
@@ -268,7 +276,6 @@ static int do_dump_one_inet_fd(int lfd, u32 id, const struct fd_parms *p, int fa
 	ie.n_src_addr = PB_ALEN_INET;
 	ie.n_dst_addr = PB_ALEN_INET;
 	if (ie.family == AF_INET6) {
-		int val;
 
 		ie.n_src_addr = PB_ALEN_INET6;
 		ie.n_dst_addr = PB_ALEN_INET6;
@@ -289,6 +296,13 @@ static int do_dump_one_inet_fd(int lfd, u32 id, const struct fd_parms *p, int fa
 
 	memcpy(ie.src_addr, sk->src_addr, pb_repeated_size(&ie, src_addr));
 	memcpy(ie.dst_addr, sk->dst_addr, pb_repeated_size(&ie, dst_addr));
+
+	ret = dump_opt(lfd, SOL_IP, IP_FREEBIND, &val);
+	if (ret < 0)
+		goto err;
+
+	ie.has_freebind = true;
+	ie.freebind = val;
 
 	if (dump_socket_opts(lfd, &skopts))
 		goto err;
@@ -557,6 +571,14 @@ done:
 	if (rst_file_params(sk, ie->fown, ie->flags))
 		goto err;
 
+	{
+		int val = ie->freebind;
+
+		if (restore_opt(sk, SOL_IP, IP_FREEBIND, &val)) {
+			pr_perror("Unable to set IP_FREEBIND\n");
+			goto err;
+		}
+	}
 	if (restore_socket_opts(sk, ie->opts))
 		goto err;
 
@@ -602,9 +624,16 @@ int inet_bind(int sk, struct inet_sk_info *ii)
 {
 	union sockaddr_inet addr;
 	int addr_size;
+	int val;
 
 	addr_size = restore_sockaddr(&addr, ii->ie->family,
 			ii->ie->src_port, ii->ie->src_addr);
+
+	val = 1;
+	if (setsockopt(sk, SOL_IP, IP_FREEBIND, &val, sizeof(int))) {
+		pr_perror("Unable to set IP_FREEBIND");
+		return -1;
+	}
 
 	if (bind(sk, (struct sockaddr *)&addr, addr_size) == -1) {
 		pr_perror("Can't bind inet socket");

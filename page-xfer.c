@@ -257,7 +257,7 @@ static int page_server_serve(int sk)
 		ret = -1;
 	}
 
-	if (ret == 0) {
+	if (ret == 0 && opts.ps_socket == -1) {
 		char c;
 
 		/*
@@ -384,7 +384,7 @@ no_server:
 	return ret;
 
 out:
-	close(sk);
+	close_safe(&sk);
 	return -1;
 }
 

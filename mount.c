@@ -84,7 +84,7 @@ static void mntinfo_add_list(struct mount_info *new)
 
 static int open_mountpoint(struct mount_info *pm);
 
-static struct mount_info *mnt_build_tree(struct mount_info *list);
+static struct mount_info *mnt_build_tree(struct mount_info *list, bool insert_roots);
 static int validate_mounts(struct mount_info *info, bool for_dump);
 
 /* Asolute paths are used on dump and relative paths are used on restore */
@@ -302,12 +302,12 @@ static bool mounts_equal(struct mount_info* mi, struct mount_info *c, bool bind)
  */
 static char *mnt_roots;
 
-static struct mount_info *mnt_build_ids_tree(struct mount_info *list)
+static struct mount_info *mnt_build_ids_tree(struct mount_info *list, bool insert_roots)
 {
 	struct mount_info *m, *root = NULL;
 	struct mount_info *tmp_root_mount = NULL;
 
-	if (mnt_roots) {
+	if (insert_roots && mnt_roots) {
 		/* mnt_roots is a tmpfs mount and it's private */
 		tmp_root_mount = mnt_entry_alloc();
 		if (!tmp_root_mount)
@@ -379,7 +379,7 @@ static struct mount_info *mnt_build_ids_tree(struct mount_info *list)
 		return NULL;
 	}
 
-	if (mnt_roots) {
+	if (tmp_root_mount) {
 		tmp_root_mount->parent = root;
 		list_add_tail(&tmp_root_mount->siblings, &root->children);
 	}
@@ -675,34 +675,28 @@ static int validate_mounts(struct mount_info *info, bool for_dump)
 						m->mountpoint, m->s_dev, m->root, m->mnt_id);
 				return -1;
 			}
-		} else {
+		} else if (!m->external) {
 			t = find_fsroot_mount_for(m);
 			if (!t) {
 				int ret;
 
+				/*
+				 * No root-mount found for this bind and it's neither
+				 * marked nor auto-resolved as external one. So last
+				 * chance not to fail is to talk to plugins.
+				 */
+
 				if (for_dump) {
+					ret = run_plugins(DUMP_EXT_MOUNT, m->mountpoint, m->mnt_id);
+					if (ret == 0)
+						m->need_plugin = true;
+				} else
 					/*
-					 * We've already resolved the mount
-					 * and it is external.
+					 * Plugin should take care of this one
+					 * in restore_ext_mount, or do_bind_mount
+					 * will mount it as external
 					 */
-					if (m->external) {
-						ret = 0;
-					} else {
-						ret = run_plugins(DUMP_EXT_MOUNT, m->mountpoint, m->mnt_id);
-						if (ret == 0)
-							m->need_plugin = true;
-					}
-				} else {
-					if (m->need_plugin || m->external)
-						/*
-						 * plugin should take care of this one
-						 * in restore_ext_mount, or do_bind_mount
-						 * will mount it as external
-						 */
-						ret = 0;
-					else
-						ret = -ENOTSUP;
-				}
+					ret = m->need_plugin ? 0 : -ENOTSUP;
 
 				if (ret < 0) {
 					if (ret == -ENOTSUP)
@@ -911,7 +905,7 @@ static int resolve_external_mounts(struct mount_info *info)
 	return 0;
 }
 
-static int collect_shared(struct mount_info *info, bool for_dump)
+static int resolve_shared_mounts(struct mount_info *info)
 {
 	struct mount_info *m, *t;
 
@@ -972,7 +966,7 @@ static int collect_shared(struct mount_info *info, bool for_dump)
 	return 0;
 }
 
-static struct mount_info *mnt_build_tree(struct mount_info *list)
+static struct mount_info *mnt_build_tree(struct mount_info *list, bool insert_roots)
 {
 	struct mount_info *tree;
 
@@ -981,7 +975,7 @@ static struct mount_info *mnt_build_tree(struct mount_info *list)
 	 */
 
 	pr_info("Building mountpoints tree\n");
-	tree = mnt_build_ids_tree(list);
+	tree = mnt_build_ids_tree(list, insert_roots);
 	if (!tree)
 		return NULL;
 
@@ -1658,7 +1652,7 @@ struct mount_info *collect_mntinfo(struct ns_id *ns, bool for_dump)
 		return NULL;
 	}
 
-	ns->mnt.mntinfo_tree = mnt_build_tree(pm);
+	ns->mnt.mntinfo_tree = mnt_build_tree(pm, false);
 	if (ns->mnt.mntinfo_tree == NULL)
 		goto err;
 
@@ -2213,17 +2207,6 @@ static int do_umount_one(struct mount_info *mi)
 	return 0;
 }
 
-static int clean_mnt_ns(struct mount_info *mntinfo_tree)
-{
-	pr_info("Cleaning mount namespace\n");
-
-	/*
-	 * Mountinfos were collected at prepare stage
-	 */
-
-	return mnt_tree_for_each_reverse(mntinfo_tree, do_umount_one);
-}
-
 static int cr_pivot_root(char *root)
 {
 	char put_root[] = "crtools-put-root.XXXXXX";
@@ -2526,7 +2509,7 @@ err:
 	return -1;
 }
 
-static int read_mnt_ns_img(void)
+int read_mnt_ns_img(void)
 {
 	struct mount_info *pms = NULL;
 	struct ns_id *nsid;
@@ -2534,16 +2517,6 @@ static int read_mnt_ns_img(void)
 	for (nsid = ns_ids; nsid != NULL; nsid = nsid->next) {
 		if (nsid->nd != &mnt_ns_desc)
 			continue;
-
-		if (nsid->type != NS_ROOT) {
-			BUG_ON(nsid->type == NS_CRIU);
-			/*
-			 * If we have more than one (root) namespace,
-			 * then we'll need the roots yard.
-			 */
-			if (create_mnt_roots())
-				return -1;
-		}
 
 		if (collect_mnt_from_image(&pms, nsid))
 			return -1;
@@ -2553,25 +2526,50 @@ static int read_mnt_ns_img(void)
 	return 0;
 }
 
-char *rst_get_mnt_root(int mnt_id)
+int rst_get_mnt_root(int mnt_id, char *path, int plen)
 {
 	struct mount_info *m;
-	static char path[PATH_MAX] = "/";
 
-	if (!(root_ns_mask & CLONE_NEWNS))
-		return path;
-
-	if (mnt_id == -1)
-		return path;
+	if (!(root_ns_mask & CLONE_NEWNS) || mnt_id == -1)
+		goto rroot;
 
 	m = lookup_mnt_id(mnt_id);
 	if (m == NULL)
-		return NULL;
+		return -1;
 
 	if (m->nsid->type == NS_OTHER)
-		print_ns_root(m->nsid, path, sizeof(path));
+		return print_ns_root(m->nsid, path, plen);
 
-	return path;
+rroot:
+	path[0] = '/';
+	path[1] = '\0';
+	return 1;
+}
+
+int mntns_maybe_create_roots(void)
+{
+	struct ns_id *ns;
+
+	if (!(root_ns_mask & CLONE_NEWNS))
+		return 0;
+
+	for (ns = ns_ids; ns != NULL; ns = ns->next) {
+		if (ns->nd != &mnt_ns_desc)
+			continue;
+
+		if (ns->type != NS_ROOT) {
+			BUG_ON(ns->type == NS_CRIU);
+
+			/*
+			 * If we have more than one (root) namespace,
+			 * then we'll need the roots yard.
+			 */
+			return create_mnt_roots();
+		}
+	}
+
+	/* No "other" mntns found, just go ahead, we don't need roots yard. */
+	return 0;
 }
 
 static int do_restore_task_mnt_ns(struct ns_id *nsid, struct pstree_item *current)
@@ -2645,7 +2643,7 @@ int restore_task_mnt_ns(struct pstree_item *current)
 /*
  * All nested mount namespaces are restore as sub-trees of the root namespace.
  */
-static int prepare_roots_yard(void)
+static int populate_roots_yard(void)
 {
 	char path[PATH_MAX];
 	struct ns_id *nsid;
@@ -2653,11 +2651,7 @@ static int prepare_roots_yard(void)
 	if (mnt_roots == NULL)
 		return 0;
 
-	if (mount("none", mnt_roots, "tmpfs", 0, NULL)) {
-		pr_perror("Unable to mount tmpfs in %s", mnt_roots);
-		return -1;
-	}
-	if (mount("none", mnt_roots, NULL, MS_PRIVATE, NULL))
+	if (make_yard(mnt_roots))
 		return -1;
 
 	for (nsid = ns_ids; nsid != NULL; nsid = nsid->next) {
@@ -2679,14 +2673,11 @@ static int populate_mnt_ns(void)
 	struct mount_info *pms;
 	struct ns_id *nsid;
 
-	if (read_mnt_ns_img())
-		return -1;
-
-	pms = mnt_build_tree(mntinfo);
+	pms = mnt_build_tree(mntinfo, true);
 	if (!pms)
 		return -1;
 
-	if (collect_shared(mntinfo, false))
+	if (resolve_shared_mounts(mntinfo))
 		return -1;
 
 	for (nsid = ns_ids; nsid; nsid = nsid->next) {
@@ -2712,13 +2703,13 @@ static int populate_mnt_ns(void)
 	if (do_mount_root(pms))
 		return -1;
 
-	if (prepare_roots_yard())
+	if (populate_roots_yard())
 		return -1;
 
 	return mnt_tree_for_each(pms, do_mount_one);
 }
 
-int fini_mnt_ns(void)
+int depopulate_roots_yard(void)
 {
 	int ret = 0;
 
@@ -2739,12 +2730,17 @@ int fini_mnt_ns(void)
 		pr_perror("Can't unmount %s", mnt_roots);
 		ret = 1;
 	}
-	if (rmdir(mnt_roots)) {
-		pr_perror("Can't remove the directory %s", mnt_roots);
-		ret = 1;
-	}
 
 	return ret;
+}
+
+void cleanup_mnt_ns(void)
+{
+	if (mnt_roots == NULL)
+		return;
+
+	if (rmdir(mnt_roots))
+		pr_perror("Can't remove the directory %s", mnt_roots);
 }
 
 int prepare_mnt_ns(void)
@@ -2764,21 +2760,29 @@ int prepare_mnt_ns(void)
 
 	close_proc();
 
-	/*
-	 * The new mount namespace is filled with the mountpoint
-	 * clones from the original one. We have to umount them
-	 * prior to recreating new ones.
-	 */
 	if (!opts.root) {
 		if (chdir("/")) {
 			pr_perror("chdir(\"/\") failed");
 			return -1;
 		}
 
-		if (clean_mnt_ns(ns.mnt.mntinfo_tree))
+		/*
+		 * The new mount namespace is filled with the mountpoint
+		 * clones from the original one. We have to umount them
+		 * prior to recreating new ones.
+		 */
+		pr_info("Cleaning mount namespace\n");
+		if (mnt_tree_for_each_reverse(ns.mnt.mntinfo_tree, do_umount_one))
 			return -1;
 	} else {
 		struct mount_info *mi;
+
+		/*
+		 * The whole tree of mountpoints is to be moved into one
+		 * place with the pivot_root() call. Don't do manual
+		 * umount (as we do above), all this stuff will go away
+		 * with a single umount call later.
+		 */
 
 		/* moving a mount residing under a shared mount is invalid. */
 		mi = mount_resolve_path(ns.mnt.mntinfo_tree, opts.root);
@@ -2961,7 +2965,7 @@ int collect_mnt_namespaces(bool for_dump)
 	if (arg.need_to_validate) {
 		ret = -1;
 
-		if (collect_shared(mntinfo, true))
+		if (resolve_shared_mounts(mntinfo))
 			goto err;
 		if (validate_mounts(mntinfo, true))
 			goto err;

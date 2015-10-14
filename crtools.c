@@ -252,6 +252,7 @@ int main(int argc, char *argv[], char *envp[])
 		{ "freeze-cgroup",		required_argument,	0, 1068 },
 		{ "ghost-limit",		required_argument,	0, 1069 },
 		{ "irmap-scan-path",		required_argument,	0, 1070 },
+		{ "leave-frozen",		no_argument,		0, 1071	},
 		{ },
 	};
 
@@ -512,6 +513,9 @@ int main(int argc, char *argv[], char *envp[])
 					return 1;
 			}
 			break;
+		case 1071:
+			opts.final_state = TASK_FROZEN;
+			break;
 		case 'V':
 			pr_msg("Version: %s\n", CRIU_VERSION);
 			if (strcmp(CRIU_GITID, "0"))
@@ -523,6 +527,11 @@ int main(int argc, char *argv[], char *envp[])
 		default:
 			goto usage;
 		}
+	}
+
+	if (opts.final_state == TASK_FROZEN && !opts.freeze_cgroup) {
+		pr_err("Need to set a freezer cgroup to restore tasks in the frozen state\n");
+		return 1;
 	}
 
 	if (!opts.restore_detach && opts.restore_sibling) {

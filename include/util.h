@@ -261,4 +261,10 @@ void split(char *str, char token, char ***out, int *n);
 
 int fd_has_data(int lfd);
 
+int make_yard(char *path);
+
+const char *ns_to_string(unsigned int ns);
+
+int freeze_cgroup();
+
 #endif /* __CR_UTIL_H__ */

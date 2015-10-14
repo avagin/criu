@@ -147,6 +147,10 @@ generate_test_list()
 		static/dumpable01
 		static/dumpable02
 		static/deleted_dev
+		static/socket-tcpbuf-local
+		static/socket-tcpbuf6-local
+		static/socket-tcp-local
+		static/socket-tcp6-local
 	"
 
 	#
@@ -182,7 +186,6 @@ generate_test_list()
 		streaming/socket-tcp
 		streaming/socket-tcp6
 		static/socket-tcpbuf
-		static/socket-tcpbuf-local
 		static/socket-tcpbuf6
 		static/pty03
 		static/mountpoints
@@ -780,7 +783,7 @@ EOF
 		fi
 		if [ -n "$FREEZE_CGROUP" ]; then
 			cpt_args="$cpt_args --freeze-cgroup $FREEZE_CGROUP --manage-cgroups"
-			rst_args="$rst_args --manage-cgroups"
+			rst_args="$rst_args --manage-cgroups --leave-frozen --freeze-cgroup $FREEZE_CGROUP"
 		fi
 
 		[ -n "$dump_only" ] && cpt_args="$cpt_args $POSTDUMP"
@@ -798,12 +801,15 @@ EOF
 		# Here we may have two cases: either checkpoint is failed
 		# with some error code, or checkpoint is complete but return
 		# code is non-zero because of post dump action.
-		if [ "$retcode" -ne 0 ] && [[ "$retcode" -ne 32 || -z "$dump_only" ]]; then
-			if echo $TEST_EXPECTED_FAILURE | grep -q $tname; then
-				echo "Got expected dump failure"
-				return 0
+		if echo $TEST_EXPECTED_FAILURE | grep -q $tname; then
+			echo "Expect dump falure: $retcode"
+			if [ "$retcode" -eq 0 ]; then
+				return 1
 			fi
-
+			dump_only=1
+			retcode=32
+		fi
+		if [ "$retcode" -ne 0 ] && [[ "$retcode" -ne 32 || -z "$dump_only" ]]; then
 			if [ $BATCH_TEST -eq 0 ]; then
 				echo WARNING: $tname returned $retcode and left running for debug needs
 			else
@@ -811,7 +817,6 @@ EOF
 			fi
 			return 1
 		fi
-		cat $ddump/dump.log* | grep Error
 
 		if [ -n "$SNAPSHOT" ]; then
 			snappdir=../`basename $ddump`
@@ -868,6 +873,10 @@ EOF
 			# Restore fails if --pidfile exists, so remove it.
 			rm -f $TPID || true
 
+			if [ -n "$FREEZE_CGROUP" ]; then
+				cat $FREEZE_CGROUP/freezer.state
+				echo THAWED > $FREEZE_CGROUP/freezer.state
+			fi
 			echo Restore
 			setsid $CRIU restore -D $ddump -o restore.log -v4 -d $gen_args $rst_args || return 2
 			cat $ddump/restore.log* | grep Error

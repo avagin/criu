@@ -12,9 +12,9 @@ struct cr_imgset;
 struct fd_parms;
 
 struct file_remap {
-	char *path;
+	char *rpath;
 	bool is_dir;
-	int  mnt_id;
+	int  rmnt_id;
 	unsigned int users;
 	uid_t owner;
 };
@@ -45,11 +45,12 @@ extern void remap_put(struct file_remap *remap);
 extern struct file_desc *try_collect_special_file(u32 id, int optional);
 #define collect_special_file(id)	try_collect_special_file(id, 0)
 
-extern struct collect_image_info reg_file_cinfo;
-extern struct collect_image_info remap_cinfo;
+extern int collect_remaps_and_regfiles(void);
 
 extern void delete_link_remaps(void);
 extern void free_link_remaps(void);
+extern int prepare_remaps(void);
+extern void try_clean_remaps(int ns_fd);
 
 extern int strip_deleted(struct fd_link *link);
 

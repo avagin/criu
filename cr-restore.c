@@ -126,6 +126,10 @@ static int crtools_prepare_shared(void)
 	if (prepare_shared_fdinfo())
 		return -1;
 
+	/* We might want to remove ghost files on failed restore */
+	if (collect_remaps_and_regfiles())
+		return -1;
+
 	/* Connections are unlocked from criu */
 	if (collect_inet_sockets())
 		return -1;
@@ -149,8 +153,6 @@ static int crtools_prepare_shared(void)
  */
 
 static struct collect_image_info *cinfos[] = {
-	&reg_file_cinfo,
-	&remap_cinfo,
 	&nsfile_cinfo,
 	&pipe_cinfo,
 	&fifo_cinfo,
@@ -184,6 +186,9 @@ static int root_prepare_shared(void)
 		return -1;
 
 	if (prepare_shared_reg_files())
+		return -1;
+
+	if (prepare_remaps())
 		return -1;
 
 	for (i = 0; i < ARRAY_SIZE(cinfos); i++) {
@@ -1116,21 +1121,14 @@ static inline int fork_with_pid(struct pstree_item *item)
 		}
 
 		len = snprintf(buf, sizeof(buf), "%d", pid - 1);
-		if (write(ca.fd, buf, len) != len)
+		if (write(ca.fd, buf, len) != len) {
+			pr_perror("%d: Write %s to %s", pid, buf, LAST_PID_PATH);
 			goto err_unlock;
+		}
 	} else {
 		ca.fd = -1;
 		BUG_ON(pid != INIT_PID);
 	}
-
-	if (ca.clone_flags & CLONE_NEWNET)
-		/*
-		 * When restoring a net namespace we need to communicate
-		 * with the original (i.e. -- init) one. Thus, prepare for
-		 * that before we leave the existing namespaces.
-		 */
-		if (netns_pre_create())
-			goto err_unlock;
 
 	/*
 	 * Some kernel modules, such as netwrok packet generator
@@ -1546,7 +1544,7 @@ static int restore_task_with_children(void *_arg)
 	if (restore_finish_stage(CR_STATE_FORKING) < 0)
 		goto err_fini_mnt;
 
-	if (current->parent == NULL && fini_mnt_ns())
+	if (current->parent == NULL && depopulate_roots_yard())
 		goto err;
 
 	if (restore_one_task(current->pid.virt, ca->core))
@@ -1555,9 +1553,6 @@ static int restore_task_with_children(void *_arg)
 	return 0;
 
 err_fini_mnt:
-	if (current->parent == NULL)
-		fini_mnt_ns();
-
 err:
 	if (current->parent == NULL)
 		futex_abort_and_wake(&task_entries->nr_in_progress);
@@ -1681,16 +1676,15 @@ static void finalize_restore(int status)
 {
 	struct pstree_item *item;
 
+	if (status  < 0)
+		goto detach;
+
 	for_each_pstree_item(item) {
 		pid_t pid = item->pid.real;
 		struct parasite_ctl *ctl;
-		int i;
 
 		if (!task_alive(item))
 			continue;
-
-		if (status  < 0)
-			goto detach;
 
 		/* Unmap the restorer blob */
 
@@ -1714,7 +1708,19 @@ static void finalize_restore(int status)
 
 		if (item->state == TASK_STOPPED)
 			kill(item->pid.real, SIGSTOP);
+	}
+
+	if (opts.final_state == TASK_FROZEN)
+		freeze_cgroup();
+
 detach:
+	for_each_pstree_item(item) {
+		pid_t pid = item->pid.real;
+		int i;
+
+		if (!task_alive(item))
+			continue;
+
 		for (i = 0; i < item->nr_threads; i++) {
 			pid = item->threads[i].real;
 			if (pid < 0) {
@@ -1739,7 +1745,7 @@ static void ignore_kids(void)
 static int restore_root_task(struct pstree_item *init)
 {
 	enum trace_flags flag = TRACE_ALL;
-	int ret, fd;
+	int ret, fd, mnt_ns_fd = -1;
 
 	fd = open("/proc", O_DIRECTORY | O_RDONLY);
 	if (fd < 0) {
@@ -1772,7 +1778,7 @@ static int restore_root_task(struct pstree_item *init)
 		return -1;
 	}
 
-	if (start_usernsd())
+	if (prepare_namespace_before_tasks())
 		return -1;
 
 	futex_set(&task_entries->nr_in_progress,
@@ -1815,6 +1821,14 @@ static int restore_root_task(struct pstree_item *init)
 	if (ret)
 		goto out;
 
+	if (root_ns_mask & CLONE_NEWNS) {
+		mnt_ns_fd = open_proc(init->pid.real, "ns/mnt");
+		if (mnt_ns_fd < 0) {
+			pr_perror("Can't open init's mntns fd");
+			goto out;
+		}
+	}
+
 	ret = run_scripts(ACT_SETUP_NS);
 	if (ret)
 		goto out;
@@ -1843,6 +1857,14 @@ static int restore_root_task(struct pstree_item *init)
 	 * CR_STATE_RESTORE_SIGCHLD in pie code.
 	 */
 	task_entries->nr_threads -= atomic_read(&task_entries->nr_zombies);
+
+	if (mnt_ns_fd >= 0)
+		/*
+		 * Don't try_clean_remaps here, since restore went OK
+		 * and all ghosts were removed by the openers.
+		 */
+		close(mnt_ns_fd);
+	cleanup_mnt_ns();
 
 	ret = stop_usernsd();
 	if (ret < 0)
@@ -1928,6 +1950,8 @@ out_kill:
 
 out:
 	fini_cgroup();
+	try_clean_remaps(mnt_ns_fd);
+	cleanup_mnt_ns();
 	stop_usernsd();
 	__restore_switch_stage(CR_STATE_FAIL);
 	pr_err("Restoring FAILED.\n");

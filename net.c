@@ -127,7 +127,7 @@ static int ipv4_conf_op(char *tgt, int *conf, int n, int op, NetnsEntry **netns)
 		ri++;
 	}
 
-	ret = sysctl_op(req, ri, op);
+	ret = sysctl_op(req, ri, op, CLONE_NEWNET);
 	if (ret < 0) {
 		pr_err("Failed to %s %s/<confs>\n", (op == CTL_READ)?"read":"write", tgt);
 		return -1;
@@ -518,7 +518,7 @@ exit:
 	return ret;
 }
 
-static int run_ip_tool(char *arg1, char *arg2, int fdin, int fdout)
+static int run_ip_tool(char *arg1, char *arg2, char *arg3, int fdin, int fdout)
 {
 	char *ip_tool_cmd;
 	int ret;
@@ -530,7 +530,7 @@ static int run_ip_tool(char *arg1, char *arg2, int fdin, int fdout)
 		ip_tool_cmd = "ip";
 
 	ret = cr_system(fdin, fdout, -1, ip_tool_cmd,
-				(char *[]) { "ip", arg1, arg2, NULL });
+				(char *[]) { "ip", arg1, arg2, arg3, NULL });
 	if (ret) {
 		pr_err("IP tool failed on %s %s\n", arg1, arg2);
 		return -1;
@@ -558,19 +558,43 @@ static int run_iptables_tool(char *def_cmd, int fdin, int fdout)
 static inline int dump_ifaddr(struct cr_imgset *fds)
 {
 	struct cr_img *img = img_from_set(fds, CR_FD_IFADDR);
-	return run_ip_tool("addr", "save", -1, img_raw_fd(img));
+	return run_ip_tool("addr", "save", NULL, -1, img_raw_fd(img));
 }
 
 static inline int dump_route(struct cr_imgset *fds)
 {
-	struct cr_img *img = img_from_set(fds, CR_FD_ROUTE);
-	return run_ip_tool("route", "save", -1, img_raw_fd(img));
+	struct cr_img *img;
+
+	img = img_from_set(fds, CR_FD_ROUTE);
+	if (run_ip_tool("route", "save", NULL, -1, img_raw_fd(img)))
+		return -1;
+
+	/* If ipv6 is disabled, "ip -6 route dump" dumps all routes */
+	if (access("/proc/sys/net/ipv6/", F_OK)) {
+		pr_debug("ipv6 is disabled\n");
+		return 0;
+	}
+
+	img = img_from_set(fds, CR_FD_ROUTE6);
+	if (run_ip_tool("-6", "route", "save", -1, img_raw_fd(img)))
+		return -1;
+
+	return 0;
 }
 
 static inline int dump_iptables(struct cr_imgset *fds)
 {
-	struct cr_img *img = img_from_set(fds, CR_FD_IPTABLES);
-	return run_iptables_tool("iptables-save", -1, img_raw_fd(img));
+	struct cr_img *img;
+
+	img = img_from_set(fds, CR_FD_IPTABLES);
+	if (run_iptables_tool("iptables-save", -1, img_raw_fd(img)))
+		return -1;
+
+	img = img_from_set(fds, CR_FD_IP6TABLES);
+	if (run_iptables_tool("ip6tables-save", -1, img_raw_fd(img)))
+		return -1;
+
+	return 0;
 }
 
 static int dump_netns_conf(struct cr_imgset *fds)
@@ -610,8 +634,10 @@ static int restore_ip_dump(int type, int pid, char *cmd)
 	struct cr_img *img;
 
 	img = open_image(type, O_RSTR, pid);
+	if (empty_image(img))
+		return 0;
 	if (img) {
-		ret = run_ip_tool(cmd, "restore", img_raw_fd(img), -1);
+		ret = run_ip_tool(cmd, "restore", NULL, img_raw_fd(img), -1);
 		close_image(img);
 	}
 
@@ -625,7 +651,13 @@ static inline int restore_ifaddr(int pid)
 
 static inline int restore_route(int pid)
 {
-	return restore_ip_dump(CR_FD_ROUTE, pid, "route");
+	if (restore_ip_dump(CR_FD_ROUTE, pid, "route"))
+		return -1;
+
+	if (restore_ip_dump(CR_FD_ROUTE6, pid, "route"))
+		return -1;
+
+	return 0;
 }
 
 static inline int restore_iptables(int pid)
@@ -636,6 +668,14 @@ static inline int restore_iptables(int pid)
 	img = open_image(CR_FD_IPTABLES, O_RSTR, pid);
 	if (img) {
 		ret = run_iptables_tool("iptables-restore", img_raw_fd(img), -1);
+		close_image(img);
+	}
+	if (ret)
+		return ret;
+
+	img = open_image(CR_FD_IP6TABLES, O_RSTR, pid);
+	if (img) {
+		ret = run_iptables_tool("ip6tables-restore", img_raw_fd(img), -1);
 		close_image(img);
 	}
 
@@ -762,8 +802,17 @@ int prepare_net_ns(int pid)
 	return ret;
 }
 
-int netns_pre_create(void)
+int netns_keep_nsfd(void)
 {
+	if (!(root_ns_mask & CLONE_NEWNET))
+		return 0;
+
+	/*
+	 * When restoring a net namespace we need to communicate
+	 * with the original (i.e. -- init) one. Thus, prepare for
+	 * that before we leave the existing namespaces.
+	 */
+
 	ns_fd = open("/proc/self/ns/net", O_RDONLY | O_CLOEXEC);
 	if (ns_fd < 0) {
 		pr_perror("Can't cache net fd");
@@ -774,6 +823,66 @@ int netns_pre_create(void)
 	return 0;
 }
 
+static int network_lock_internal(void)
+{
+	int exit_code = -1, nsret = -1, i;
+	char *cmds[][10] = {
+			{"iptables",  "-N", "CRIU",	NULL},
+			{"iptables",  "-A", "CRIU",	"-t", "filter", "-j", "DROP", NULL},
+			{"iptables",  "-I", "INPUT",	"-j", "CRIU", NULL},
+			{"iptables",  "-I", "OUTPUT",	"-j", "CRIU", NULL},
+			{"ip6tables", "-N", "CRIU",	NULL},
+			{"ip6tables", "-A", "CRIU",	"-t", "filter", "-j", "DROP", NULL},
+			{"ip6tables", "-I", "INPUT",	"-j", "CRIU", NULL},
+			{"ip6tables", "-I", "OUTPUT",	"-j", "CRIU", NULL},
+		};
+	/*
+	 * These rules will be dumped and restore, so we don't need
+	 * to block internal network on restore.
+	 */
+
+	if (switch_ns(root_item->pid.real, &net_ns_desc, &nsret))
+		return -1;
+
+	for (i = 0; i < sizeof(cmds) / sizeof(cmds[1]); i++) {
+		if (cr_system(-1, -1, -1, cmds[i][0], cmds[i]))
+			goto err;
+	}
+
+	exit_code = 0;
+err:
+	if (restore_ns(nsret, &net_ns_desc))
+		return -1;
+
+	return exit_code;
+}
+
+static int network_unlock_internal(void)
+{
+	int ret = 0, nsret = -1, i;
+	char *cmds[][10] = {
+			{"iptables", "-D",  "INPUT",	"-j", "CRIU", NULL},
+			{"iptables", "-D",  "OUTPUT",	"-j", "CRIU", NULL},
+			{"iptables", "-D",  "CRIU",	"-t", "filter", "-j", "DROP", NULL},
+			{"iptables", "-X",  "CRIU",	NULL},
+			{"ip6tables", "-D", "INPUT",	"-j", "CRIU", NULL},
+			{"ip6tables", "-D", "OUTPUT",	"-j", "CRIU", NULL},
+			{"ip6tables", "-D", "CRIU",	"-t", "filter", "-j", "DROP", NULL},
+			{"ip6tables", "-X", "CRIU",	NULL},
+		};
+
+	if (switch_ns(root_item->pid.real, &net_ns_desc, &nsret))
+		return -1;
+
+	for (i = 0; i < sizeof(cmds) / sizeof(cmds[1]); i++)
+		ret |= cr_system(-1, -1, -1, cmds[i][0], cmds[i]);
+
+	if (restore_ns(nsret, &net_ns_desc))
+		return -1;
+
+	return ret;
+}
+
 int network_lock(void)
 {
 	pr_info("Lock network\n");
@@ -782,7 +891,10 @@ int network_lock(void)
 	if  (!(root_ns_mask & CLONE_NEWNET))
 		return 0;
 
-	return run_scripts(ACT_NET_LOCK);
+	if (run_scripts(ACT_NET_LOCK))
+		return -1;
+
+	return network_lock_internal();
 }
 
 void network_unlock(void)
@@ -792,8 +904,10 @@ void network_unlock(void)
 	cpt_unlock_tcp_connections();
 	rst_unlock_tcp_connections();
 
-	if (root_ns_mask & CLONE_NEWNET)
+	if (root_ns_mask & CLONE_NEWNET) {
 		run_scripts(ACT_NET_UNLOCK);
+		network_unlock_internal();
+	}
 }
 
 int veth_pair_add(char *in, char *out)
