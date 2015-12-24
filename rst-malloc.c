@@ -58,7 +58,8 @@ static int grow_remap(struct rst_mem_type_s *t, int flag, unsigned long size)
 {
 	void *aux;
 
-	size = rst_mem_grow(size);
+	if (size)
+		size = rst_mem_grow(size);
 
 	if (!t->buf)
 		/*
@@ -67,6 +68,7 @@ static int grow_remap(struct rst_mem_type_s *t, int flag, unsigned long size)
 		aux = mmap(NULL, size, PROT_READ | PROT_WRITE,
 				flag | MAP_ANON, 0, 0);
 	else
+#ifndef CR_DEBUG
 		/*
 		 * We'll have to remap all objects into restorer
 		 * address space and get their new addresses. Since
@@ -78,6 +80,17 @@ static int grow_remap(struct rst_mem_type_s *t, int flag, unsigned long size)
 		 */
 		aux = mremap(t->buf, t->size,
 				t->size + size, MREMAP_MAYMOVE);
+#else
+	{
+		aux = mmap(NULL, t->size + size, PROT_READ | PROT_WRITE,
+			flag | MAP_ANON, 0, 0);
+		if (aux == MAP_FAILED)
+			return -1;
+		memcpy(aux, t->buf, t->size);
+		munmap(t->buf, t->size);
+		pr_err("\n");
+	}
+#endif
 	if (aux == MAP_FAILED)
 		return -1;
 
@@ -149,6 +162,9 @@ static void *__rst_mem_alloc(unsigned long size, int type)
 		pr_perror("Can't grow rst mem");
 		return NULL;
 	}
+#ifdef CR_DEBUG
+	t->grow(t, 0);
+#endif
 
 	ret = t->free_mem;
 	t->free_mem += size;
