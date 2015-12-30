@@ -2251,6 +2251,7 @@ static int do_new_mount(struct mount_info *mi)
 		return -1;
 	}
 
+	pr_err("%s %d %d\n", mi->mountpoint, mi->shared_id, mi->master_id);
 	if (restore_shared_options(mi, !mi->shared_id && !mi->master_id,
 					mi->shared_id,
 					mi->master_id))
@@ -2282,6 +2283,7 @@ static int do_bind_mount(struct mount_info *mi)
 	int exit_code = -1;
 	bool shared = false;
 	bool master = false;
+	bool private;
 	char *mnt_path = NULL;
 	struct stat st;
 	bool umount_mnt_path = false;
@@ -2379,9 +2381,13 @@ out:
 	 * shared - the mount is in the same shared group with mi->bind
 	 * mi->shared_id && !shared - create a new shared group
 	 */
-	if (restore_shared_options(mi, force_private_remount || (!shared && !master),
-					mi->shared_id && !shared,
-					mi->master_id && !master))
+	private = (!mi->master_id && !mi->shared_id) || (mi->shared_id && !shared && !mi->master_id);
+	master = mi->master_id && !master;
+	shared = mi->shared_id && !shared;
+	pr_err("%s %d %d\n", mi->mountpoint, mi->shared_id, mi->master_id);
+	if (restore_shared_options(mi, force_private_remount || private,
+					shared,
+					master))
 		return -1;
 
 	mi->mounted = true;
