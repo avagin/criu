@@ -2085,6 +2085,8 @@ static int restore_root_task(struct pstree_item *init)
 
 	write_stats(RESTORE_STATS);
 
+	close_old_fds(NULL);
+
 	if (!opts.restore_detach && !opts.exec_cmd)
 		wait(NULL);
 
