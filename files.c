@@ -1042,9 +1042,18 @@ int close_old_fds(struct pstree_item *me)
 			return -1;
 		}
 
-		if ((!is_any_service_fd(fd)) && (dirfd(dir) != fd) &&
-		    !inherit_fd_lookup_fd(fd, __FUNCTION__))
-			close_safe(&fd);
+		if (dirfd(dir) == fd)
+			continue;
+
+		if (me == NULL)
+			goto close_next;
+
+		if (is_any_service_fd(fd))
+			continue;
+		if (inherit_fd_lookup_fd(fd, __FUNCTION__))
+			continue;
+close_next:
+		close_safe(&fd);
 	}
 
 	closedir(dir);

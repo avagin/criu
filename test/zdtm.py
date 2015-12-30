@@ -804,7 +804,12 @@ def get_visible_state(test):
 		try:
 			r = re.compile("^\S+\s\S+\s\S+\s(\S+)\s(\S+)")
 			for m in open("/proc/%s/root/proc/%s/mountinfo" % (test.getpid(), pid)):
-				cmounts.append(r.match(m).groups())
+				g = list(r.match(m).groups())
+				if "master" in m:
+					g.append("master")
+				if "shared" in m:
+					g.append("shared")
+				cmounts.append(tuple(g))
 		except IOError, e:
 			if e.errno != errno.EINVAL:
 				raise e
