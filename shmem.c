@@ -156,6 +156,11 @@ static int restore_shmem_content(void *addr, struct shmem_info *si)
 		return -1;
 
 	fd_pg = img_raw_fd(pr.pi);
+	if (fd_pg < 0) {
+		ret = -1;
+		goto err;
+	}
+
 	while (1) {
 		unsigned long vaddr;
 		unsigned nr_pages;
@@ -190,6 +195,7 @@ static int restore_shmem_content(void *addr, struct shmem_info *si)
 			pr.put_pagemap(&pr);
 	}
 
+err:
 	pr.close(&pr);
 	return ret;
 }
