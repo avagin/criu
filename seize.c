@@ -177,6 +177,8 @@ static int seize_cgroup_tree(char *root_path, const char *state)
 /* A number of tasks in a freezer cgroup which are not going to be dumped */
 int processes_to_wait;
 
+static int *external_processes;
+int n_external_processes;
 /*
  * A freezer cgroup can contain tasks which will not be dumped
  * and we need to wait them, because the are interupted them by ptrace.
@@ -188,6 +190,7 @@ static int freezer_wait_processes()
 	for (i = 0; i < processes_to_wait; i++) {
 		int status;
 		pid_t pid;
+		int *p;
 
 		/*
 		 * Here we are going to skip tasks which are already traced.
@@ -200,6 +203,13 @@ static int freezer_wait_processes()
 			return -1;
 		}
 		pr_warn("Unexpected process %d in the freezer cgroup (status 0x%x)\n", pid, status);
+
+		p = xrealloc(external_processes, sizeof(int) * (n_external_processes + 1));
+		if (p == NULL)
+			return -1;
+		p[n_external_processes] = pid;
+		external_processes = p;
+		n_external_processes++;
 	}
 
 	return 0;
@@ -207,27 +217,29 @@ static int freezer_wait_processes()
 
 static int freezer_detach(void)
 {
-	char path[PATH_MAX];
-	FILE *f;
+	int i;
 
 	if (!opts.freeze_cgroup)
 		return 0;
 
-	snprintf(path, sizeof(path), "%s/tasks", opts.freeze_cgroup);
-	f = fopen(path, "r");
-	if (f == NULL) {
-		pr_perror("Unable to open %s", path);
-		return -1;
-	}
-	while (fgets(path, sizeof(path), f)) {
-		pid_t pid;
+	for (i = 0; i < n_external_processes; i++) {
+		pid_t pid = external_processes[i];
+		int status, save_errno;
 
-		pid = atoi(path);
+		if (ptrace(PTRACE_DETACH, pid, NULL, NULL) == 0)
+			continue;
 
-		if (ptrace(PTRACE_DETACH, pid, NULL, NULL))
-			pr_perror("Unable to detach from %d", pid);
+		save_errno = errno;
+
+		/* A process may be killed by SIGKILL */
+		if (wait4(pid, &status, __WALL, NULL) == pid) {
+			pr_warn("The %d process returned 0x %x\n", pid, status);
+			continue;
+		}
+		errno = save_errno;
+		pr_perror("Unable to detach from %d", pid);
 	}
-	fclose(f);
+
 	return 0;
 }
 
@@ -402,7 +414,7 @@ static void unseize_task_and_threads(const struct pstree_item *item, int st)
 
 	unseize_task(item->pid.real, item->state, st);
 
-	if (st == TASK_DEAD || opts.freeze_cgroup)
+	if (st == TASK_DEAD)
 		return;
 
 	for (i = 1; i < item->nr_threads; i++)
@@ -448,10 +460,6 @@ void pstree_switch_state(struct pstree_item *root_item, int st)
 	if (st != TASK_DEAD)
 		freezer_restore_state();
 
-	pr_info("Unfreezing tasks into %d\n", st);
-	for_each_pstree_item(item)
-		unseize_task_and_threads(item, st);
-
 	/*
 	 * We need to detach from all processes before waiting the init
 	 * process, because one of these processes may collect processes from a
@@ -459,6 +467,10 @@ void pstree_switch_state(struct pstree_item *root_item, int st)
 	 * processes have been killed and collected.
 	 */
 	freezer_detach();
+
+	pr_info("Unfreezing tasks into %d\n", st);
+	for_each_pstree_item(item)
+		unseize_task_and_threads(item, st);
 
 	if (st == TASK_DEAD)
 		pstree_wait(root_item);

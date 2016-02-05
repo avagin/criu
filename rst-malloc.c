@@ -58,7 +58,8 @@ static int grow_remap(struct rst_mem_type_s *t, int flag, unsigned long size)
 {
 	void *aux;
 
-	size = rst_mem_grow(size);
+	if (size)
+		size = rst_mem_grow(size);
 
 	if (!t->buf)
 		/*
@@ -67,6 +68,7 @@ static int grow_remap(struct rst_mem_type_s *t, int flag, unsigned long size)
 		aux = mmap(NULL, size, PROT_READ | PROT_WRITE,
 				flag | MAP_ANON, 0, 0);
 	else
+#ifndef CR_DEBUG
 		/*
 		 * We'll have to remap all objects into restorer
 		 * address space and get their new addresses. Since
@@ -78,6 +80,17 @@ static int grow_remap(struct rst_mem_type_s *t, int flag, unsigned long size)
 		 */
 		aux = mremap(t->buf, t->size,
 				t->size + size, MREMAP_MAYMOVE);
+#else
+	{
+		aux = mmap(NULL, t->size + size, PROT_READ | PROT_WRITE,
+			flag | MAP_ANON, 0, 0);
+		if (aux == MAP_FAILED)
+			return -1;
+		memcpy(aux, t->buf, t->size);
+		munmap(t->buf, t->size);
+		pr_err("\n");
+	}
+#endif
 	if (aux == MAP_FAILED)
 		return -1;
 
@@ -138,7 +151,7 @@ void *rst_mem_remap_ptr(unsigned long pos, int type)
 	return t->buf + pos;
 }
 
-void *rst_mem_alloc(unsigned long size, int type)
+static void *__rst_mem_alloc(unsigned long size, int type)
 {
 	struct rst_mem_type_s *t = &rst_mems[type];
 	void *ret;
@@ -149,6 +162,9 @@ void *rst_mem_alloc(unsigned long size, int type)
 		pr_perror("Can't grow rst mem");
 		return NULL;
 	}
+#ifdef CR_DEBUG
+	t->grow(t, 0);
+#endif
 
 	ret = t->free_mem;
 	t->free_mem += size;
@@ -156,6 +172,24 @@ void *rst_mem_alloc(unsigned long size, int type)
 	t->last = size;
 
 	return ret;
+}
+
+void *rst_mem_alloc(unsigned long size, int type)
+{
+	struct rst_mem_type_s *t = &rst_mems[type];
+
+	t->free_mem = (void *) round_up((unsigned long)t->free_mem, sizeof(void *));
+
+	return __rst_mem_alloc(size, type);
+}
+
+/* Allocate memory without gaps with a previous slice */
+void *rst_mem_alloc_cont(unsigned long size, int type)
+{
+	struct rst_mem_type_s *t = &rst_mems[type];
+	BUG_ON(!t->remapable);
+
+	return __rst_mem_alloc(size, type);
 }
 
 void rst_mem_free_last(int type)

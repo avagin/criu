@@ -2,6 +2,9 @@
 #include <sys/socket.h>
 #include <linux/netlink.h>
 #include <linux/rtnetlink.h>
+#include <linux/netfilter/nfnetlink.h>
+#include <linux/netfilter/nfnetlink_conntrack.h>
+#include <linux/netfilter/nf_conntrack_tcp.h>
 #include <string.h>
 #include <net/if_arp.h>
 #include <sys/wait.h>
@@ -9,6 +12,7 @@
 #include <sys/mount.h>
 #include <net/if.h>
 #include <linux/sockios.h>
+#include <libnl3/netlink/msg.h>
 
 #include "imgset.h"
 #include "syscall-types.h"
@@ -149,7 +153,7 @@ int write_netdev_img(NetDeviceEntry *nde, struct cr_imgset *fds)
 }
 
 static int dump_one_netdev(int type, struct ifinfomsg *ifi,
-		struct rtattr **tb, struct cr_imgset *fds,
+		struct nlattr **tb, struct cr_imgset *fds,
 		int (*dump)(NetDeviceEntry *, struct cr_imgset *))
 {
 	int ret;
@@ -168,8 +172,8 @@ static int dump_one_netdev(int type, struct ifinfomsg *ifi,
 
 	if (tb[IFLA_ADDRESS] && (type != ND_TYPE__LOOPBACK)) {
 		netdev.has_address = true;
-		netdev.address.data = RTA_DATA(tb[IFLA_ADDRESS]);
-		netdev.address.len = RTA_PAYLOAD(tb[IFLA_ADDRESS]);
+		netdev.address.data = nla_data(tb[IFLA_ADDRESS]);
+		netdev.address.len = nla_len(tb[IFLA_ADDRESS]);
 		pr_info("Found ll addr (%02x:../%d) for %s\n",
 				(int)netdev.address.data[0],
 				(int)netdev.address.len, netdev.name);
@@ -193,26 +197,26 @@ err_free:
 	return ret;
 }
 
-static char *link_kind(struct ifinfomsg *ifi, struct rtattr **tb)
+static char *link_kind(struct ifinfomsg *ifi, struct nlattr **tb)
 {
-	struct rtattr *linkinfo[IFLA_INFO_MAX + 1];
+	struct nlattr *linkinfo[IFLA_INFO_MAX + 1];
 
 	if (!tb[IFLA_LINKINFO]) {
 		pr_err("No linkinfo for eth link %d\n", ifi->ifi_index);
 		return NULL;
 	}
 
-	parse_rtattr_nested(linkinfo, IFLA_INFO_MAX, tb[IFLA_LINKINFO]);
+	nla_parse_nested(linkinfo, IFLA_INFO_MAX, tb[IFLA_LINKINFO], NULL);
 	if (!linkinfo[IFLA_INFO_KIND]) {
 		pr_err("No kind for eth link %d\n", ifi->ifi_index);
 		return NULL;
 	}
 
-	return RTA_DATA(linkinfo[IFLA_INFO_KIND]);
+	return nla_data(linkinfo[IFLA_INFO_KIND]);
 }
 
 static int dump_unknown_device(struct ifinfomsg *ifi, char *kind,
-		struct rtattr **tb, struct cr_imgset *fds)
+		struct nlattr **tb, struct cr_imgset *fds)
 {
 	int ret;
 
@@ -262,7 +266,7 @@ static int dump_bridge(NetDeviceEntry *nde, struct cr_imgset *imgset)
 }
 
 static int dump_one_ethernet(struct ifinfomsg *ifi, char *kind,
-		struct rtattr **tb, struct cr_imgset *fds)
+		struct nlattr **tb, struct cr_imgset *fds)
 {
 	if (!strcmp(kind, "veth"))
 		/*
@@ -283,7 +287,7 @@ static int dump_one_ethernet(struct ifinfomsg *ifi, char *kind,
 }
 
 static int dump_one_gendev(struct ifinfomsg *ifi, char *kind,
-		struct rtattr **tb, struct cr_imgset *fds)
+		struct nlattr **tb, struct cr_imgset *fds)
 {
 	if (!strcmp(kind, "tun"))
 		return dump_one_netdev(ND_TYPE__TUN, ifi, tb, fds, dump_tun_link);
@@ -292,7 +296,7 @@ static int dump_one_gendev(struct ifinfomsg *ifi, char *kind,
 }
 
 static int dump_one_voiddev(struct ifinfomsg *ifi, char *kind,
-		struct rtattr **tb, struct cr_imgset *fds)
+		struct nlattr **tb, struct cr_imgset *fds)
 {
 	if (!strcmp(kind, "venet"))
 		return dump_one_netdev(ND_TYPE__VENET, ifi, tb, fds, NULL);
@@ -305,7 +309,7 @@ static int dump_one_link(struct nlmsghdr *hdr, void *arg)
 	struct cr_imgset *fds = arg;
 	struct ifinfomsg *ifi;
 	int ret = 0, len = hdr->nlmsg_len - NLMSG_LENGTH(sizeof(*ifi));
-	struct rtattr *tb[IFLA_MAX + 1];
+	struct nlattr *tb[IFLA_MAX + 1];
 	char *kind;
 
 	ifi = NLMSG_DATA(hdr);
@@ -315,7 +319,7 @@ static int dump_one_link(struct nlmsghdr *hdr, void *arg)
 		return -1;
 	}
 
-	parse_rtattr(tb, IFLA_MAX, IFLA_RTA(ifi), len);
+	nlmsg_parse(hdr, sizeof(struct ifinfomsg), tb, IFLA_MAX, NULL);
 	pr_info("\tLD: Got link %d, type %d\n", ifi->ifi_index, ifi->ifi_type);
 
 	if (ifi->ifi_type == ARPHRD_LOOPBACK) 
@@ -342,6 +346,175 @@ unk:
 	}
 
 	return ret;
+}
+
+static int dump_one_nf(struct nlmsghdr *hdr, void *arg)
+{
+	struct cr_img *img = arg;
+
+	if (lazy_image(img) && open_image_lazy(img))
+		return -1;
+
+	if (write_img_buf(img, hdr, hdr->nlmsg_len))
+		return -1;
+
+	return 0;
+}
+
+static int ct_restore_callback(struct nlmsghdr *nlh)
+{
+	struct nfgenmsg *msg;
+	struct nlattr *tb[CTA_MAX+1], *tbp[CTA_PROTOINFO_MAX + 1], *tb_tcp[CTA_PROTOINFO_TCP_MAX+1];
+	int err;
+
+	msg = NLMSG_DATA(nlh);
+
+	if (msg->nfgen_family != AF_INET && msg->nfgen_family != AF_INET6)
+		return 0;
+
+	err = nlmsg_parse(nlh, sizeof(struct nfgenmsg), tb, CTA_MAX, NULL);
+	if (err < 0)
+		return -1;
+
+	if (!tb[CTA_PROTOINFO])
+		return 0;
+
+	err = nla_parse_nested(tbp, CTA_PROTOINFO_MAX, tb[CTA_PROTOINFO], NULL);
+	if (err < 0)
+		return -1;
+
+	if (!tbp[CTA_PROTOINFO_TCP])
+		return 0;
+
+	err = nla_parse_nested(tb_tcp, CTA_PROTOINFO_TCP_MAX, tbp[CTA_PROTOINFO_TCP], NULL);
+	if (err < 0)
+		return -1;
+
+	if (tb_tcp[CTA_PROTOINFO_TCP_FLAGS_ORIGINAL]) {
+		struct nf_ct_tcp_flags *flags;
+
+		flags = nla_data(tb_tcp[CTA_PROTOINFO_TCP_FLAGS_ORIGINAL]);
+		flags->flags |= IP_CT_TCP_FLAG_BE_LIBERAL;
+		flags->mask |= IP_CT_TCP_FLAG_BE_LIBERAL;
+	}
+
+	if (tb_tcp[CTA_PROTOINFO_TCP_FLAGS_REPLY]) {
+		struct nf_ct_tcp_flags *flags;
+
+		flags = nla_data(tb_tcp[CTA_PROTOINFO_TCP_FLAGS_REPLY]);
+		flags->flags |= IP_CT_TCP_FLAG_BE_LIBERAL;
+		flags->mask |= IP_CT_TCP_FLAG_BE_LIBERAL;
+	}
+
+	return 0;
+}
+
+static int restore_nf_ct(int pid, int type)
+{
+	struct nlmsghdr *nlh = NULL;
+	int exit_code = -1, sk;
+	struct cr_img *img;
+
+	img = open_image(type, O_RSTR, pid);
+	if (img == NULL)
+		return -1;
+	if (empty_image(img)) {
+		close_image(img);
+		return 0;
+	}
+
+	sk = socket(AF_NETLINK, SOCK_RAW, NETLINK_NETFILTER);
+	if (sk < 0) {
+		pr_perror("Can't open rtnl sock for net dump");
+		goto out_img;
+	}
+
+	nlh = xmalloc(sizeof(struct nlmsghdr));
+	if (nlh == NULL)
+		goto out;
+
+	while (1) {
+		struct nlmsghdr *p;
+		int ret;
+
+		ret = read_img_buf_eof(img, nlh, sizeof(struct nlmsghdr));
+		if (ret < 0)
+			goto out;
+		if (ret == 0)
+			break;
+
+		p = xrealloc(nlh, nlh->nlmsg_len);
+		if (p == NULL)
+			goto out;
+		nlh = p;
+
+		ret = read_img_buf_eof(img, nlh + 1, nlh->nlmsg_len - sizeof(struct nlmsghdr));
+		if (ret < 0)
+			goto out;
+		if (ret == 0) {
+			pr_err("The image file was truncated\n");
+			goto out;
+		}
+
+		if (type == CR_FD_NETNF_CT)
+			if (ct_restore_callback(nlh))
+				goto out;
+
+		nlh->nlmsg_flags = NLM_F_REQUEST|NLM_F_ACK|NLM_F_CREATE;
+		ret = do_rtnl_req(sk, nlh, nlh->nlmsg_len, NULL, NULL, NULL);
+		if (ret)
+			goto out;
+	}
+
+	exit_code = 0;
+out:
+	xfree(nlh);
+	close(sk);
+out_img:
+	close_image(img);
+	return exit_code;
+}
+
+static int dump_nf_ct(struct cr_imgset *fds, int type)
+{
+	struct cr_img *img;
+	struct {
+		struct nlmsghdr nlh;
+		struct nfgenmsg g;
+	} req;
+	int sk, ret;
+
+	pr_info("Dumping netns links\n");
+
+	ret = sk = socket(AF_NETLINK, SOCK_RAW, NETLINK_NETFILTER);
+	if (sk < 0) {
+		pr_perror("Can't open rtnl sock for net dump");
+		goto out;
+	}
+
+	memset(&req, 0, sizeof(req));
+	req.nlh.nlmsg_len = sizeof(req);
+	req.nlh.nlmsg_type = (NFNL_SUBSYS_CTNETLINK << 8);
+
+	if (type == CR_FD_NETNF_CT)
+		req.nlh.nlmsg_type |= IPCTNL_MSG_CT_GET;
+	else if (type == CR_FD_NETNF_EXP)
+		req.nlh.nlmsg_type |= IPCTNL_MSG_EXP_GET;
+	else
+		BUG();
+
+	req.nlh.nlmsg_flags = NLM_F_DUMP | NLM_F_REQUEST;
+	req.nlh.nlmsg_pid = 0;
+	req.nlh.nlmsg_seq = CR_NLMSG_SEQ;
+	req.g.nfgen_family = AF_UNSPEC;
+
+	img = img_from_set(fds, type);
+
+	ret = do_rtnl_req(sk, &req, sizeof(req), dump_one_nf, NULL, img);
+	close(sk);
+out:
+	return ret;
+
 }
 
 static int dump_links(struct cr_imgset *fds)
@@ -904,6 +1077,10 @@ int dump_net_ns(int ns_id)
 		ret = dump_rule(fds);
 	if (!ret)
 		ret = dump_iptables(fds);
+	if (!ret)
+		ret = dump_nf_ct(fds, CR_FD_NETNF_CT);
+	if (!ret)
+		ret = dump_nf_ct(fds, CR_FD_NETNF_EXP);
 
 	close(ns_sysfs_fd);
 	ns_sysfs_fd = -1;
@@ -931,6 +1108,10 @@ int prepare_net_ns(int pid)
 		ret = restore_rule(pid);
 	if (!ret)
 		ret = restore_iptables(pid);
+	if (!ret)
+		ret = restore_nf_ct(pid, CR_FD_NETNF_CT);
+	if (!ret)
+		ret = restore_nf_ct(pid, CR_FD_NETNF_EXP);
 
 	close_service_fd(NS_FD_OFF);
 

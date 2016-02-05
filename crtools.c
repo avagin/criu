@@ -517,6 +517,7 @@ int main(int argc, char *argv[], char *envp[])
 		case 1071:
 			if (parse_lsm_arg(optarg) < 0)
 				return -1;
+			break;
 		case 1072:
 			opts.timeout = atoi(optarg);
 			break;
@@ -781,6 +782,7 @@ usage:
 "  --external RES        dump objects from this list as external resources:\n"
 "                        Formats of RES:\n"
 "                            tty[rdev:dev]\n"
+"                            files[mnt_id:inode]\n"
 "  --inherit-fd fd[<num>]:<existing>\n"
 "                        Inherit file descriptors. This allows to treat file descriptor\n"
 "                        <num> as being already opened via <existing> one and instead of\n"
@@ -788,6 +790,7 @@ usage:
 "                            tty[rdev:dev]\n"
 "                            pipe[inode]\n"
 "                            socket[inode]\n"
+"                            files[mnt_id:inode]\n"
 "\n"
 "* Logging:\n"
 "  -o|--log-file FILE    log file name\n"
