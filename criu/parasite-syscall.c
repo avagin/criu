@@ -519,6 +519,8 @@ static int parasite_init_daemon(struct parasite_ctl *ctl, struct ns_id *net)
 	args->sigframe = (uintptr_t)ctl->rsigframe;
 	args->log_level = log_get_loglevel();
 
+	BUG_ON((long)&args->daemon_connected & (sizeof(int) - 1));
+
 	futex_set(&args->daemon_connected, 0);
 
 	if (prepare_tsock(ctl, pid, args, net))
