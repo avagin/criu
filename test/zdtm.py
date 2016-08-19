@@ -122,6 +122,23 @@ def check_core_files():
 
 	return True
 
+
+init_tainted = int(open("/proc/sys/kernel/tainted").read())
+
+
+def check_kernel_tainted():
+	tainted = int(open("/proc/sys/kernel/tainted").read())
+
+	if tainted == init_tainted:
+		return False
+
+	print "ERROR: kernel.tainted = %x (was %x)" % (tainted, init_tainted)
+
+	subprocess.Popen(["dmesg"]).wait()
+
+	return True
+
+
 # Arch we run on
 arch = os.uname()[4]
 
@@ -1263,6 +1280,8 @@ class launcher:
 	def finish(self):
 		self.__wait_all()
 		if not opts['fault'] and check_core_files():
+			self.__fail = True
+		if check_kernel_tainted():
 			self.__fail = True
 		if self.__file_report:
 			self.__file_report.close()
