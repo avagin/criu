@@ -27,4 +27,4 @@ cat > $report.core
 echo 'bt
 i r
 disassemble $rip-0x10,$rip + 0x10
-' | gdb -c $report.core /proc/self/fd/33
+' | gdb -c $report.core /proc/self/fd/33 /home/travis/build/avagin/criu/test/lib64/ld-linux-x86-64.so.2
