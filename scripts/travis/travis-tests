@@ -7,7 +7,7 @@ cd ../../
 
 cat /proc/cpuinfo
 
-sudo /etc/init.d/apparmor kill
+sudo systemctl stop apparmor.service
 sudo update-rc.d -f apparmor remove
 
 service apport stop
