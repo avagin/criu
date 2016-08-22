@@ -684,9 +684,10 @@ int protect_vmas(struct pstree_item *t)
 		if (!vma_area_is_private(vma, kdat.task_size))
 			continue;
 
-		if (vma->e->prot & PROT_GROWSDOWN)
-			continue;
-		mprotect(decode_pointer(vma->premmaped_addr), vma_area_len(vma), vma->e->prot);
+	//	if (vma->e->prot & PROT_GROWSDOWN)
+	//		continue;
+		if (mprotect(decode_pointer(vma->premmaped_addr), vma_area_len(vma), vma->e->prot & ~PROT_WRITE))
+			pr_perror("mprotect");
 	}
 
 	return 0;
