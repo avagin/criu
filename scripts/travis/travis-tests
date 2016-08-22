@@ -27,7 +27,11 @@ make -C test/zdtm
 umask 0000
 export SKIP_PREP=1
 
+echo 1 > /sys/kernel/debug/tracing/events/exceptions/enable
 while :; do ./test/zdtm.py run -a -x 'cgroup*' -p 2 || break; done
+[ $? -ne 0 ] && {
+cat /sys/kernel/debug/tracing/trace
+}
 
 bash ./test/jenkins/criu-fault.sh
 bash ./test/jenkins/criu-fcg.sh
