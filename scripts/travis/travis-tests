@@ -28,7 +28,7 @@ make -C test/zdtm
 umask 0000
 export SKIP_PREP=1
 
-while :; do ./test/zdtm.py run -a -x 'cgroup*' -p 2 --iter 0 || break; done
+while :; do ./test/zdtm.py run -a -x 'cgroup*' -p 2 || break; done
 
 bash ./test/jenkins/criu-fault.sh
 bash ./test/jenkins/criu-fcg.sh
