@@ -34,9 +34,8 @@ export SKIP_PREP=1
 echo 1 > /sys/kernel/debug/tracing/events/exceptions/enable
 echo 1 > /sys/kernel/debug/tracing/events/signal/enable
 ret=0
-while :; do ./test/zdtm.py run -a -x 'cgroup*' -p 2 --norst || { ret=1; break; }; done
+while :; do ./test/zdtm.py run -a -x 'cgroup*' || { ret=1; break; }; done
 [ $ret -ne 0 ] && {
-cat /sys/kernel/debug/tracing/trace
 exit 1
 }
 
