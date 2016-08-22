@@ -411,6 +411,14 @@ class zdtm_test:
 
 		print "Start test"
 
+                ftrace_name = tempfile.mkdtemp(dir = "/sys/kernel/debug/tracing/instances/")
+                ftrace_name += "/"
+                print ftrace_name
+                open(ftrace_name + "set_ftrace_pid", "w").write(str(os.getpid()))
+                open(ftrace_name + "events/signal/enable", "w").write("1")
+                open(ftrace_name + "events/exceptions/enable", "w").write("1")
+                self.ftrace_name = ftrace_name
+
 		env = self._env
 		if not self.__freezer.kernel:
 			env['ZDTM_THREAD_BOMB'] = "5"
@@ -450,6 +458,10 @@ class zdtm_test:
 			# Wait less than a second to give the test chance to
 			# move into some semi-random state
 			time.sleep(random.random())
+                pids = open(ftrace_name + "set_ftrace_pid").read().split()
+                pids.remove(str(os.getpid()))
+                print ftrace_name
+                open(ftrace_name + "set_ftrace_pid", "w").write(" ".join(pids))
 
 	def kill(self, sig = signal.SIGKILL):
 		self.__freezer.thaw()
@@ -471,6 +483,7 @@ class zdtm_test:
 				print open(self.__name + '.out.inprogress').read()
 				print_sep(self.__name + '.out.inprogress')
 			raise test_fail_exc("result check")
+                os.rmdir(self.ftrace_name)
 
 	def getpid(self):
 		if self.__pid == 0:
