@@ -1240,24 +1240,6 @@ long __export_restore_task(struct task_restore_args *args)
 #endif
 
 	/*
-	 * Walk though all VMAs again to drop PROT_WRITE
-	 * if it was not there.
-	 */
-	for (i = 0; i < args->vmas_n; i++) {
-		vma_entry = args->vmas + i;
-
-		if (!(vma_entry_is(vma_entry, VMA_AREA_REGULAR)))
-			continue;
-
-//		if (vma_entry->prot & PROT_WRITE)
-//			continue;
-
-		sys_mprotect(decode_pointer(vma_entry->start),
-			     vma_entry_len(vma_entry),
-			     vma_entry->prot);
-	}
-
-	/*
 	 * Now when all VMAs are in their places time to set
 	 * up AIO rings.
 	 */
@@ -1512,6 +1494,25 @@ long __export_restore_task(struct task_restore_args *args)
 	ret = ret || restore_pdeath_sig(args->t);
 
 	futex_set_and_wake(&thread_inprogress, args->nr_threads);
+
+	/*
+	 * Walk though all VMAs again to drop PROT_WRITE
+	 * if it was not there.
+	 */
+	for (i = 0; i < args->vmas_n; i++) {
+		vma_entry = args->vmas + i;
+
+		if (!(vma_entry_is(vma_entry, VMA_AREA_REGULAR)))
+			continue;
+
+//		if (vma_entry->prot & PROT_WRITE)
+//			continue;
+
+		sys_mprotect(decode_pointer(vma_entry->start),
+			     vma_entry_len(vma_entry),
+			     vma_entry->prot);
+	}
+
 
 	restore_finish_stage(CR_STATE_RESTORE_CREDS);
 
