@@ -1,5 +1,6 @@
 #!/bin/bash -x
 
+sleep 10000
 pid=$1
 vpid=$2
 sig=$3
