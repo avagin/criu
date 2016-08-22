@@ -16,7 +16,10 @@ report="/tmp/zdtm-core-$pid-$comm"
 exec &> ${report}.txt
 
 for i in /sys/kernel/debug/tracing/instances/*; do
-	cat $i/trace
+	echo  0 > $i/tracing_on
+done
+for i in /sys/kernel/debug/tracing/instances/*; do
+	cat $i/trace | tail -n 10240
 done
 
 ps axf
