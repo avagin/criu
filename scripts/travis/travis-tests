@@ -29,9 +29,11 @@ export SKIP_PREP=1
 
 echo 1 > /sys/kernel/debug/tracing/events/exceptions/enable
 echo 1 > /sys/kernel/debug/tracing/events/signal/enable
-while :; do ./test/zdtm.py run -a -x 'cgroup*' -p 2 || break; done
-[ $? -ne 0 ] && {
+ret=0
+while :; do ./test/zdtm.py run -a -x 'cgroup*' -p 2 --norst || { ret=1; break; }; done
+[ $ret -ne 0 ] && {
 cat /sys/kernel/debug/tracing/trace
+exit 1
 }
 
 bash ./test/jenkins/criu-fault.sh
