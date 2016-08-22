@@ -15,7 +15,7 @@ expr match "$comm" zombie00 && {
 report="/tmp/zdtm-core-$pid-$comm"
 exec &> ${report}.txt
 
-cat /sys/kernel/debug/tracing/trace | tail -n 10240
+cat /sys/kernel/debug/tracing/trace | tail -n 20240
 
 ps axf
 ps -p $pid
