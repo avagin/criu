@@ -5,6 +5,8 @@ ulimit -c unlimited
 
 cd ../../
 
+cat /proc/cpuinfo
+
 service apport stop
 echo "|`pwd`/test/abrt.sh %P %p %s %e" > /proc/sys/kernel/core_pattern
 
@@ -14,6 +16,7 @@ apt-get install -qq protobuf-c-compiler libprotobuf-c0-dev libaio-dev	\
 	libnl-3-dev gcc-multilib libc6-dev-i386 gdb bash
 chmod a+x $HOME
 export GCOV=1
+uname -a
 make
 make -C test/zdtm
 
