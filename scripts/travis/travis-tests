@@ -15,7 +15,6 @@ apt-get install -qq protobuf-c-compiler libprotobuf-c0-dev libaio-dev	\
 	libprotobuf-dev protobuf-compiler python-ipaddr libcap-dev	\
 	libnl-3-dev gcc-multilib libc6-dev-i386 gdb bash
 chmod a+x $HOME
-export GCOV=1
 uname -a
 make
 make -C test/zdtm
