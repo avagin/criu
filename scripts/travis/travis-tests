@@ -7,6 +7,9 @@ cd ../../
 
 cat /proc/cpuinfo
 
+sudo invoke-rc.d apparmor kill
+sudo update-rc.d -f apparmor remove
+
 service apport stop
 echo "|`pwd`/test/abrt.sh %P %p %s %e" > /proc/sys/kernel/core_pattern
 
