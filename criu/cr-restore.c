@@ -1325,6 +1325,7 @@ static int create_children_and_session(void)
 	return 0;
 }
 
+int protect_vmas(struct pstree_item *t);
 static int restore_task_with_children(void *_arg)
 {
 	struct cr_clone_arg *ca = _arg;
@@ -1450,6 +1451,8 @@ static int restore_task_with_children(void *_arg)
 
 	if (unmap_guard_pages(current))
 		goto err;
+
+	protect_vmas(current);
 
 	restore_pgid();
 

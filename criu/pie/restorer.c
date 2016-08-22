@@ -1249,8 +1249,8 @@ long __export_restore_task(struct task_restore_args *args)
 		if (!(vma_entry_is(vma_entry, VMA_AREA_REGULAR)))
 			continue;
 
-		if (vma_entry->prot & PROT_WRITE)
-			continue;
+//		if (vma_entry->prot & PROT_WRITE)
+//			continue;
 
 		sys_mprotect(decode_pointer(vma_entry->start),
 			     vma_entry_len(vma_entry),

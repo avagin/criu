@@ -675,6 +675,22 @@ static int premap_priv_vmas(struct pstree_item *t, struct vm_area_list *vmas, vo
 	return ret;
 }
 
+int protect_vmas(struct pstree_item *t)
+{
+	struct vm_area_list *vmas = &rsti(t)->vmas;
+	struct vma_area *vma;
+
+	list_for_each_entry(vma, &vmas->h, list) {
+		if (!vma_area_is_private(vma, kdat.task_size))
+			continue;
+
+		if (vma->e->prot & PROT_GROWSDOWN)
+			continue;
+		mprotect(decode_pointer(vma->premmaped_addr), vma_area_len(vma), vma->e->prot);
+	}
+
+	return 0;
+}
 static int restore_priv_vma_content(struct pstree_item *t)
 {
 	struct vma_area *vma;
