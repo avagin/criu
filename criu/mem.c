@@ -115,7 +115,10 @@ static inline bool should_dump_page(VmaEntry *vmae, u64 pme)
 
 bool page_is_zero(u64 pme)
 {
-	return (pme & PME_PFRAME_MASK) == kdat.zero_page_pfn;
+	bool f =  (pme & PME_PFRAME_MASK) == kdat.zero_page_pfn;
+	if (f && !(pme & PME_PRESENT))
+		pr_err("Buzzzz!!!!!\n");
+	return f;
 }
 
 bool page_in_parent(bool dirty)
