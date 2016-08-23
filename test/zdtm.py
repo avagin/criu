@@ -453,7 +453,6 @@ class zdtm_test:
                 self.before_regs = self.gdb();
 
         def gdb(self):
-                return ""
                 fd = subprocess.Popen(["gdb", "-p", str(self.__pid)], stdin = subprocess.PIPE, stdout = subprocess.PIPE)
                 fd.stdin.write("info all-registers\n")
                 fd.stdin.close()
