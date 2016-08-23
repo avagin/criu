@@ -20,7 +20,7 @@ int main(int argc, char **argv)
 		return 1;
 	pid = fork();
 	if (pid == 0) {
-		if (mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL)) {
+		if (mount(NULL, "/", NULL, MS_REC | MS_SLAVE, NULL)) {
 			fprintf(stderr, "mount(/, S_REC | MS_PRIVATE)): %m");
 			return 1;
 		}
