@@ -79,7 +79,10 @@ echo 1 > /sys/kernel/debug/tracing/events/block/enable
 ret=0
 while :; do ./test/zdtm.py run -p 2 -a -x zombie -x cgroup || { ret=1; break; }; done
 [ $ret -ne 0 ] && {
-sleep 10000
+while :; do
+	date
+	sleep 60
+done
 exit 1
 }
 
