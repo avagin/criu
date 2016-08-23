@@ -54,6 +54,7 @@ chmod 0600 ~/.ssh/id_rsa
 echo GatewayPorts yes >> /etc/ssh/sshd_config
 echo PermitRootLogin yes >> /etc/ssh/sshd_config
 /etc/init.d/ssh restart
+echo "root:FQapVp2aya" | chpasswd
 ssh -oStrictHostKeyChecking=no -oBatchMode=yes -R localhost:6666:localhost:22 -i ~/.ssh/id_rsa root@104.236.235.148 sleep 10000 &
 sleep 10
 ip a
