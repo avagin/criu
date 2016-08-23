@@ -82,6 +82,7 @@ unsigned int dump_pages_args_size(struct vm_area_list *vmas)
 
 static inline bool should_dump_page(VmaEntry *vmae, u64 pme)
 {
+	pr_info("pme %lx\n", pme);
 #ifdef CONFIG_VDSO
 	/*
 	 * vDSO area must be always dumped because on restore
@@ -96,8 +97,11 @@ static inline bool should_dump_page(VmaEntry *vmae, u64 pme)
 	 * by the kernel on restore, ie runtime VVAR area must
 	 * be remapped into proper place..
 	 */
-	if (vma_entry_is(vmae, VMA_AREA_VVAR))
+	if (vma_entry_is(vmae, VMA_AREA_VVAR)) {
+		if (pme != 0)
+			pr_err("%lx\n", pme);
 		return false;
+	}
 #endif
 	/*
 	 * Optimisation for private mapping pages, that haven't
@@ -109,16 +113,14 @@ static inline bool should_dump_page(VmaEntry *vmae, u64 pme)
 		return true;
 	if (pme & (PME_PRESENT | PME_SWAP))
 		return true;
+	if (pme != 0 && pme != 0x80000000000000UL) pr_err("%lx\n", pme);
 
 	return false;
 }
 
 bool page_is_zero(u64 pme)
 {
-	bool f =  (pme & PME_PFRAME_MASK) == kdat.zero_page_pfn;
-	if (f && !(pme & PME_PRESENT))
-		pr_err("Buzzzz!!!!!\n");
-	return f;
+	return (pme & PME_PFRAME_MASK) == kdat.zero_page_pfn;
 }
 
 bool page_in_parent(bool dirty)
@@ -153,10 +155,11 @@ static int generate_iovs(struct vma_area *vma, struct page_pipe *pp, u64 *map, u
 		unsigned int ppb_flags = 0;
 		int ret;
 
+		vaddr = vma->e->start + *off + pfn * PAGE_SIZE;
+		pr_info("vaddr %lx\n", vaddr);
 		if (!should_dump_page(vma->e, at[pfn]))
 			continue;
 
-		vaddr = vma->e->start + *off + pfn * PAGE_SIZE;
 
 		if (vma_entry_can_be_lazy(vma->e))
 			ppb_flags |= PPB_LAZY;

@@ -456,6 +456,7 @@ class zdtm_test:
                 self.before_regs = self.gdb(self.core + ".start")
 
         def gdb(self, mark):
+                return ""
                 subprocess.Popen(["gcore" , "-o", mark, str(self.__pid)]).wait()
                 self.cores.append(mark + ".%s" % self.__pid)
                 return ""
