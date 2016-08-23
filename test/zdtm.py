@@ -452,11 +452,15 @@ class zdtm_test:
 			# move into some semi-random state
 			time.sleep(random.random())
                 self.core = os.getcwd() + "/" + "core." + md5.new(self.__name + str(os.getpid())).hexdigest()
+                self.cores = []
                 self.before_regs = self.gdb(self.core + ".start")
 
         def gdb(self, mark):
+                subprocess.Popen(["gcore" , "-o", mark, str(self.__pid)]).wait()
+                self.cores.append(mark + ".%s" % self.__pid)
+                return ""
                 fd = subprocess.Popen(["gdb", "-p", str(self.__pid)], stdin = subprocess.PIPE, stdout = subprocess.PIPE)
-                fd.stdin.write("info all-registers\nx/256xw $rsp-256\ngenerate-core-file %s" % mark)
+                fd.stdin.write("info all-registers\nx/256xw $rsp-256")
                 fd.stdin.close()
                 r = fd.stdout.read()
                 fd.wait()
@@ -489,7 +493,7 @@ class zdtm_test:
 				print_sep(self.__name + '.out.inprogress')
 			raise test_fail_exc("result check")
 
-                for i in [self.core + ".kill", self.core + ".start"]:
+                for i in self.cores:
                     if (os.access(i, os.F_OK)):
                         os.unlink(i)
 
