@@ -20,6 +20,7 @@ import fcntl
 import errno
 import datetime
 import yaml
+import md5
 
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
@@ -450,11 +451,12 @@ class zdtm_test:
 			# Wait less than a second to give the test chance to
 			# move into some semi-random state
 			time.sleep(random.random())
-                self.before_regs = self.gdb();
+                self.core = os.getcwd() + "/" + "core." + md5.new(self.__name + str(os.getpid())).hexdigest()
+                self.before_regs = self.gdb(self.core + ".start")
 
-        def gdb(self):
+        def gdb(self, mark):
                 fd = subprocess.Popen(["gdb", "-p", str(self.__pid)], stdin = subprocess.PIPE, stdout = subprocess.PIPE)
-                fd.stdin.write("info all-registers\nx/256xw $rsp-256\n")
+                fd.stdin.write("info all-registers\nx/256xw $rsp-256\ngenerate-core-file %s" % mark)
                 fd.stdin.close()
                 r = fd.stdout.read()
                 fd.wait()
@@ -462,7 +464,7 @@ class zdtm_test:
 
 	def kill(self, sig = signal.SIGKILL):
 		self.__freezer.thaw()
-                self.after_regs = self.gdb();
+                self.after_regs = self.gdb(self.core + ".kill");
 		if self.__pid:
 			os.kill(int(self.__pid), sig)
 			self.gone(sig == signal.SIGKILL)
@@ -486,6 +488,10 @@ class zdtm_test:
 				print open(self.__name + '.out.inprogress').read()
 				print_sep(self.__name + '.out.inprogress')
 			raise test_fail_exc("result check")
+
+                for i in [self.core + ".kill", self.core + ".start"]:
+                    if (os.access(i, os.F_OK)):
+                        os.unlink(i)
 
 	def getpid(self):
 		if self.__pid == 0:
