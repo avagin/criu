@@ -77,7 +77,7 @@ echo 1 > /sys/kernel/debug/tracing/events/filemap/enable
 echo 1 > /sys/kernel/debug/tracing/events/block/enable
 
 ret=0
-while :; do ./test/zdtm.py run -a -x zombie -x cgroup || { ret=1; break; }; done
+while :; do ./test/zdtm.py run -p 2 -a -x zombie -x cgroup || { ret=1; break; }; done
 [ $ret -ne 0 ] && {
 sleep 10000
 exit 1
