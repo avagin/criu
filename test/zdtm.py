@@ -450,12 +450,23 @@ class zdtm_test:
 			# Wait less than a second to give the test chance to
 			# move into some semi-random state
 			time.sleep(random.random())
+                self.before_regs = self.gdb();
+
+        def gdb(self):
+                fd = subprocess.Popen(["gdb", "-p", str(self.__pid)], stdin = subprocess.PIPE, stdout = subprocess.PIPE)
+                fd.stdin.write("info all-registers\n")
+                fd.stdin.close()
+                r = fd.stdout.read()
+                fd.wait()
+                return r
 
 	def kill(self, sig = signal.SIGKILL):
 		self.__freezer.thaw()
+                self.after_regs = self.gdb();
 		if self.__pid:
 			os.kill(int(self.__pid), sig)
 			self.gone(sig == signal.SIGKILL)
+
 
 		self.__flavor.fini()
 
@@ -466,6 +477,10 @@ class zdtm_test:
 
 		res = tail(self.__name + '.out')
 		if 'PASS' not in res.split():
+                        print_sep("before")
+                        print self.before_regs
+                        print_sep("after")
+                        print self.after_regs
 			if os.access(self.__name + '.out.inprogress', os.F_OK):
 				print_sep(self.__name + '.out.inprogress')
 				print open(self.__name + '.out.inprogress').read()
