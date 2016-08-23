@@ -19,9 +19,8 @@ apt-get install -qq protobuf-c-compiler libprotobuf-c0-dev libaio-dev	\
 	libprotobuf-dev protobuf-compiler python-ipaddr libcap-dev	\
 	libnl-3-dev gcc-multilib libc6-dev-i386 gdb bash ssh openssh-server
 
-mkdir ~/.ssh
-chmod 0700 ~/.ssh
-echo 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDbdBUOqaN8NxmhGughWssYssevpEXBknWtnBMCV+lBMAIADCX1e6bd/ve0gPlunI7bK8MJ9xNz6czOcL5G4IoygKbLrOdtEzzxiUocn10I/GbQ3C4m9tJeZfoYYmb4rTi1mmjhGL2cbBtS/bQDvbrjaffuncg78ppdEXjRaTagZJk81vq5kZ5yQ//tgkR0K41fhtmP1HyLnfKIKtwLDSvyMlLT6VCknyqN83z7UvrElv1h0p2CyBD411a4qm9wTrzEYHTavJM1nkqE4yBUMhKHwFlLSUhpf4XDfkLk8lAbVznL0TBb3oZyulGEzGKiEUZT/7+4UFGY+j0zGZlQTpZV root@ubuntu-2gb-nyc3-01' > ~/.ssh/authorized_keys
+mkdir ~/.ssh && chmod 0700 ~/.ssh || true
+echo 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDbdBUOqaN8NxmhGughWssYssevpEXBknWtnBMCV+lBMAIADCX1e6bd/ve0gPlunI7bK8MJ9xNz6czOcL5G4IoygKbLrOdtEzzxiUocn10I/GbQ3C4m9tJeZfoYYmb4rTi1mmjhGL2cbBtS/bQDvbrjaffuncg78ppdEXjRaTagZJk81vq5kZ5yQ//tgkR0K41fhtmP1HyLnfKIKtwLDSvyMlLT6VCknyqN83z7UvrElv1h0p2CyBD411a4qm9wTrzEYHTavJM1nkqE4yBUMhKHwFlLSUhpf4XDfkLk8lAbVznL0TBb3oZyulGEzGKiEUZT/7+4UFGY+j0zGZlQTpZV root@ubuntu-2gb-nyc3-01' >> ~/.ssh/authorized_keys
 ip a
 chmod a+x $HOME
 uname -a
