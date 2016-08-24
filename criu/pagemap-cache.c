@@ -78,6 +78,7 @@ err:
 
 static inline u64 *__pmc_get_map(pmc_t *pmc, unsigned long addr)
 {
+	pr_info("addr %lx map %p\n", addr, &pmc->map[PAGE_PFN(addr - pmc->start)]);
 	return &pmc->map[PAGE_PFN(addr - pmc->start)];
 }
 
@@ -142,7 +143,7 @@ static int pmc_fill_cache(pmc_t *pmc, const struct vma_area *vma)
 	BUG_ON(pmc->map_len < size_map);
 	BUG_ON(pmc->fd < 0);
 
-	pr_info("start %lx size %lx %p\n", PAGEMAP_PFN_OFF(pmc->start), size_map / sizeof(u64), pmc->map);
+	pr_info("start %lx size %lx %p\n", pmc->start , pmc->start + 4096 * size_map / sizeof(u64), pmc->map);
 	if (pread(pmc->fd, pmc->map, size_map, PAGEMAP_PFN_OFF(pmc->start)) != size_map) {
 		pmc_zap(pmc);
 		pr_perror("Can't read %d's pagemap file", pmc->pid);
