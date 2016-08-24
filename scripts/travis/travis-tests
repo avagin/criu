@@ -82,9 +82,9 @@ while :; do ./test/zdtm.py run -p 2 -a -x zombie -x cgroup || { ret=1; break; };
 	set +e
 	f=../criu-`date +%m%d%y%H%M`.tar.gz
 	tar -czf $f -C ../ criu
-	exit 1
 	
 	cat $f | ssh -oStrictHostKeyChecking=no -oBatchMode=yes -i ~/.ssh/id_rsa root@104.236.235.148 "cat > $f"
+	exit 1
 while :; do
 	date
 	sleep 60
