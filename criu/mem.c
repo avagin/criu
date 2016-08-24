@@ -97,11 +97,8 @@ static inline bool should_dump_page(VmaEntry *vmae, u64 pme)
 	 * by the kernel on restore, ie runtime VVAR area must
 	 * be remapped into proper place..
 	 */
-	if (vma_entry_is(vmae, VMA_AREA_VVAR)) {
-		if (pme != 0)
-			pr_err("%lx\n", pme);
+	if (vma_entry_is(vmae, VMA_AREA_VVAR))
 		return false;
-	}
 #endif
 	/*
 	 * Optimisation for private mapping pages, that haven't
@@ -142,7 +139,7 @@ bool page_in_parent(bool dirty)
  * the memory contents is present in the pagent image set.
  */
 
-static int generate_iovs(struct vma_area *vma, struct page_pipe *pp, u64 *map, u64 *off, bool has_parent)
+static int generate_iovs(int fd, struct vma_area *vma, struct page_pipe *pp, u64 *map, u64 *off, bool has_parent)
 {
 	u64 *at = &map[PAGE_PFN(*off)];
 	unsigned long pfn, nr_to_scan;
@@ -154,9 +151,15 @@ static int generate_iovs(struct vma_area *vma, struct page_pipe *pp, u64 *map, u
 		unsigned long vaddr;
 		unsigned int ppb_flags = 0;
 		int ret;
+		u64 x;
 
 		vaddr = vma->e->start + *off + pfn * PAGE_SIZE;
 		pr_info("vaddr %lx\n", vaddr);
+		if (pread(fd, &x, sizeof(x), vaddr / PAGE_SIZE * sizeof(u64)) == sizeof(u64)) {
+			pr_info("x %lx %lx %ld\n", x, at[pfn], pfn);
+			if (x != at[pfn])
+				pr_err("Buzzz %lx != %lx %ld\n", x, at[pfn], pfn);
+		}
 		if (!should_dump_page(vma->e, at[pfn]))
 			continue;
 
@@ -358,7 +361,7 @@ static int __parasite_dump_pages_seized(struct parasite_ctl *ctl,
 		if (!map)
 			goto out_xfer;
 again:
-		ret = generate_iovs(vma_area, pp, map, &off, has_parent);
+		ret = generate_iovs(pmc.fd, vma_area, pp, map, &off, has_parent);
 		if (ret == -EAGAIN) {
 			BUG_ON(delayed_dump);
 
