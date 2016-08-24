@@ -24,7 +24,6 @@ int main(int argc, char **argv)
 	test_daemon();
 	test_waitsig();
 
-
 	//printf("%x\n", *(int *)5);
 
 	env = getenv(envname);

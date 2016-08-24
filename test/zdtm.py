@@ -454,6 +454,7 @@ class zdtm_test:
                 self.core = os.getcwd() + "/" + "core." + md5.new(self.__name + str(os.getpid())).hexdigest()
                 self.cores = []
                 self.before_regs = self.gdb(self.core + ".start")
+                self.smaps = open("/proc/%s/smaps" % self.__pid).read()
 
         def gdb(self, mark):
                 subprocess.Popen(["gcore" , "-o", mark, str(self.__pid)]).wait()
@@ -479,10 +480,13 @@ class zdtm_test:
 	def stop(self):
 		self.__freezer.thaw()
 		self.getpid()  # Read the pid from pidfile back
+                self.ssmaps = open("/proc/%s/smaps" % self.__pid).read()
 		self.kill(signal.SIGTERM)
 
 		res = tail(self.__name + '.out')
 		if 'PASS' not in res.split():
+                        print self.smaps
+                        print self.ssmaps
                         print_sep("before")
                         print self.before_regs
                         print_sep("after")
