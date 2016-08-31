@@ -1,0 +1,79 @@
+From 1f045e967bad27b87a8eddbe5aa6bdd5e350bbdf Mon Sep 17 00:00:00 2001
+From: Andrei Vagin <avagin@virtuozzo.com>
+Date: Thu, 1 Sep 2016 00:57:58 +0300
+Subject: [PATCH 0/9 v5] Dump and restore nested network namespaces
+
+This is an initial support for nested network namespaces.
+
+It was implemented to handle systemd services with private networks:
+
+"""
+When PrivateNetwork=yes is set in the [Service] section of a systemd service
+unit file, the processes run for the service will run in a private network
+namespace whith a private loopback network interface, and no other network
+devices.
+"""
+
+How it works:
+* All network devices are restored in the root task.
+* A process sets an required network namespace to restore a socket
+* Processes sets their network namespaces after restoring all sockets (files)
+
+Known issues:
+* veth devices between network namespaces are not supported
+
+v2: * fix commetns from Pavel
+    * improve the test to check that all processes are not restored
+      in one netns
+    * drop patches with a new ioctl to get netns for unconnected and
+      unbound sockets, because it is not in the upstream kernel.
+v3:
+   * fix comments from Pavel
+v4: * use a unix socket to store net namespace descriptors
+v5: add more comments and cleanups
+
+Andrei Vagin (10):
+  [v2] net: save network namespaces for sockets
+  restore: add a function to wait when other tasks finish a stage
+  [v2] net: allow to dump and restore more than one network namespace
+  util: move open_proc_fd to service_fd
+  net: set a proper network namespace to create a socket
+  kerndat: check the SIOCGSKNS ioctl
+  net: add a way to get a network namespace for a socket
+  files: split collect_fd on allocate_fd and handle_fd
+  files: add a function to reopen fd as an unused fd
+  zdtm: add a test for nested network namespaces
+
+ criu/cr-check.c                 |  14 +++
+ criu/cr-restore.c               |  67 +++++++++++--
+ criu/files.c                    |  87 ++++++++++++++---
+ criu/include/files.h            |   3 +
+ criu/include/kerndat.h          |   1 +
+ criu/include/namespaces.h       |   7 +-
+ criu/include/net.h              |   6 +-
+ criu/include/servicefd.h        |   1 +
+ criu/include/sockets.h          |  11 ++-
+ criu/kerndat.c                  |   7 ++
+ criu/mount.c                    |  15 +--
+ criu/namespaces.c               |   8 +-
+ criu/net.c                      | 179 ++++++++++++++++++++++++++++++++++-
+ criu/pstree.c                   |   6 ++
+ criu/sk-inet.c                  |  19 +++-
+ criu/sk-netlink.c               |  17 +++-
+ criu/sk-packet.c                |   8 +-
+ criu/sk-unix.c                  |  11 ++-
+ criu/sockets.c                  |  40 +++++++-
+ criu/util.c                     |  18 ++--
+ images/packet-sock.proto        |   1 +
+ images/sk-inet.proto            |   1 +
+ images/sk-netlink.proto         |   1 +
+ images/sk-unix.proto            |   2 +
+ test/zdtm/static/Makefile       |   1 +
+ test/zdtm/static/netns_sub.c    | 203 ++++++++++++++++++++++++++++++++++++++++
+ test/zdtm/static/netns_sub.desc |   1 +
+ 27 files changed, 678 insertions(+), 57 deletions(-)
+ create mode 100644 test/zdtm/static/netns_sub.c
+ create mode 100644 test/zdtm/static/netns_sub.desc
+
+-- 
+2.7.4
