@@ -22,6 +22,7 @@
 #include "proc_parse.h"
 #include "config.h"
 #include "uapi/std/syscall-codes.h"
+#include "sockets.h"
 
 struct kerndat_s kdat = {
 };
@@ -494,6 +495,8 @@ int kerndat_init(void)
 		ret = kerndat_tcp_repair_window();
 	if (!ret)
 		ret = kerndat_compat_restore();
+	if (!ret)
+		ret = kerndat_socket_netns();
 
 	kerndat_lsm();
 
@@ -527,6 +530,8 @@ int kerndat_init_rst(void)
 		ret = kerndat_tcp_repair_window();
 	if (!ret)
 		ret = kerndat_compat_restore();
+	if (!ret)
+		ret = kerndat_socket_netns();
 
 	kerndat_lsm();
 

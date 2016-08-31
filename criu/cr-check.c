@@ -938,6 +938,17 @@ static int check_tcp_window(void)
 	return 0;
 }
 
+static int check_sk_netns(void)
+{
+	if (kerndat_socket_netns() < 0)
+		return -1;
+
+	if (!kdat.sk_ns)
+		return -1;
+
+	return 0;
+}
+
 static int (*chk_feature)(void);
 
 /*
@@ -1038,6 +1049,7 @@ int cr_check(void)
 		ret |= check_clone_parent_vs_pid();
 		ret |= check_cgroupns();
 		ret |= check_tcp_window();
+		ret |= check_sk_netns();
 	}
 
 	/*
@@ -1117,6 +1129,7 @@ static struct feature_list feature_list[] = {
 	{ "loginuid", check_loginuid },
 	{ "cgroupns", check_cgroupns },
 	{ "autofs", check_autofs },
+	{ "sk_ns", check_sk_netns },
 	{ NULL, NULL },
 };
 
