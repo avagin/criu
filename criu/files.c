@@ -1686,6 +1686,9 @@ int open_transport_socket(void)
 	if (!task_alive(current) || (fdt && fdt->pid != pid))
 		return 0;
 
+	if (root_item->ids && set_netns(root_item->ids->net_ns_id))
+		return -1;
+
 	sock = socket(PF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0);
 	if (sock < 0) {
 		pr_perror("Can't create socket");
