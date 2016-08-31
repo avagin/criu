@@ -23,6 +23,7 @@
 #include "sk-inet.h"
 #include "protobuf.h"
 #include "util.h"
+#include "namespaces.h"
 
 #define PB_ALEN_INET	1
 #define PB_ALEN_INET6	4
@@ -183,9 +184,16 @@ static int can_dump_inet_sk(const struct inet_sk_desc *sk)
 static struct inet_sk_desc *gen_uncon_sk(int lfd, const struct fd_parms *p, int proto)
 {
 	struct inet_sk_desc *sk;
+	struct ns_id *ns = NULL;
 	char address;
 	socklen_t aux;
 	int ret;
+
+	if (root_ns_mask & CLONE_NEWNET) {
+		ns = get_socket_ns(lfd);
+		if (ns == NULL)
+			return NULL;
+	}
 
 	sk = xzalloc(sizeof(*sk));
 	if (!sk)
@@ -232,7 +240,7 @@ static struct inet_sk_desc *gen_uncon_sk(int lfd, const struct fd_parms *p, int 
 
 	sk->state = TCP_CLOSE;
 
-	sk_collect_one(sk->sd.ino, sk->sd.family, &sk->sd);
+	sk_collect_one(sk->sd.ino, sk->sd.family, &sk->sd, ns);
 
 	return sk;
 err:
@@ -301,6 +309,10 @@ static int do_dump_one_inet_fd(int lfd, u32 id, const struct fd_parms *p, int fa
 
 	ie.id		= id;
 	ie.ino		= sk->sd.ino;
+	if (sk->sd.sk_ns) {
+		ie.ns_id	= sk->sd.sk_ns->id;
+		ie.has_ns_id	= true;
+	}
 	ie.family	= family;
 	ie.proto	= proto;
 	ie.type		= sk->type;
@@ -436,7 +448,7 @@ int inet_collect_one(struct nlmsghdr *h, int family, int type, struct ns_id *ns)
 	else
 		pr_err_once("Can't check shutdown state of inet socket\n");
 
-	ret = sk_collect_one(m->idiag_inode, family, &d->sd);
+	ret = sk_collect_one(m->idiag_inode, family, &d->sd, ns);
 
 	show_one_inet("Collected", d);
 
