@@ -124,6 +124,30 @@ void collect_used_fd(struct fdinfo_list_entry *new_fle, struct rst_info *ri)
 	list_add_tail(&new_fle->used_list, &fle->used_list);
 }
 
+int reopen_as_unused_fd(int fd, struct rst_info *rst)
+{
+	struct {
+		struct fdinfo_list_entry fle;
+		FdinfoEntry		 fe;
+	} *fd_entry;
+	int tfd;
+
+	tfd = find_unused_fd(&rst->used, fd);
+	if (tfd < 0)
+		return -1;
+
+	if (reopen_fd_as(tfd, fd))
+		return -1;
+
+	fd_entry = xmalloc(sizeof(*fd_entry));
+	fd_entry->fle.fe = &fd_entry->fe;
+	fd_entry->fe.fd = tfd;
+
+	collect_used_fd(&fd_entry->fle, rst);
+
+	return tfd;
+}
+
 unsigned int find_unused_fd(struct list_head *head, int hint_fd)
 {
 	struct fdinfo_list_entry *fle;
