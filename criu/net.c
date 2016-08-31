@@ -1670,7 +1670,7 @@ int dump_net_ns(int ns_id)
 	return ret;
 }
 
-int prepare_net_ns(int pid)
+static int prepare_net_ns(int pid)
 {
 	int ret = 0;
 	NetnsEntry *netns = NULL;
@@ -1699,6 +1699,108 @@ int prepare_net_ns(int pid)
 	close_service_fd(NS_FD_OFF);
 
 	return ret;
+}
+
+static int open_net_ns(struct ns_id *nsid, struct rst_info *rst)
+{
+	int fd, tfd;
+
+	/* Pin one with a file descriptor */
+	fd = open_proc(PROC_SELF, "ns/net");
+	if (fd < 0)
+		return -1;
+	tfd = reopen_as_unused_fd(fd, rst);
+	if (tfd < 0) {
+		close(fd);
+		return -1;
+	}
+	nsid->net.ns_fd = tfd;
+
+	return 0;
+}
+
+int prepare_net_namespaces()
+{
+	struct ns_id *nsid;
+
+	if (!(root_ns_mask & CLONE_NEWNET))
+		return 0;
+
+	for (nsid = ns_ids; nsid != NULL; nsid = nsid->next) {
+		if (nsid->nd != &net_ns_desc)
+			continue;
+
+		if (unshare(CLONE_NEWNET)) {
+			pr_perror("Unable to create a new netns");
+			goto err;
+		}
+
+		if (prepare_net_ns(nsid->id))
+			goto err;
+
+		if (open_net_ns(nsid, rsti(root_item)))
+			goto err;
+	}
+
+	return 0;
+err:
+	return -1;
+}
+
+void fini_net_namespaces()
+{
+	struct ns_id *nsid;
+
+	if (!(root_ns_mask & CLONE_NEWNET))
+		return;
+
+	for (nsid = ns_ids; nsid != NULL; nsid = nsid->next) {
+		if (nsid->nd != &net_ns_desc)
+			continue;
+		close_safe(&nsid->net.ns_fd);
+	}
+}
+
+static int do_restore_task_net_ns(struct ns_id *nsid, struct pstree_item *current)
+{
+	int fd;
+
+	if (!(root_ns_mask & CLONE_NEWNET))
+		return 0;
+
+	fd = open_proc(root_item->pid.virt, "fd/%d", nsid->net.ns_fd);
+	if (fd < 0)
+		return -1;
+
+	if (setns(fd, CLONE_NEWNET)) {
+		pr_perror("Can't restore netns");
+		close(fd);
+		return -1;
+	}
+	close(fd);
+
+	return 0;
+}
+
+int restore_task_net_ns(struct pstree_item *current)
+{
+	if (current->ids && current->ids->has_net_ns_id) {
+		unsigned int id = current->ids->net_ns_id;
+		struct ns_id *nsid;
+
+		nsid = lookup_ns_by_id(id, &net_ns_desc);
+		if (nsid == NULL) {
+			pr_err("Can't find mount namespace %d\n", id);
+			return -1;
+		}
+
+		BUG_ON(nsid->type == NS_CRIU);
+
+		if (do_restore_task_net_ns(nsid, current))
+			return -1;
+	}
+
+	return 0;
 }
 
 int netns_keep_nsfd(void)

@@ -14,6 +14,8 @@
 #include "mount.h"
 #include "dump.h"
 #include "util.h"
+#include "net.h"
+
 #include "protobuf.h"
 #include "images/pstree.pb-c.h"
 
@@ -466,6 +468,8 @@ static int read_pstree_ids(struct pstree_item *pi)
 
 	if (pi->ids->has_mnt_ns_id) {
 		if (rst_add_ns_id(pi->ids->mnt_ns_id, pi, &mnt_ns_desc))
+			return -1;
+		if (rst_add_ns_id(pi->ids->net_ns_id, pi, &net_ns_desc))
 			return -1;
 	}
 

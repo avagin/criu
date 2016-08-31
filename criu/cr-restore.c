@@ -716,6 +716,13 @@ static int restore_one_alive_task(int pid, CoreEntry *core)
 
 	close_service_fd(TRANSPORT_FD_OFF);
 
+	/*
+	 * Sockets have to be restored in their network namespaces,
+	 * so a task namespace has to be restored after sockets.
+	 */
+	if (restore_task_net_ns(current))
+		return -1;
+
 	if (setup_uffd(pid, ta))
 		return -1;
 
@@ -1386,14 +1393,6 @@ static int restore_task_with_children(void *_arg)
 	ret = log_init_by_pid();
 	if (ret < 0)
 		goto err;
-
-	if (ca->clone_flags & CLONE_NEWNET) {
-		ret = unshare(CLONE_NEWNET);
-		if (ret) {
-			pr_perror("Can't unshare net-namespace");
-			goto err;
-		}
-	}
 
 	if (!(ca->clone_flags & CLONE_FILES)) {
 		ret = close_old_fds();
@@ -2927,6 +2926,12 @@ static int sigreturn_restore(pid_t pid, struct task_restore_args *task_args, uns
 	 */
 	if (rst_prep_creds(pid, core, &creds_pos))
 		goto err_nv;
+
+	if (current->parent == NULL) {
+		/* Wait when all tasks restored all files */
+		restore_wait_other_tasks();
+		fini_net_namespaces();
+	}
 
 	/*
 	 * We're about to search for free VM area and inject the restorer blob
