@@ -1044,6 +1044,7 @@ static int check_uffd(void)
 	return 0;
 }
 
+<<<<<<< HEAD
 static int check_userns(void)
 {
 	int ret;
@@ -1073,6 +1074,17 @@ static int check_loginuid(void)
 		pr_warn("Loginuid restore is OFF.\n");
 		return -1;
 	}
+
+	return 0;
+}
+
+static int check_sk_netns(void)
+{
+	if (kerndat_socket_netns() < 0)
+		return -1;
+
+	if (!kdat.sk_ns)
+		return -1;
 
 	return 0;
 }
@@ -1188,6 +1200,7 @@ int cr_check(void)
 		ret |= check_tcp_halt_closed();
 		ret |= check_userns();
 		ret |= check_loginuid();
+		ret |= check_sk_netns();
 	}
 
 	/*
@@ -1239,6 +1252,7 @@ static struct feature_list feature_list[] = {
 	{ "tcp_half_closed", check_tcp_halt_closed },
 	{ "lazy_pages", check_uffd },
 	{ "compat_cr", check_compat_cr },
+	{ "sk_ns", check_sk_netns },
 	{ NULL, NULL },
 };
 
