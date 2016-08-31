@@ -172,6 +172,7 @@ TST_NOFILE	:=				\
 		macvlan			\
 		cr_veth				\
 		sock_peercred			\
+		netns_sub			\
 #		jobctl00			\
 
 ifneq ($(SRCARCH),arm)
