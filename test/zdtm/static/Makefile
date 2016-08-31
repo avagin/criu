@@ -173,6 +173,7 @@ TST_NOFILE	:=				\
 		cr_veth				\
 		sock_peercred			\
 		uffd-events			\
+		netns_sub			\
 #		jobctl00			\
 
 ifneq ($(SRCARCH),arm)
