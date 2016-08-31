@@ -993,6 +993,8 @@ static int open_transport_fd(int pid, struct fdinfo_list_entry *fle)
 
 	pr_info("\t\tCreate transport fd %s\n", saddr.sun_path + 1);
 
+	if (root_item->ids && set_netns(root_item->ids->net_ns_id))
+		return -1;
 
 	sock = socket(PF_UNIX, SOCK_DGRAM, 0);
 	if (sock < 0) {

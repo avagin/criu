@@ -418,6 +418,9 @@ static int open_packet_sk(struct file_desc *d)
 
 	pr_info("Opening packet socket id %#x\n", pse->id);
 
+	if (set_netns(pse->ns_id))
+		return -1;
+
 	sk = socket(PF_PACKET, pse->type, pse->protocol);
 	if (sk < 0) {
 		pr_perror("Can't create packet sock");

@@ -1053,6 +1053,9 @@ static int open_unixsk_pair_master(struct unix_sk_info *ui)
 	pr_info("Opening pair master (id %#x ino %#x peer %#x)\n",
 			ui->ue->id, ui->ue->ino, ui->ue->peer);
 
+	if (set_netns(ui->ue->ns_id))
+		return -1;
+
 	if (socketpair(PF_UNIX, ui->ue->type, 0, sk) < 0) {
 		pr_perror("Can't make socketpair");
 		return -1;
@@ -1126,6 +1129,9 @@ static int open_unixsk_standalone(struct unix_sk_info *ui)
 
 	pr_info("Opening standalone socket (id %#x ino %#x peer %#x)\n",
 			ui->ue->id, ui->ue->ino, ui->ue->peer);
+
+	if (set_netns(ui->ue->ns_id))
+		return -1;
 
 	/*
 	 * Check if this socket was connected to criu service.
@@ -1229,7 +1235,6 @@ static int open_unixsk_standalone(struct unix_sk_info *ui)
 					"option to allow restoring it.\n");
 			return -1;
 		}
-
 
 		sk = socket(PF_UNIX, ui->ue->type, 0);
 		if (sk < 0) {

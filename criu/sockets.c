@@ -1,3 +1,4 @@
+#include <sched.h>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <linux/netlink.h>
@@ -24,6 +25,8 @@
 #include "net.h"
 #include "xmalloc.h"
 #include "fs-magic.h"
+#include "pstree.h"
+#include "util.h"
 
 #ifndef SOCK_DIAG_BY_FAMILY
 #define SOCK_DIAG_BY_FAMILY 20
@@ -733,4 +736,37 @@ int collect_sockets(struct ns_id *ns)
 	}
 
 	return err;
+}
+
+static uint32_t last_ns_id = 0;
+
+int set_netns(uint32_t ns_id)
+{
+	struct ns_id *ns;
+	int nsfd;
+
+	if (!(root_ns_mask & CLONE_NEWNET))
+		return 0;
+
+	if (ns_id == last_ns_id)
+		return 0;
+
+	ns = lookup_ns_by_id(ns_id, &net_ns_desc);
+	if (ns == NULL) {
+		pr_err("Unable to find a network namespace");
+		return -1;
+	}
+	nsfd = open_proc(root_item->pid.virt, "fd/%d", ns->net.ns_fd);
+	if (nsfd < 0)
+		return -1;
+	if (setns(nsfd, CLONE_NEWNET)) {
+		pr_perror("Unable to switch a network namespace");
+		close(nsfd);
+		return -1;
+	}
+	last_ns_id = ns_id;
+	close(nsfd);
+	close_pid_proc();
+
+	return 0;
 }
