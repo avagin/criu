@@ -356,7 +356,7 @@ int parasite_execute_daemon(unsigned int cmd, struct parasite_ctl *ctl)
 	return ret;
 }
 
-static int gen_parasite_saddr(struct sockaddr_un *saddr, int key)
+int gen_parasite_saddr(struct sockaddr_un *saddr, int key)
 {
 	int sun_len;
 
@@ -447,25 +447,12 @@ static int restore_child_handler()
 static int prepare_tsock(struct parasite_ctl *ctl, pid_t pid,
 		struct parasite_init_args *args, struct ns_id *net)
 {
-	static int ssock = -1;
+	int ssock;
 
 	pr_info("Putting tsock into pid %d\n", pid);
 	args->h_addr_len = gen_parasite_saddr(&args->h_addr, getpid());
 
-	if (ssock == -1) {
-		ssock = net->net.seqsk;
-		net->net.seqsk = -1;
-
-		if (bind(ssock, (struct sockaddr *)&args->h_addr, args->h_addr_len) < 0) {
-			pr_perror("Can't bind socket");
-			goto err;
-		}
-
-		if (listen(ssock, 1)) {
-			pr_perror("Can't listen on transport socket");
-			goto err;
-		}
-	}
+	ssock = net->net.seqsk;
 
 	/* Check a case when parasite can't initialize a command socket */
 	if (fault_injected(FI_PARASITE_CONNECT))
@@ -477,9 +464,6 @@ static int prepare_tsock(struct parasite_ctl *ctl, pid_t pid,
 	 */
 	ctl->tsock = -ssock;
 	return 0;
-err:
-	close_safe(&ssock);
-	return -1;
 }
 
 static int accept_tsock(struct parasite_ctl *ctl)

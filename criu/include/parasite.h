@@ -276,6 +276,8 @@ struct parasite_dump_cgroup_args {
 #define parasite_sym(pblob, ptype, symbol)				\
 	((void *)(pblob) + __pblob_offset(ptype, symbol))
 
+extern int gen_parasite_saddr(struct sockaddr_un *saddr, int key);
+
 #endif /* !__ASSEMBLY__ */
 
 #include "parasite-compat.h"

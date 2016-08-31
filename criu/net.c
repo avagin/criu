@@ -15,6 +15,7 @@
 #include <linux/sockios.h>
 #include <libnl3/netlink/msg.h>
 
+#include "types.h"
 #include "imgset.h"
 #include "namespaces.h"
 #include "net.h"
@@ -32,6 +33,8 @@
 #include "kerndat.h"
 #include "external.h"
 #include "util.h"
+#include "parasite.h"
+
 #include "protobuf.h"
 #include "images/netdev.pb-c.h"
 
@@ -1868,7 +1871,9 @@ int macvlan_ext_add(struct external *ext)
 
 static int prep_ns_sockets(struct ns_id *ns, bool for_dump)
 {
-	int nsret = -1, ret;
+	int nsret = -1, ret, sk;
+	struct sockaddr_un addr;
+	s32 addr_len;
 
 	if (ns->type != NS_CRIU) {
 		pr_info("Switching to %d's net for collecting sockets\n", ns->ns_pid);
@@ -1885,12 +1890,24 @@ static int prep_ns_sockets(struct ns_id *ns, bool for_dump)
 	} else
 		ns->net.nlsk = -1;
 
-	ret = ns->net.seqsk = socket(PF_UNIX, SOCK_SEQPACKET | SOCK_NONBLOCK, 0);
-	if (ret < 0) {
+	sk = socket(PF_UNIX, SOCK_SEQPACKET | SOCK_NONBLOCK, 0);
+	if (sk < 0) {
 		pr_perror("Can't create seqsk for parasite");
 		goto err_sq;
 	}
 
+	addr_len = gen_parasite_saddr(&addr, getpid());
+	if (bind(sk, (struct sockaddr *)&addr, addr_len) < 0) {
+		pr_perror("Can't bind socket");
+		goto err_ret;
+	}
+
+	if (listen(sk, 1)) {
+		pr_perror("Can't listen on transport socket");
+		goto err_ret;
+	}
+
+	ns->net.seqsk = sk;
 	ret = 0;
 out:
 	if (nsret >= 0 && restore_ns(nsret, &net_ns_desc) < 0) {
@@ -1902,11 +1919,11 @@ out:
 	return ret;
 
 err_ret:
-	close(ns->net.seqsk);
+	close_safe(&sk);
 err_sq:
-	if (ns->net.nlsk >= 0)
-		close(ns->net.nlsk);
+	close_safe(&ns->net.nlsk);
 err_nl:
+	ret = -1;
 	goto out;
 }
 
