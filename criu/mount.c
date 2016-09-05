@@ -707,7 +707,6 @@ skip_fstype:
 				continue;
 
 			pr_err("%d:%s is overmounted\n", m->mnt_id, m->mountpoint);
-			return -1;
 		}
 
 		if (!strcmp(m->fstype->name, "nfs") && !list_empty(&m->children)) {
@@ -2731,7 +2730,16 @@ static int do_umount_one(struct mount_info *mi)
 	return 0;
 }
 
-static int cr_pivot_root(char *root)
+static LIST_HEAD(mnt_remap_list);
+
+struct mnt_remap_entry {
+	struct mount_info *parent, *child;
+	struct list_head node;
+};
+
+static int handle_mnt_remaps(int nsid);
+
+static int cr_pivot_root(char *root, int nsid)
 {
 	char tmp_dir_tmpl[] = "crtools-put-root.XXXXXX";
 	bool tmp_dir = false;
@@ -2770,6 +2778,18 @@ static int cr_pivot_root(char *root)
 	if (pivot_root(".", put_root)) {
 		pr_perror("pivot_root(., %s) failed", put_root);
 		goto err_tmpfs;
+	}
+
+	{
+		int fd = open(".", O_PATH);
+		chdir(put_root);
+		if (handle_mnt_remaps(nsid))
+			return -1;
+		if (fchdir(fd)) {
+			pr_perror("fchdir");
+			return -1;
+		}
+		close(fd);
 	}
 
 	if (mount("none", put_root, "none", MS_REC|MS_SLAVE, NULL)) {
@@ -2837,9 +2857,9 @@ void mnt_entry_free(struct mount_info *mi)
  * Helper for getting a path to where the namespace's root
  * is re-constructed.
  */
-static inline int print_ns_root(struct ns_id *ns, char *buf, int bs)
+static inline int print_ns_root(struct ns_id *ns, int remap_id, char *buf, int bs)
 {
-	return snprintf(buf, bs, "%s/%d", mnt_roots, ns->id);
+	return snprintf(buf, bs, "%s/%d-%010d", mnt_roots, ns->id, remap_id);
 }
 
 static int create_mnt_roots(void)
@@ -2947,11 +2967,11 @@ out:
 	return 0;
 }
 
-static int get_mp_mountpoint(MntEntry *me, struct mount_info *mi, char *root, int root_len)
+static int get_mp_mountpoint(char *mountpoint, struct mount_info *mi, char *root, int root_len)
 {
 	int len;
 
-	len  = strlen(me->mountpoint) + root_len + 1;
+	len  = strlen(mountpoint) + root_len + 1;
 	mi->mountpoint = xmalloc(len);
 	if (!mi->mountpoint)
 		return -1;
@@ -2964,7 +2984,7 @@ static int get_mp_mountpoint(MntEntry *me, struct mount_info *mi, char *root, in
 	 */
 
 	strcpy(mi->mountpoint, root);
-	strcpy(mi->mountpoint + root_len, me->mountpoint);
+	strcpy(mi->mountpoint + root_len, mountpoint);
 
 	mi->ns_mountpoint = mi->mountpoint + root_len;
 
@@ -2984,7 +3004,7 @@ static int collect_mnt_from_image(struct mount_info **pms, struct ns_id *nsid)
 		return -1;
 
 	if (nsid->type == NS_OTHER)
-		root_len = print_ns_root(nsid, root, sizeof(root));
+		root_len = print_ns_root(nsid, 0, root, sizeof(root));
 
 	pr_debug("Reading mountpoint images (id %d pid %d)\n",
 		 nsid->id, (int)nsid->ns_pid);
@@ -3056,7 +3076,7 @@ static int collect_mnt_from_image(struct mount_info **pms, struct ns_id *nsid)
 		if (get_mp_root(me, pm))
 			goto err;
 
-		if (get_mp_mountpoint(me, pm, root, root_len))
+		if (get_mp_mountpoint(me->mountpoint, pm, root, root_len))
 			goto err;
 
 		pr_debug("\tRead %d mp @ %s\n", pm->mnt_id, pm->mountpoint);
@@ -3102,7 +3122,7 @@ int rst_get_mnt_root(int mnt_id, char *path, int plen)
 		return -1;
 
 	if (m->nsid->type == NS_OTHER)
-		return print_ns_root(m->nsid, path, plen);
+		return print_ns_root(m->nsid, 0, path, plen);
 
 rroot:
 	path[0] = '/';
@@ -3149,6 +3169,12 @@ static int do_restore_task_mnt_ns(struct ns_id *nsid, struct pstree_item *curren
 		close(fd);
 		return -1;
 	}
+	close(fd);
+	fd = open_proc(root_item->pid.virt, "fd/%d", nsid->mnt.root_fd);
+	if (fd < 0)
+		return -1;
+	fchdir(fd);
+	chroot(".");
 	close(fd);
 
 	return 0;
@@ -3222,11 +3248,103 @@ static int populate_roots_yard(void)
 		if (nsid->nd != &mnt_ns_desc)
 			continue;
 
-		print_ns_root(nsid, path, sizeof(path));
+		print_ns_root(nsid, 0, path, sizeof(path));
 		if (mkdir(path, 0600)) {
 			pr_perror("Unable to create %s", path);
 			return -1;
 		}
+	}
+
+	struct mnt_remap_entry *r;
+	list_for_each_entry(r, &mnt_remap_list, node) {
+		if (mkdirpat(AT_FDCWD, r->child->mountpoint)) {
+			pr_perror("Unable to create %s", r->child->mountpoint);
+			return -1;
+		}
+	}
+
+	return 0;
+}
+
+static int remap_id;
+
+static int do_mnt_remap(struct mount_info *m)
+{
+	int len;
+
+	if (m->nsid->type == NS_OTHER) {
+		len = print_ns_root(m->nsid, remap_id, m->mountpoint, PATH_MAX);
+		m->mountpoint[len] = '/';
+	} else {
+		char root[PATH_MAX], *mp, *ns_mp;
+		int len, ret;
+
+		mp = m->mountpoint;
+		ns_mp = m->ns_mountpoint;
+		
+		len = print_ns_root(m->nsid, remap_id, m->mountpoint, PATH_MAX);
+
+		ret = get_mp_mountpoint(ns_mp, m, root, len);
+		if (ret < 0)
+			return ret;
+		xfree(mp);
+	}
+	return 0;
+}
+
+static struct mount_info *roots_mp = NULL;
+static int __split_mnt_ns(struct mount_info *m)
+{
+	struct mount_info *c, *t;
+	struct mnt_remap_entry *r;
+
+	list_for_each_entry_safe(c, t, &m->children, siblings) {
+		if (strcmp(m->mountpoint, c->mountpoint))
+			continue;
+
+		pr_err("%s\n", m->mountpoint);
+		if (!list_empty(&c->mnt_share))
+			continue;
+
+		r = xmalloc(sizeof(struct mnt_remap_entry));
+		if (!r)
+			return -1;
+
+		r->child = c;
+		r->parent = m;
+		c->parent = roots_mp;
+		list_del(&c->siblings);
+		list_add(&c->siblings, &roots_mp->children);
+		list_add(&r->node, &mnt_remap_list);
+
+		remap_id++;
+		mnt_tree_for_each(c, do_mnt_remap);
+	}
+
+	return 0;
+}
+
+static int split_mnt_ns(struct mount_info *root)
+{
+	return mnt_tree_for_each(root, __split_mnt_ns);
+}
+
+static int handle_mnt_remaps(int nsid)
+{
+	struct mnt_remap_entry *r;
+
+	list_for_each_entry(r, &mnt_remap_list, node) {
+		if (r->child->nsid->id != nsid)
+			continue;
+
+		pr_err("Move mount %s -> %s\n", r->child->mountpoint, r->parent->ns_mountpoint);
+		if (mount(r->child->mountpoint, r->parent->ns_mountpoint, NULL, MS_MOVE, NULL)) {
+			pr_perror("Unable to move mount %s -> %s", r->child->mountpoint, r->parent->ns_mountpoint);
+			return -1;
+		}
+		list_del(&r->child->siblings);
+		list_add(&r->child->siblings, &r->parent->children);
+		r->child->parent = r->parent;
 	}
 
 	return 0;
@@ -3236,7 +3354,6 @@ static int populate_mnt_ns(void)
 {
 	struct mount_info *pms;
 	struct ns_id *nsid;
-	struct mount_info *roots_mp = NULL;
 	int ret;
 
 	if (mnt_roots) {
@@ -3267,6 +3384,9 @@ static int populate_mnt_ns(void)
 		 */
 		nsid->mnt.mntinfo_tree = pms;
 	}
+
+	if (split_mnt_ns(pms))
+		return -1;
 
 	if (validate_mounts(mntinfo, false))
 		return -1;
@@ -3475,7 +3595,7 @@ int prepare_mnt_ns(void)
 
 	ret = populate_mnt_ns();
 	if (!ret && opts.root)
-		ret = cr_pivot_root(NULL);
+		ret = cr_pivot_root(NULL, -1);
 	if (ret)
 		return -1;
 
@@ -3507,18 +3627,18 @@ int prepare_mnt_ns(void)
 
 		/* Set its root */
 		path[0] = '/';
-		print_ns_root(nsid, path + 1, sizeof(path) - 1);
-		if (cr_pivot_root(path))
+		print_ns_root(nsid, 0, path + 1, sizeof(path) - 1);
+		/* root_fd is used to restore file mappings */
+		nsid->mnt.root_fd = open(path, O_PATH);
+		if (nsid->mnt.root_fd < 0)
+			goto err;
+
+		if (cr_pivot_root(path, nsid->id))
 			goto err;
 
 		/* Pin one with a file descriptor */
 		nsid->mnt.ns_fd = open_proc(PROC_SELF, "ns/mnt");
 		if (nsid->mnt.ns_fd < 0)
-			goto err;
-
-		/* root_fd is used to restore file mappings */
-		nsid->mnt.root_fd = open_proc(PROC_SELF, "root");
-		if (nsid->mnt.root_fd < 0)
 			goto err;
 
 		/* And return back to regain the access to the roots yard */
