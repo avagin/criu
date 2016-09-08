@@ -1735,7 +1735,7 @@ ext:
 				pr_err("File %s has bad mode 0%o (expect 0%o)\n",
 				       rfi->path, (int)st.st_mode,
 				       rfi->rfe->mode);
-				return -1;
+//				return -1;
 			}
 		}
 
