@@ -706,7 +706,13 @@ skip_fstype:
 			if (!issubpath(m->mountpoint, t->mountpoint))
 				continue;
 
+			if (list_empty(&m->parent->mnt_share)) {
+				t->remap = true;
+				continue;
+			}
+
 			pr_err("%d:%s is overmounted\n", m->mnt_id, m->mountpoint);
+			return -1;
 		}
 
 		if (!strcmp(m->fstype->name, "nfs") && !list_empty(&m->children)) {
@@ -3299,11 +3305,7 @@ static int __split_mnt_ns(struct mount_info *m)
 	struct mnt_remap_entry *r;
 
 	list_for_each_entry_safe(c, t, &m->children, siblings) {
-		if (strcmp(m->mountpoint, c->mountpoint))
-			continue;
-
-		pr_err("%s\n", m->mountpoint);
-		if (!list_empty(&c->mnt_share))
+		if (!c->remap)
 			continue;
 
 		r = xmalloc(sizeof(struct mnt_remap_entry));
