@@ -2743,7 +2743,7 @@ struct mnt_remap_entry {
 	struct list_head node;
 };
 
-static int handle_mnt_remaps(int nsid);
+static int handle_mnt_remaps(int nsid, char *put_root);
 
 static int cr_pivot_root(char *root, int nsid)
 {
@@ -2786,17 +2786,8 @@ static int cr_pivot_root(char *root, int nsid)
 		goto err_tmpfs;
 	}
 
-	{
-		int fd = open(".", O_PATH);
-		chdir(put_root);
-		if (handle_mnt_remaps(nsid))
-			return -1;
-		if (fchdir(fd)) {
-			pr_perror("fchdir");
-			return -1;
-		}
-		close(fd);
-	}
+	if (nsid > 0 && handle_mnt_remaps(nsid, put_root))
+		return -1;
 
 	if (mount("none", put_root, "none", MS_REC|MS_SLAVE, NULL)) {
 		pr_perror("Can't remount root with MS_PRIVATE");
@@ -3331,9 +3322,21 @@ static int split_mnt_ns(struct mount_info *root)
 	return mnt_tree_for_each(root, __split_mnt_ns);
 }
 
-static int handle_mnt_remaps(int nsid)
+static int handle_mnt_remaps(int nsid, char *put_root)
 {
 	struct mnt_remap_entry *r;
+	int cwd, exit_code = -1;
+
+	cwd = open(".", O_PATH);
+	if (cwd < 0) {
+		pr_perror("Unable to open \".\"\n");
+		return -1;
+	}
+
+	if (chdir(put_root)) {
+		pr_perror("Unable to change working directory");
+		return -1;
+	}
 
 	list_for_each_entry(r, &mnt_remap_list, node) {
 		if (r->child->nsid->id != nsid)
@@ -3342,14 +3345,23 @@ static int handle_mnt_remaps(int nsid)
 		pr_err("Move mount %s -> %s\n", r->child->mountpoint, r->parent->ns_mountpoint);
 		if (mount(r->child->mountpoint, r->parent->ns_mountpoint, NULL, MS_MOVE, NULL)) {
 			pr_perror("Unable to move mount %s -> %s", r->child->mountpoint, r->parent->ns_mountpoint);
-			return -1;
+			goto err;
 		}
 		list_del(&r->child->siblings);
 		list_add(&r->child->siblings, &r->parent->children);
 		r->child->parent = r->parent;
 	}
 
-	return 0;
+	exit_code = 0;
+err:
+	if (fchdir(cwd)) {
+		pr_perror("Unable to change working directory");
+		close(cwd);
+		return -1;
+	}
+	close(cwd);
+
+	return exit_code;
 }
 
 static int populate_mnt_ns(void)
