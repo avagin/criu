@@ -636,9 +636,10 @@ static struct mount_info *find_fsroot_mount_for(struct mount_info *bm)
 	return NULL;
 }
 
+static int split_mnt(struct mount_info *m);
 static int validate_mounts(struct mount_info *info, bool for_dump)
 {
-	struct mount_info *m, *t;
+	struct mount_info *m, *t, *tmp;
 
 	for (m = info; m; m = m->next) {
 		if (m->parent == NULL || m->is_ns_root)
@@ -700,14 +701,17 @@ static int validate_mounts(struct mount_info *info, bool for_dump)
 			}
 		}
 skip_fstype:
-		list_for_each_entry(t, &m->parent->children, siblings) {
+		list_for_each_entry_safe(t, tmp, &m->parent->children, siblings) {
 			if (m == t)
 				continue;
+			pr_err("%s\n", m->mountpoint);
+			pr_err("%s\n", t->mountpoint);
 			if (!issubpath(m->mountpoint, t->mountpoint))
 				continue;
 
 			if (list_empty(&m->parent->mnt_share)) {
-				t->remap = true;
+				if (!for_dump && split_mnt(t))
+					return -1;
 				continue;
 			}
 
@@ -2119,6 +2123,7 @@ static char *resolve_source(struct mount_info *mi)
 
 static int __restore_shared_options(char *mountpoint, bool private, bool shared, bool slave)
 {
+	pr_err("%s private %d shared %d %d\n", mountpoint, private, shared, slave);
 	if (private && mount(NULL, mountpoint, NULL, MS_PRIVATE, NULL)) {
 		pr_perror("Unable to make %s private", mountpoint);
 		return -1;
@@ -2260,11 +2265,11 @@ skip_parent:
 	 * FIXME Currently non-root mounts can be restored
 	 * only if a proper root mount exists
 	 */
-	if (fsroot_mounted(mi) || mi->parent == NULL) {
+	if (mi->parent == NULL || 1) {
 		list_for_each_entry(t, &mi->mnt_bind, mnt_bind) {
 			if (t->mounted)
 				continue;
-			if (t->bind)
+			if (t->bind && t->shared_id == t->bind->shared_id)
 				continue;
 			if (t->master_id > 0)
 				continue;
@@ -2459,6 +2464,8 @@ static int do_bind_mount(struct mount_info *mi)
 		goto do_bind;
 	}
 
+	pr_err("%s %d %d\n", mi->mountpoint, mi->shared_id, mi->master_id);
+	pr_err("%s %d %d\n", mi->bind->mountpoint, mi->bind->shared_id, mi->bind->master_id);
 	shared = mi->shared_id && mi->shared_id == mi->bind->shared_id;
 	master = mi->master_id && mi->master_id == mi->bind->master_id;
 	private = !mi->master_id && !shared;
@@ -2743,7 +2750,7 @@ struct mnt_remap_entry {
 	struct list_head node;
 };
 
-static int handle_mnt_remaps(int nsid, char *put_root);
+static int handle_mnt_remaps(int nsid, char *put_root, bool cd);
 
 static int cr_pivot_root(char *root, int nsid)
 {
@@ -2786,7 +2793,7 @@ static int cr_pivot_root(char *root, int nsid)
 		goto err_tmpfs;
 	}
 
-	if (nsid > 0 && handle_mnt_remaps(nsid, put_root))
+	if (nsid > 0 && handle_mnt_remaps(nsid, put_root, nsid != root_item->ids->mnt_ns_id))
 		return -1;
 
 	if (mount("none", put_root, "none", MS_REC|MS_SLAVE, NULL)) {
@@ -3279,50 +3286,41 @@ static int do_mnt_remap(struct mount_info *m)
 		mp = m->mountpoint;
 		ns_mp = m->ns_mountpoint;
 		
-		len = print_ns_root(m->nsid, remap_id, m->mountpoint, PATH_MAX);
+		len = print_ns_root(m->nsid, remap_id, root, PATH_MAX);
 
+		pr_err("%s %s %s\n", m->mountpoint, root, ns_mp);
 		ret = get_mp_mountpoint(ns_mp, m, root, len);
 		if (ret < 0)
 			return ret;
+		pr_err("%s\n", m->mountpoint);
 		xfree(mp);
 	}
 	return 0;
 }
 
 static struct mount_info *roots_mp = NULL;
-static int __split_mnt_ns(struct mount_info *m)
+static int split_mnt(struct mount_info *m)
 {
-	struct mount_info *c, *t;
 	struct mnt_remap_entry *r;
 
-	list_for_each_entry_safe(c, t, &m->children, siblings) {
-		if (!c->remap)
-			continue;
+	r = xmalloc(sizeof(struct mnt_remap_entry));
+	if (!r)
+		return -1;
 
-		r = xmalloc(sizeof(struct mnt_remap_entry));
-		if (!r)
-			return -1;
+	r->child = m;
+	r->parent = m->parent;
+	m->parent = roots_mp;
+	list_del(&m->siblings);
+	list_add(&m->siblings, &roots_mp->children);
+	list_add(&r->node, &mnt_remap_list);
 
-		r->child = c;
-		r->parent = m;
-		c->parent = roots_mp;
-		list_del(&c->siblings);
-		list_add(&c->siblings, &roots_mp->children);
-		list_add(&r->node, &mnt_remap_list);
-
-		remap_id++;
-		mnt_tree_for_each(c, do_mnt_remap);
-	}
+	remap_id++;
+	mnt_tree_for_each(m, do_mnt_remap);
 
 	return 0;
 }
 
-static int split_mnt_ns(struct mount_info *root)
-{
-	return mnt_tree_for_each(root, __split_mnt_ns);
-}
-
-static int handle_mnt_remaps(int nsid, char *put_root)
+static int handle_mnt_remaps(int nsid, char *put_root, bool cd)
 {
 	struct mnt_remap_entry *r;
 	int cwd, exit_code = -1;
@@ -3333,7 +3331,7 @@ static int handle_mnt_remaps(int nsid, char *put_root)
 		return -1;
 	}
 
-	if (chdir(put_root)) {
+	if (cd && chdir(put_root)) {
 		pr_perror("Unable to change working directory");
 		return -1;
 	}
@@ -3399,12 +3397,8 @@ static int populate_mnt_ns(void)
 		nsid->mnt.mntinfo_tree = pms;
 	}
 
-	if (split_mnt_ns(pms))
-		return -1;
-
 	if (validate_mounts(mntinfo, false))
 		return -1;
-
 	/*
 	 * Set properties for the root before mounting a root yard,
 	 * otherwise the root yard can be propagated into the host
@@ -3609,7 +3603,7 @@ int prepare_mnt_ns(void)
 
 	ret = populate_mnt_ns();
 	if (!ret && opts.root)
-		ret = cr_pivot_root(NULL, -1);
+		ret = cr_pivot_root(NULL, root_item->ids->mnt_ns_id);
 	if (ret)
 		return -1;
 

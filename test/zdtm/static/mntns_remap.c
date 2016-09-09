@@ -27,6 +27,53 @@ int main(int argc, char **argv)
 
 	test_init(argc, argv);
 
+	mkdir(dirname, 0755);
+	if (mount("zdtm", dirname, "tmpfs", 0, NULL)) {
+		pr_perror("mount");
+		return 1;
+	}
+	if (chdir(dirname)) {
+		pr_perror("chdir");
+		return 1;
+	}
+	mkdir("1", 0755);
+	mkdir("2", 0755);
+	if (mount("1", "1", NULL, MS_BIND, NULL)) {
+		pr_perror("mount");
+		return 1;
+	}
+	if (mount(NULL, "1", NULL, MS_PRIVATE, NULL)) {
+		pr_perror("mount");
+		return 1;
+	}
+	if (mount("zdtm", "2", "tmpfs", 0, NULL)) {
+		pr_perror("mount");
+		return 1;
+	}
+	mkdir("1/a", 0755);
+	mkdir("2/a", 0755);
+	if (mount("1/a", "1/a", NULL, MS_BIND, NULL)) {
+		pr_perror("mount");
+		return 1;
+	}
+	if (mount(NULL, "1/a", NULL, MS_SHARED, NULL)) {
+		pr_perror("mount");
+		return 1;
+	}
+	if (mount("1/a", "2/a", NULL, MS_BIND, NULL)) {
+		pr_perror("mount");
+		return 1;
+	}
+	mkdir("1/a/c", 0755);
+	if (mount("zdtm", "1/a/c", "tmpfs", 0, NULL)) {
+		pr_perror("mount");
+		return 1;
+	}
+	if (mount("2", "1", NULL, MS_MOVE, NULL)) {
+		pr_perror("mount");
+		return 1;
+	}
+
 	task_waiter_init(&t);
 
 	pid = fork();
@@ -36,11 +83,6 @@ int main(int argc, char **argv)
 	if (pid == 0) {
 		if (unshare(CLONE_NEWNS))
 			return 1;
-		if (mount("/", "/", NULL, MS_SLAVE, NULL))
-			return 1;
-		if (mount("/", "/", NULL, MS_BIND, NULL))
-			return 1;
-		chdir("/");
 		task_waiter_complete_current(&t);
 		test_waitsig();
 		return 0;
