@@ -49,6 +49,9 @@ struct binfmt_misc_info {
 };
 
 static LIST_HEAD(binfmt_misc_list);
+
+static struct mount_info *roots_mp = NULL;
+
 static struct fstype fstypes[];
 
 int ext_mount_add(char *key, char *val)
@@ -351,9 +354,10 @@ static struct mount_info *mnt_build_ids_tree(struct mount_info *list, struct mou
 
 		if (!parent) {
 			/* This should be / */
-			if (root == NULL && is_root_mount(m)) {
+			if (root == NULL && (!tmp_root_mount || is_root_mount(m))) {
 				root = m;
-				continue;
+				if (!tmp_root_mount)
+					continue;
 			}
 
 			pr_debug("Mountpoint %d (@%s) w/o parent %d\n",
@@ -385,7 +389,7 @@ static struct mount_info *mnt_build_ids_tree(struct mount_info *list, struct mou
 				pr_debug("Mountpoint %d (@%s) get parent %d (@%s)\n",
 					 m->mnt_id, m->mountpoint,
 					 parent->mnt_id, parent->mountpoint);
-			} else {
+			} else if (root != m) {
 				pr_err("No root found for mountpoint %d (@%s)\n",
 					m->mnt_id, m->mountpoint);
 				return NULL;
@@ -401,10 +405,8 @@ static struct mount_info *mnt_build_ids_tree(struct mount_info *list, struct mou
 		return NULL;
 	}
 
-	if (tmp_root_mount) {
-		tmp_root_mount->parent = root;
-		list_add_tail(&tmp_root_mount->siblings, &root->children);
-	}
+	if (tmp_root_mount)
+		return tmp_root_mount;
 
 	return root;
 }
@@ -639,7 +641,7 @@ static struct mount_info *find_fsroot_mount_for(struct mount_info *bm)
 
 	list_for_each_entry(sm, &bm->mnt_bind, mnt_bind)
 		if (fsroot_mounted(sm) ||
-				(sm->parent == NULL &&
+				(sm->parent == roots_mp &&
 				 strstartswith(bm->root, sm->root)))
 			return sm;
 
@@ -2430,7 +2432,7 @@ skip_parent:
 	 * FIXME Currently non-root mounts can be restored
 	 * only if a proper root mount exists
 	 */
-	if (fsroot_mounted(mi) || mi->parent == NULL) {
+	if (fsroot_mounted(mi) || mi->parent == roots_mp) {
 		list_for_each_entry(t, &mi->mnt_bind, mnt_bind) {
 			if (t->mounted)
 				continue;
@@ -2772,10 +2774,14 @@ err:
 	return exit_code;
 }
 
+static bool rst_mnt_is_root(struct mount_info *m)
+{
+	return (m->is_ns_root && m->nsid->id == root_item->ids->mnt_ns_id);
+}
+
 static bool can_mount_now(struct mount_info *mi)
 {
-	/* The root mount */
-	if (!mi->parent)
+	if (rst_mnt_is_root(mi))
 		return true;
 
 	if (mi->external)
@@ -2848,7 +2854,7 @@ static int do_mount_one(struct mount_info *mi)
 		return 1;
 	}
 
-	if (mi->parent && !strcmp(mi->parent->mountpoint, mi->mountpoint)) {
+	if (!strcmp(mi->parent->mountpoint, mi->mountpoint)) {
 		mi->parent->fd = open(mi->parent->mountpoint, O_PATH);
 		if (mi->parent->fd < 0) {
 			pr_perror("Unable to open %s", mi->mountpoint);
@@ -2858,8 +2864,12 @@ static int do_mount_one(struct mount_info *mi)
 
 	pr_debug("\tMounting %s @%s (%d)\n", mi->fstype->name, mi->mountpoint, mi->need_plugin);
 
-	if (!mi->parent) {
+	if (rst_mnt_is_root(mi)) {
 		/* do_mount_root() is called from populate_mnt_ns() */
+		if (mount(opts.root, mi->mountpoint, NULL, MS_BIND | MS_REC, NULL))
+			return -1;
+		if (do_mount_root(mi))
+			return -1;
 		mi->mounted = true;
 		ret = 0;
 	} else if (!mi->bind && !mi->need_plugin && !mi->external)
@@ -2906,8 +2916,6 @@ static int do_umount_one(struct mount_info *mi)
 	return 0;
 }
 
-static struct mount_info *roots_mp = NULL;
-
 static inline int print_ns_root(struct ns_id *ns, int remap_id, char *buf, int bs);
 static int get_mp_mountpoint(char *mountpoint, struct mount_info *mi, char *root, int root_len);
 
@@ -2928,25 +2936,10 @@ static int do_mnt_remap(struct mount_info *m)
 {
 	int len;
 
-	if (m->nsid->type == NS_OTHER) {
-		/* A path in root_yard has a fixed size, so it can be replaced. */
-		len = print_ns_root(m->nsid, remap_id, m->mountpoint, PATH_MAX);
-		m->mountpoint[len] = '/';
-	} else {
-		char root[PATH_MAX], *mp, *ns_mp;
-		int len, ret;
+	/* A path in root_yard has a fixed size, so it can be replaced. */
+	len = print_ns_root(m->nsid, remap_id, m->mountpoint, PATH_MAX);
+	m->mountpoint[len] = '/';
 
-		/* Add a root_yard path */
-		mp = m->mountpoint;
-		ns_mp = m->ns_mountpoint;
-
-		len = print_ns_root(m->nsid, remap_id, root, PATH_MAX);
-
-		ret = get_mp_mountpoint(ns_mp, m, root, len);
-		if (ret < 0)
-			return ret;
-		xfree(mp);
-	}
 	return 0;
 }
 
@@ -2999,32 +2992,23 @@ static int handle_overmounts(struct mount_info *root)
 }
 
 /* Move remapped mounts to places where they have to be */
-static int handle_mnt_remaps(int nsid, char *put_root)
+static int handle_mnt_remaps()
 {
 	struct mnt_remap_entry *r;
-	int cwd, exit_code = -1;
-
-	cwd = open(".", O_PATH);
-	if (cwd < 0) {
-		pr_perror("Unable to open \".\"\n");
-		return -1;
-	}
-
-	if (nsid != root_item->ids->mnt_ns_id && chdir(put_root)) {
-		pr_perror("Unable to change working directory");
-		return -1;
-	}
 
 	list_for_each_entry(r, &mnt_remap_list, node) {
 		struct mount_info *m = r->child;
+		char path[PATH_MAX];
+		int len;
 
-		if (r->child->nsid->id != nsid)
-			continue;
+		strncpy(path, m->mountpoint, PATH_MAX);
+		len = print_ns_root(m->nsid, 0, path, PATH_MAX);
+		path[len] = '/';
 
-		pr_debug("Move mount %s -> %s\n", m->mountpoint, m->ns_mountpoint);
-		if (mount(m->mountpoint, m->ns_mountpoint, NULL, MS_MOVE, NULL)) {
-			pr_perror("Unable to move mount %s -> %s", m->mountpoint, m->ns_mountpoint);
-			goto err;
+		pr_debug("Move mount %s -> %s\n", m->mountpoint, path);
+		if (mount(m->mountpoint, path, NULL, MS_MOVE, NULL)) {
+			pr_perror("Unable to move mount %s -> %s", m->mountpoint, path);
+			return -1;
 		}
 
 		list_del(&r->child->siblings);
@@ -3032,16 +3016,7 @@ static int handle_mnt_remaps(int nsid, char *put_root)
 		r->child->parent = r->parent;
 	}
 
-	exit_code = 0;
-err:
-	if (fchdir(cwd)) {
-		pr_perror("Unable to change working directory");
-		close(cwd);
-		return -1;
-	}
-	close(cwd);
-
-	return exit_code;
+	return 0;
 }
 
 
@@ -3085,9 +3060,6 @@ static int cr_pivot_root(char *root, int nsid)
 		pr_perror("pivot_root(., %s) failed", put_root);
 		goto err_tmpfs;
 	}
-
-	if (nsid > 0 && handle_mnt_remaps(nsid, put_root))
-		return -1;
 
 	if (mount("none", put_root, "none", MS_REC|MS_SLAVE, NULL)) {
 		pr_perror("Can't remount root with MS_PRIVATE");
@@ -3161,23 +3133,12 @@ static inline int print_ns_root(struct ns_id *ns, int remap_id, char *buf, int b
 
 static int create_mnt_roots(void)
 {
-	int exit_code = -1, cwd_fd;
+	int exit_code = -1;
 
 	if (mnt_roots)
 		return 0;
 
-	cwd_fd = open(".", O_DIRECTORY);
-	if (cwd_fd < 0) {
-		pr_perror("Unable to open cwd");
-		return -1;
-	}
-
-	if (chdir(opts.root ? : "/")) {
-		pr_perror("Unable to change working directory on %s", opts.root);
-		goto out;
-	}
-
-	mnt_roots = strdup(".criu.mntns.XXXXXX");
+	mnt_roots = strdup("/tmp/.criu.mntns.XXXXXX");
 	if (mnt_roots == NULL) {
 		pr_perror("Can't allocate memory");
 		goto out;
@@ -3188,15 +3149,10 @@ static int create_mnt_roots(void)
 		mnt_roots = NULL;
 		goto out;
 	}
+	chmod(mnt_roots, 0777);
 
 	exit_code = 0;
 out:
-	if (fchdir(cwd_fd)) {
-		pr_perror("Unable to restore cwd");
-		exit_code = -1;
-	}
-	close(cwd_fd);
-
 	return exit_code;
 }
 
@@ -3300,8 +3256,7 @@ static int collect_mnt_from_image(struct mount_info **pms, struct ns_id *nsid)
 	if (!img)
 		return -1;
 
-	if (nsid->type == NS_OTHER)
-		root_len = print_ns_root(nsid, 0, root, sizeof(root));
+	root_len = print_ns_root(nsid, 0, root, sizeof(root));
 
 	pr_debug("Reading mountpoint images (id %d pid %d)\n",
 		 nsid->id, (int)nsid->ns_pid);
@@ -3421,8 +3376,7 @@ int rst_get_mnt_root(int mnt_id, char *path, int plen)
 	if (m == NULL)
 		return -1;
 
-	if (m->nsid->type == NS_OTHER)
-		return print_ns_root(m->nsid, 0, path, plen);
+	return print_ns_root(m->nsid, 0, path, plen);
 
 rroot:
 	path[0] = '/';
@@ -3432,28 +3386,10 @@ rroot:
 
 int mntns_maybe_create_roots(void)
 {
-	struct ns_id *ns;
-
 	if (!(root_ns_mask & CLONE_NEWNS))
 		return 0;
 
-	for (ns = ns_ids; ns != NULL; ns = ns->next) {
-		if (ns->nd != &mnt_ns_desc)
-			continue;
-
-		if (ns->type != NS_ROOT) {
-			BUG_ON(ns->type == NS_CRIU);
-
-			/*
-			 * If we have more than one (root) namespace,
-			 * then we'll need the roots yard.
-			 */
-			return create_mnt_roots();
-		}
-	}
-
-	/* No "other" mntns found, just go ahead, we don't need roots yard. */
-	return 0;
+	return create_mnt_roots();
 }
 
 static int do_restore_task_mnt_ns(struct ns_id *nsid, struct pstree_item *current)
@@ -3476,6 +3412,9 @@ static int do_restore_task_mnt_ns(struct ns_id *nsid, struct pstree_item *curren
 
 int restore_task_mnt_ns(struct pstree_item *current)
 {
+	if ((root_ns_mask & CLONE_NEWNS) == 0)
+		return 0;
+
 	if (current->ids && current->ids->has_mnt_ns_id) {
 		unsigned int id = current->ids->mnt_ns_id;
 		struct ns_id *nsid;
@@ -3489,7 +3428,7 @@ int restore_task_mnt_ns(struct pstree_item *current)
 		 * already there, otherwise it will have to do
 		 * setns().
 		 */
-		if (!current->parent || id == current->parent->ids->mnt_ns_id)
+		if (current->parent && id == current->parent->ids->mnt_ns_id)
 			return 0;
 
 		nsid = lookup_ns_by_id(id, &mnt_ns_desc);
@@ -3518,8 +3457,7 @@ void fini_restore_mntns(void)
 		if (nsid->nd != &mnt_ns_desc)
 			continue;
 		close_safe(&nsid->mnt.ns_fd);
-		if (nsid->type != NS_ROOT)
-			close_safe(&nsid->mnt.root_fd);
+		close_safe(&nsid->mnt.root_fd);
 		nsid->ns_populated = true;
 	}
 }
@@ -3532,9 +3470,6 @@ static int populate_roots_yard(void)
 	struct mnt_remap_entry *r;
 	char path[PATH_MAX];
 	struct ns_id *nsid;
-
-	if (mnt_roots == NULL)
-		return 0;
 
 	if (make_yard(mnt_roots))
 		return -1;
@@ -3560,6 +3495,7 @@ static int populate_roots_yard(void)
 	return 0;
 }
 
+static int handle_mnt_remaps();
 static int populate_mnt_ns(void)
 {
 	struct mount_info *pms;
@@ -3608,14 +3544,6 @@ static int populate_mnt_ns(void)
 	if (handle_overmounts(pms))
 		return -1;
 
-	/*
-	 * Set properties for the root before mounting a root yard,
-	 * otherwise the root yard can be propagated into the host
-	 * mntns and remain there.
-	 */
-	if (do_mount_root(pms))
-		return -1;
-
 	if (populate_roots_yard())
 		return -1;
 
@@ -3625,12 +3553,15 @@ static int populate_mnt_ns(void)
 	ret = mnt_tree_for_each(pms, do_mount_one);
 	mnt_tree_for_each(pms, do_close_one);
 
+	if (ret == 0 && handle_mnt_remaps())
+		return -1;
+
 	if (umount_clean_path())
 		return -1;
 	return ret;
 }
 
-static int __depopulate_roots_yard(void)
+int __depopulate_roots_yard(void)
 {
 	int ret = 0;
 
@@ -3755,64 +3686,11 @@ int prepare_mnt_ns(void)
 		pr_info("Cleaning mount namespace\n");
 		if (mnt_tree_for_each_reverse(ns.mnt.mntinfo_tree, do_umount_one))
 			return -1;
-	} else {
-		struct mount_info *mi;
-		char *ret;
-		char path[PATH_MAX];
-
-		/*
-		 * The whole tree of mountpoints is to be moved into one
-		 * place with the pivot_root() call. Don't do manual
-		 * umount (as we do above), all this stuff will go away
-		 * with a single umount call later.
-		 */
-
-		ret = realpath(opts.root, path);
-		if (!ret) {
-			pr_err("Unable to find real path for %s\n", opts.root);
-			return -1;
-		}
-
-		/* moving a mount residing under a shared mount is invalid. */
-		mi = mount_resolve_path(ns.mnt.mntinfo_tree, path);
-		if (mi == NULL) {
-			pr_err("Unable to find mount point for %s\n", opts.root);
-			return -1;
-		}
-		if (mi->parent == NULL) {
-			pr_err("New root and old root are the same\n");
-			return -1;
-		}
-
-		/* Our root is mounted over the parent (in the same directory) */
-		if (!strcmp(mi->parent->mountpoint, mi->mountpoint)) {
-			pr_err("The parent of the new root is unreachable\n");
-			return -1;
-		}
-
-		if (mount("none", mi->parent->mountpoint + 1, "none", MS_SLAVE, NULL)) {
-			pr_perror("Can't remount the parent of the new root with MS_SLAVE");
-			return -1;
-		}
-
-		/* Unprivileged users can't reveal what is under a mount */
-		if (root_ns_mask & CLONE_NEWUSER) {
-			if (mount(opts.root, opts.root, NULL, MS_BIND | MS_REC, NULL)) {
-				pr_perror("Can't remount bind-mount %s into itself", opts.root);
-				return -1;
-			}
-		}
-		if (chdir(opts.root)) {
-			pr_perror("chdir(%s) failed", opts.root ? : "/");
-			return -1;
-		}
 	}
 
 	free_mntinfo(old);
 
 	ret = populate_mnt_ns();
-	if (!ret && opts.root)
-		ret = cr_pivot_root(NULL, root_item->ids->mnt_ns_id);
 	if (ret)
 		return -1;
 
@@ -3826,16 +3704,6 @@ int prepare_mnt_ns(void)
 
 		if (nsid->nd != &mnt_ns_desc)
 			continue;
-		if (nsid->type == NS_ROOT) {
-			/* Pin one with a file descriptor */
-			nsid->mnt.ns_fd = open_proc(PROC_SELF, "ns/mnt");
-			if (nsid->mnt.ns_fd < 0)
-				goto err;
-			/* we set ns_populated so we don't need to open root_fd */
-			nsid->ns_populated = true;
-			continue;
-		}
-
 		/* Create the new mount namespace */
 		if (unshare(CLONE_NEWNS)) {
 			pr_perror("Unable to create a new mntns");
