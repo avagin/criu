@@ -476,7 +476,7 @@ err_r:
 
 int dump_one_tcp(int fd, struct inet_sk_desc *sk)
 {
-	if (sk->state == TCP_CLOSE || sk->state == TCP_LISTEN)
+	if (sk->dst_port == 0)
 		return 0;
 
 	pr_info("Dumping TCP connection\n");
@@ -754,6 +754,8 @@ static int restore_tcp_conn_state(int sk, struct inet_sk_info *ii)
 		pr_perror("Can't set repair state");
 		return -1;
 	}
+	if (ii->ie->state == TCP_CLOSE)
+		tcp_repair_off(sk);
 
 	tcp_stream_entry__free_unpacked(tse, NULL);
 	close_image(img);
@@ -810,7 +812,8 @@ int restore_one_tcp(int fd, struct inet_sk_info *ii)
 
 void tcp_locked_conn_add(struct inet_sk_info *ii)
 {
-	list_add_tail(&ii->rlist, &rst_tcp_repair_sockets);
+	if (ii->ie->state != TCP_CLOSE)
+		list_add_tail(&ii->rlist, &rst_tcp_repair_sockets);
 	ii->sk_fd = -1;
 }
 
