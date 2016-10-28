@@ -1,7 +1,7 @@
 From 1f045e967bad27b87a8eddbe5aa6bdd5e350bbdf Mon Sep 17 00:00:00 2001
 From: Andrei Vagin <avagin@virtuozzo.com>
 Date: Thu, 1 Sep 2016 00:57:58 +0300
-Subject: [PATCH 0/8 v2] Dump and restore nested network namespaces
+Subject: [PATCH 0/10 v2] Dump and restore nested network namespaces
 
 This is an initial support for nested network namespaces.
 
