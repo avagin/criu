@@ -172,6 +172,7 @@ TST_NOFILE	:=				\
 		cr_veth				\
 		sock_peercred			\
 		netns_sub			\
+		unix_fd				\
 #		jobctl00			\
 
 ifneq ($(SRCARCH),arm)
