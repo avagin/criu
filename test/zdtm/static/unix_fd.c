@@ -17,27 +17,17 @@ union fdmsg {
 	char buf[CMSG_SPACE(sizeof(int))];
 };
 
-/* Tested to work on perl 5.005_03
- *   Linux-2.2.14 glibc-2.0.7 (libc.so.6) i586  BSD4.4
- *   Linux-2.0.38 glibc-2.0.7 (libc.so.6) i586  BSD4.4
- *   SunOS-5.6, gcc-2.7.2.3, Sparc BSD4.3
- * see also: linux/net/unix/af_unix.c
- */
-
-
-int
-sendfd(sock_fd, send_me_fd)
-	int sock_fd;
-	int send_me_fd;
+int sendfd(int sock_fd, int send_me_fd)
 {
 	int ret = 0;
 	struct iovec  iov[1];
 	struct msghdr msg;
 
-	iov[0].iov_base = &ret;  /* Don't send any data. Note: der Mouse
-				  * <mouse@Rodents.Montreal.QC.CA> says
-				  * that might work better if at least one
-				  * byte is sent. */
+	union  fdmsg  cmsg;
+	struct cmsghdr* h;
+	int *pfd;
+
+	iov[0].iov_base = &ret;
 	iov[0].iov_len  = 1;
 
 	msg.msg_iov     = iov;
@@ -45,43 +35,34 @@ sendfd(sock_fd, send_me_fd)
 	msg.msg_name    = 0;
 	msg.msg_namelen = 0;
 
-	{
-		/* New BSD 4.4 way (ouch, why does this have to be
-		 * so convoluted). */
+	msg.msg_control = cmsg.buf;
+	msg.msg_controllen = sizeof(union fdmsg);
+	msg.msg_flags = 0;
 
-		union  fdmsg  cmsg;
-		struct cmsghdr* h;
-		int *pfd;
+	h = CMSG_FIRSTHDR(&msg);
+	h->cmsg_len   = CMSG_LEN(sizeof(int));
+	h->cmsg_level = SOL_SOCKET;
+	h->cmsg_type  = SCM_RIGHTS;
+	pfd = (int*)CMSG_DATA(h);
+	*(pfd) = send_me_fd;
 
-		msg.msg_control = cmsg.buf;
-		msg.msg_controllen = sizeof(union fdmsg);
-		msg.msg_flags = 0;
-
-		h = CMSG_FIRSTHDR(&msg);
-		h->cmsg_len   = CMSG_LEN(sizeof(int));
-		h->cmsg_level = SOL_SOCKET;
-		h->cmsg_type  = SCM_RIGHTS;
-		pfd = (int*)CMSG_DATA(h);
-		*(pfd) = send_me_fd;
-
-		if (sendmsg(sock_fd, &msg, 0) < 0) {
-			ret = 0;
-		} else {
-			ret = 1;
-		}
+	if (sendmsg(sock_fd, &msg, 0) < 0) {
+		pr_perror("sendmsg");
+		return -1;
 	}
-	/*fprintf(stderr,"send %d %d %d %d\n",sock_fd, send_me_fd, ret, errno);*/
-	return ret;
+
+	return 0;
 }
 
-int
-recvfd(sock_fd)
-	int sock_fd;
+static int recvfd(int sock_fd)
 {
 	int count;
 	int ret = 0;
 	struct iovec  iov[1];
 	struct msghdr msg;
+	union fdmsg  cmsg;
+	struct cmsghdr* h;
+	int *pfd;
 
 	iov[0].iov_base = &ret;  /* don't receive any data */
 	iov[0].iov_len  = 1;
@@ -91,18 +72,14 @@ recvfd(sock_fd)
 	msg.msg_name = NULL;
 	msg.msg_namelen = 0;
 
-	union fdmsg  cmsg;
-	struct cmsghdr* h;
-	int *pfd;
-
 	msg.msg_control = cmsg.buf;
 	msg.msg_controllen = sizeof(union fdmsg);
 	msg.msg_flags = 0;
 
 	h = CMSG_FIRSTHDR(&msg);
 	h->cmsg_len   = CMSG_LEN(sizeof(int));
-	h->cmsg_level = SOL_SOCKET;  /* Linux does not set these */
-	h->cmsg_type  = SCM_RIGHTS;  /* upon return */
+	h->cmsg_level = SOL_SOCKET;
+	h->cmsg_type  = SCM_RIGHTS;
 	pfd = (int*)CMSG_DATA(h);
 	*(pfd) = -1;
 
@@ -112,12 +89,11 @@ recvfd(sock_fd)
 		return -1;
 	}
 
-	h = CMSG_FIRSTHDR(&msg);   /* can realloc? */
+	h = CMSG_FIRSTHDR(&msg);
 	if (   h == NULL
 	    || h->cmsg_len    != CMSG_LEN(sizeof(int))
 	    || h->cmsg_level  != SOL_SOCKET
 	    || h->cmsg_type   != SCM_RIGHTS ) {
-		/* This should really never happen */
 		if (h)
 			pr_err("protocol failure: %ld %d %d\n",
 				h->cmsg_len, h->cmsg_level, h->cmsg_type);
