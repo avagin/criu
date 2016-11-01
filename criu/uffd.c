@@ -125,26 +125,26 @@ static void lpi_hash_fini(void)
 
 static int prepare_sock_addr(struct sockaddr_un *saddr)
 {
-	char cwd[PATH_MAX];
+	struct stat st;
 	int len;
 
-	if (!getcwd(cwd, PATH_MAX)) {
-		pr_perror("Cannot get CWD\n");
+	if (stat(".", &st) == -1)
 		return -1;
-	}
 
 	memset(saddr, 0, sizeof(struct sockaddr_un));
 
 	saddr->sun_family = AF_UNIX;
 	len = snprintf(saddr->sun_path, sizeof(saddr->sun_path),
-		       "%s/%s", cwd, LAZY_PAGES_SOCK_NAME);
+		       "X/%s/%lx/%lx", LAZY_PAGES_SOCK_NAME, st.st_dev, st.st_ino);
 	if (len >= sizeof(saddr->sun_path)) {
-		pr_err("Wrong UNIX socket name: %s/%s\n",
-		       cwd, LAZY_PAGES_SOCK_NAME);
+		pr_err("Wrong UNIX socket name: %s/%lx/%lx\n",
+			LAZY_PAGES_SOCK_NAME, st.st_dev, st.st_ino);
 		return -1;
 	}
+	len = SUN_LEN(saddr);
+	saddr->sun_path[0] = 0;
 
-	return 0;
+	return len;
 }
 
 static int send_uffd(int sendfd, int pid)
@@ -259,7 +259,8 @@ int prepare_lazy_pages_socket(void)
 	if (!opts.lazy_pages)
 		return 0;
 
-	if (prepare_sock_addr(&sun))
+	len = prepare_sock_addr(&sun);
+	if (len < 0)
 		return -1;
 
 	lazy_sock_mutex = shmalloc(sizeof(*lazy_sock_mutex));
@@ -276,7 +277,6 @@ int prepare_lazy_pages_socket(void)
 	if (new_fd < 0)
 		return -1;
 
-	len = offsetof(struct sockaddr_un, sun_path) + strlen(sun.sun_path);
 	if (connect(new_fd, (struct sockaddr *) &sun, len) < 0) {
 		pr_perror("connect to %s failed", sun.sun_path);
 		close(new_fd);
@@ -286,17 +286,14 @@ int prepare_lazy_pages_socket(void)
 	return 0;
 }
 
-static int server_listen(struct sockaddr_un *saddr)
+static int server_listen(struct sockaddr_un *saddr, int len)
 {
 	int fd;
-	int len;
 
 	if ((fd = socket(AF_UNIX, SOCK_STREAM, 0)) < 0)
 		return -1;
 
 	unlink(saddr->sun_path);
-
-	len = offsetof(struct sockaddr_un, sun_path) + strlen(saddr->sun_path);
 
 	if (bind(fd, (struct sockaddr *) saddr, len) < 0) {
 		goto out;
@@ -846,11 +843,12 @@ static int prepare_uffds(int epollfd)
 	socklen_t len;
 	struct sockaddr_un saddr;
 
-	if (prepare_sock_addr(&saddr))
+	len = prepare_sock_addr(&saddr);
+	if (len < 0)
 		return -1;
 
 	pr_debug("Waiting for incoming connections on %s\n", saddr.sun_path);
-	if ((listen = server_listen(&saddr)) < 0) {
+	if ((listen = server_listen(&saddr, len)) < 0) {
 		pr_perror("server_listen error");
 		return -1;
 	}
