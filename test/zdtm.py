@@ -104,6 +104,22 @@ def add_to_output(path):
 		fdo.write(buf)
 
 
+def print_output():
+	global report_dir
+	if not report_dir:
+		return
+
+	path = os.path.join(report_dir, "output")
+	if not os.access(path, os.F_OK):
+	    return
+
+	print_sep(path, "*")
+	fdo = open(path, "r")
+	for l in fdo:
+		print l,
+	print_sep(path, "*")
+
+
 prev_crash_reports = set(glob.glob("/tmp/zdtm-core-*.txt"))
 
 
@@ -1417,6 +1433,7 @@ class launcher:
 			self.__fail = True
 		if self.__file_report:
 			self.__file_report.close()
+		print_output()
 		if self.__fail:
 			print_sep("FAIL", "#")
 			sys.exit(1)
