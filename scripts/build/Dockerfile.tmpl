@@ -16,7 +16,8 @@ RUN apt-get install -y \
                 libnl-3-dev \
                 libselinux-dev \
                 pkg-config \
-                git-core
+                git-core \
+		libnet-dev
 
 COPY . /criu
 WORKDIR /criu
