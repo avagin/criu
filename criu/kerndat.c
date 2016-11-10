@@ -483,7 +483,7 @@ int kerndat_tcp_repair(void)
 	}
 
 	aux = sizeof(addr);
-	if (getsockname(sock, &addr, &aux)) {
+	if (getsockname(sock, (struct sockaddr *) &addr, &aux)) {
 		pr_perror("Unable to get a socket name");
 		goto err;
 	}
@@ -499,7 +499,7 @@ int kerndat_tcp_repair(void)
 		goto err;
 	}
 
-	if (connect(clnt, &addr, sizeof(addr))) {
+	if (connect(clnt, (struct sockaddr *) &addr, sizeof(addr))) {
 		pr_perror("Unable to connect a socket");
 		goto err;
 	}
