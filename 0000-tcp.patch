@@ -1,0 +1,21 @@
+From bbab24bfe59b3a2f112b2ba0d1b50bd4c0a0cbb2 Mon Sep 17 00:00:00 2001
+From: Andrei Vagin <avagin@virtuozzo.com>
+Date: Fri, 11 Nov 2016 10:01:05 +0300
+Subject: [PATCH 00/11] tcp: add support of half closed tcp sockets
+
+A socket is in one of half-closed states, if it sent a fin packet
+or it received a fin packet.
+
+CRIU plays with fin packets to restore half-closed states too.
+
+When we need to sent a fin packet from a socket, we can call
+shutdown(SHUT_WR). When a fin packet has to be restore in
+a received queue, criu generate a fin packet and send it via
+a raw ip socket.
+
+A raw packet is sent with the SOCCR_MARK mark to be able
+to not block it.
+
+-- 
+2.7.4
+
