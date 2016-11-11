@@ -56,13 +56,15 @@ extern int inet_connect(int sk, struct inet_sk_info *);
 #ifdef CR_NOGLIBC
 #define setsockopt	sys_setsockopt
 #endif
-static inline void tcp_repair_off(int fd)
+static inline int tcp_repair_off(int fd)
 {
 	int aux = 0, ret;
 
 	ret = setsockopt(fd, SOL_TCP, TCP_REPAIR, &aux, sizeof(aux));
 	if (ret < 0)
 		pr_err("Failed to turn off repair mode on socket: %m\n");
+
+	return ret;
 }
 
 extern void tcp_locked_conn_add(struct inet_sk_info *);

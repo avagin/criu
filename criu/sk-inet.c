@@ -168,6 +168,7 @@ static int can_dump_inet_sk(const struct inet_sk_desc *sk)
 	case TCP_CLOSE_WAIT:
 	case TCP_LAST_ACK:
 	case TCP_CLOSING:
+	case TCP_SYN_SENT:
 		if (!opts.tcp_established_ok) {
 			pr_err("Connected TCP socket, consider using --%s option.\n",
 					SK_EST_PARAM);
@@ -791,7 +792,7 @@ int inet_connect(int sk, struct inet_sk_info *ii)
 	addr_size = restore_sockaddr(&addr, ii->ie->family,
 			ii->ie->dst_port, ii->ie->dst_addr, 0);
 
-	if (connect(sk, (struct sockaddr *)&addr, addr_size) == -1) {
+	if (connect(sk, (struct sockaddr *)&addr, addr_size) == -1 && errno != EINPROGRESS) {
 		pr_perror("Can't connect inet socket back");
 		return -1;
 	}

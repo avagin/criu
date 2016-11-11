@@ -355,13 +355,23 @@ static int restore_tcp_conn_state(int sk, struct libsoccr_sk *socr, struct inet_
 	if (inet_bind(sk, ii))
 		goto err_c;
 
+	if (restore_prepare_socket(sk))
+		goto err_c;
+
+	if (data.state == TCP_SYN_SENT) {
+		if (tcp_repair_off(sk))
+			goto err_c;
+	}
+
 	if (inet_connect(sk, ii))
 		goto err_c;
 
-	if (libsoccr_set_sk_data_noq(socr, &data, sizeof(data)))
-		goto err_c;
+	if (data.state == TCP_SYN_SENT) {
+		if (tcp_repair_on(sk))
+			goto err_c;
+	}
 
-	if (restore_prepare_socket(sk))
+	if (libsoccr_set_sk_data_noq(socr, &data, sizeof(data)))
 		goto err_c;
 
 	if (restore_tcp_queues(socr, &data, img))
