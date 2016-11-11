@@ -112,6 +112,7 @@ static int refresh_sk(struct libsoccr_sk *sk, struct libsoccr_sk_data *data, str
 	case TCP_CLOSE_WAIT:
 	case TCP_CLOSING:
 	case TCP_CLOSE:
+	case TCP_SYN_SENT:
 		break;
 	default:
 		loge("Unknown state %d\n", ti->tcpi_state);
@@ -423,7 +424,8 @@ int libsoccr_set_sk_data_noq(struct libsoccr_sk *sk,
 	opts[onr].opt_val = data->mss_clamp;
 	onr++;
 
-	if (setsockopt(sk->fd, SOL_TCP, TCP_REPAIR_OPTIONS,
+	if (data->state != TCP_SYN_SENT &&
+	    setsockopt(sk->fd, SOL_TCP, TCP_REPAIR_OPTIONS,
 				opts, onr * sizeof(struct tcp_repair_opt)) < 0) {
 		loge("Can't repair options");
 		return -2;
