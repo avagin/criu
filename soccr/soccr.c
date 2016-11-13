@@ -358,6 +358,7 @@ int libsoccr_set_sk_data_unbound(struct libsoccr_sk *sk,
 		struct libsoccr_sk_data *data, unsigned data_size)
 {
 	int mstate = 1 << data->state;
+	__u32 seq;
 
 	if (!data || data_size < SOCR_DATA_MIN_SIZE)
 		return -1;
@@ -376,8 +377,10 @@ int libsoccr_set_sk_data_unbound(struct libsoccr_sk *sk,
 	if (set_queue_seq(sk, TCP_RECV_QUEUE,
 				data->inq_seq - data->inq_len))
 		return -2;
-	if (set_queue_seq(sk, TCP_SEND_QUEUE,
-				data->outq_seq - data->outq_len))
+	seq = data->outq_seq - data->outq_len;
+	if (data->state == TCP_SYN_SENT)
+		seq--;
+	if (set_queue_seq(sk, TCP_SEND_QUEUE, seq))
 		return -3;
 
 	return 0;
