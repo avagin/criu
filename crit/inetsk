@@ -1,0 +1,25 @@
+#!/usr/bin/env python
+import sys
+import pycriu
+import os, os.path
+import json
+
+image_dir = sys.argv[1]
+
+tasks = []
+f = open(os.path.join(image_dir, "inetsk.img"))
+sockets = pycriu.images.load(f)
+sockets = sockets["entries"]
+
+for s in sockets:
+    f = open(os.path.join(image_dir, "inetsk.img"))
+    ids = pycriu.images.load(f)
+    tcp_img = os.path.join(image_dir, "tcp-stream-%x.img" % int(s["ino"]))
+    if os.access(tcp_img, os.F_OK):
+        f = open(tcp_img)
+        tcp = pycriu.images.load(f)
+        for i in tcp["entries"][0]:
+            s[i] = tcp["entries"][0][i]
+sockets.sort(lambda a, b: cmp(a["src_port"] + a["dst_port"], b["src_port"] + b["dst_port"]))
+
+json.dump(sockets, sys.stdout, indent=8, sort_keys=True)
