@@ -1019,6 +1019,7 @@ def cr(cr_api, test, opts):
 			sbs('pre-restore')
 			try_run_hook(test, ["--pre-restore"])
 			cr_api.restore()
+                        os.environ["ZDTM_IMG_DIR"] = cr_api.logs()
 			try_run_hook(test, ["--post-restore"])
 			sbs('post-restore')
 

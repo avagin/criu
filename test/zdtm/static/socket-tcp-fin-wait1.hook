@@ -1,9 +1,17 @@
 #!/usr/bin/env python
 import sys
+
+sys.path.append("../crit")
+
 import pycriu
 import os, os.path
 import json
 import difflib
+
+if sys.argv[1] != "--post-restore":
+    sys.exit(0)
+
+print "Check TCP images"
 
 def get_sockets(image_dir):
     f = open(os.path.join(image_dir, "inetsk.img"))
@@ -20,6 +28,8 @@ def get_sockets(image_dir):
             s['tcp'] = tcp["entries"][0]
             s["tcp"].pop("extra", None)
             s["tcp"].pop("timestamp", None)
+            s["tcp"].pop("snd_wl1", None)
+            s["tcp"].pop("rcv_wnd", None)
         s.pop("id", None)
         s.pop("ino")
     sockets.sort(lambda a, b: cmp(a["src_port"] + a["dst_port"], b["src_port"] + b["dst_port"]))
@@ -33,9 +43,11 @@ for d in os.listdir(path):
         prev = sockets
         continue
 
+    if prev == sockets:
+        continue
+
     sockets_str = json.dumps(sockets, sys.stdout, indent=8, sort_keys=True)
     prev_str = json.dumps(prev, sys.stdout, indent=8, sort_keys=True)
 
-    d = difflib.Differ()
-    for l in d.compare(sockets_str.split("\n"), prev_str.split("\n")):
-        print l
+    print "\n".join(difflib.unified_diff(sockets_str.split("\n"), prev_str.split("\n")))
+    sys.exit(1)
