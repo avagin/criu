@@ -42,7 +42,8 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	if (mount("zdtm_shared", "1", "tmpfs", 0, NULL) ||
+	if (mount("1", "1", NULL, MS_BIND, NULL) ||
+	    mount(NULL, "1", NULL, MS_PRIVATE, NULL) ||
 	    mount(NULL, "1", NULL, MS_SHARED, NULL)) {
 		pr_perror("mount");
 		return 1;
