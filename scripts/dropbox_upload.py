@@ -1,0 +1,19 @@
+#!/usr/bin/env python2
+
+import dropbox, sys, os
+
+access_token = os.getenv("DROPBOX_TOKEN")
+
+client = dropbox.client.DropboxClient(access_token)
+
+f = open(sys.argv[1])
+
+fname = os.path.basename(sys.argv[1])
+
+response = client.put_file(fname, f)
+print 'uploaded: ', response
+
+print "=====================", fname, "======================"
+print client.share(fname)['url']
+print "=====================", len(fname) * "=", "======================"
+
