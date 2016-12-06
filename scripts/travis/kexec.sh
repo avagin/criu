@@ -2,6 +2,8 @@
 
 set -x
 
+uname -a
+
 ppid=""
 pid=$$
 while :; do
