@@ -423,6 +423,9 @@ int restore_one_tcp(int fd, struct inet_sk_info *ii)
 	if (!sk)
 		return -1;
 
+	if (ii->ie->src_port && inet_bind(fd, ii))
+		return -1;
+
 	if (restore_tcp_conn_state(fd, sk, ii))
 		return -1;
 
