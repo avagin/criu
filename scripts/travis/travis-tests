@@ -4,7 +4,8 @@ set -x -e
 TRAVIS_PKGS="protobuf-c-compiler libprotobuf-c0-dev libaio-dev
 		libprotobuf-dev protobuf-compiler python-ipaddr libcap-dev
 		libnl-3-dev gcc-multilib libc6-dev-i386 gdb bash python-protobuf
-		libnet-dev util-linux"
+		libnet-dev util-linux
+		kexec-tools libssl-dev libelf-dev strace"
 
 travis_prep () {
 	[ -n "$SKIP_TRAVIS_PREP" ] && return
@@ -20,15 +21,22 @@ travis_prep () {
 			MAKE_VARS=CC=clang
 		fi
 	chmod a+x $HOME
+	pip install dropbox
 }
 
 travis_prep
 
-ulimit -c unlimited
-echo "|`pwd`/test/abrt.sh %P %p %s %e" > /proc/sys/kernel/core_pattern
 
 export GCOV
 make ${MAKE_VARS}
+
+./criu/criu check --extra --all || echo $?
+python test/zdtm.py run -t zdtm/static/env00
+
+./scripts/travis/kexec.sh
+
+ulimit -c unlimited
+echo "|`pwd`/test/abrt.sh %P %p %s %e" > /proc/sys/kernel/core_pattern
 make ${MAKE_VARS} -C test/zdtm
 
 ./criu/criu check
