@@ -2278,6 +2278,23 @@ static int prepare_mm(pid_t pid, struct task_restore_args *args)
 	if (exe_fd < 0)
 		goto out;
 
+	{
+		struct stat st;
+
+		if (fstat(exe_fd, &st)) {
+			pr_perror("Unable to stat a file");
+			return -1;
+		}
+
+		if (!(st.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH))) {
+			pr_debug("Add the execution bit for %d (st_mode %o)\n", exe_fd, st.st_mode);
+			if (fchmod(exe_fd, st.st_mode | S_IXUSR)) {
+				pr_perror("Unable to add the execution bit");
+				return -1;
+			}
+		}
+	}
+
 	args->fd_exe_link = exe_fd;
 	ret = 0;
 out:

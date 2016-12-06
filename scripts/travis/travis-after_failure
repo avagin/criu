@@ -1,5 +1,8 @@
 #!/bin/sh
 pip install dropbox
 cd ../../../
+cp -ap /imgs .
+cp /travis.log .
+cp /imgs/restore.log .
 tar -czf criu-$TRAVIS_JOB_ID.tar.gz criu
 ./criu/scripts/dropbox_upload.py criu-$TRAVIS_JOB_ID.tar.gz

@@ -5,17 +5,7 @@ services:
   - docker
 env:
  matrix:
-  - TR_ARCH=local       GCOV=1
-  - TR_ARCH=local       CLANG=1
-  - TR_ARCH=x86_64
-  - TR_ARCH=armv7hf
-  - TR_ARCH=aarch64
-  - TR_ARCH=ppc64le
-  - TR_ARCH=alpine
-  - TR_ARCH=armv7hf     CLANG=1
-  - TR_ARCH=aarch64     CLANG=1
-  - TR_ARCH=ppc64le     CLANG=1
-  - TR_ARCH=alpine      CLANG=1
+  - TR_ARCH=local
  global:
   - secure: "cRs4mf2aRj5VNpdrk4/mHc4Sgi7GQTxmA8pukI1G+SxXaR9kWGstkM/oKsy4L5jwab+bf0dLOAOHlENPZw6PXTfIdRx513CfA9DxfhrzfCygmUwIolG73So+eOp8Y8UNTms033zxt6/PYNcwU9nXvwY4uTAqTzPOx6ndUwkv244="
   - secure: "DxEf5Q1L/yvuI/yqC1Lg8rCDlxmhdbTnYWaiySIgekcOGyC7G5k6rrN8tbrH1T6ymQ4OBcgm7viYet1/XDTtx0kIf2CB4F5hgX/YFEAxmpfvWHKYg/oZUnSuN/L2dn6zEi92GpHbvJWJMQA20CK4+WwNm4dx7eLAXx3IiH3VpXw="

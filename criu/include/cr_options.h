@@ -36,7 +36,7 @@ struct cg_root_opt {
 /*
  * Ghost file size we allow to carry by default.
  */
-#define DEFAULT_GHOST_LIMIT	(1 << 20)
+#define DEFAULT_GHOST_LIMIT	(100 << 20)
 
 #define DEFAULT_TIMEOUT		10
 
