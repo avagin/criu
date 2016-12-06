@@ -29,5 +29,4 @@ echo "|`pwd`/test/abrt.sh %P %p %s %e" > /proc/sys/kernel/core_pattern
 export GCOV
 make ${MAKE_VARS}
 
-cd ../../
 ./scripts/travis/kexec.sh
