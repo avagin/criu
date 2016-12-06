@@ -12,7 +12,7 @@ expr match "$comm" zombie00 && {
 	exit 0
 }
 
-expr match "$comm" seccomp_filter && {
+expr match "$comm" seccomp && {
 	cat > /dev/null
 	exit 0
 }

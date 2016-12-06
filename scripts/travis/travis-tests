@@ -1,12 +1,58 @@
-#!/bin/sh
+#!/bin/bash
+set -x
+cat /proc/self/fdinfo/1
+python -c "import fcntl; fcntl.fcntl(1, fcntl.F_SETFL, 0)"
+cat /proc/self/fdinfo/1
+start=`date +%s`
+
+fini()
+{
+	dmesg
+	date
+
+	if [ -f /proc/lockdep ]; then
+		# net-next: WARNING: CPU: 0 PID: 1544 at net/ipv4/tcp_input.c:889
+		dmesg | grep -v "can't dereference iret registers at.*entry_SYSCALL_64_fastpath" | grep -v "WARNING: stack recursion on stack type" | grep WARNING && exit 1 || true
+	fi
+
+	cat /proc/sys/kernel/tainted
+	[ "`cat /proc/sys/kernel/tainted`" = "0" ] ||	exit 1
+
+	exit 0
+}
+
+check_travis_timeout()
+{
+    local cur
+
+    cur=`date +%s`
+
+    echo elapsed time: $((cur - start))
+#    test $((cur - start)) -lt $((40 * 60)) || fini
+    [ "`cat /proc/sys/kernel/tainted`" = "0" ] || fini
+    if [ -f /proc/lockdep ]; then
+	dmesg | grep -v "can't dereference iret registers at.*entry_SYSCALL_64_fastpath" | grep -v "WARNING: stack recursion on stack type" | grep WARNING && fini || true
+    fi
+}
+
+cd ../../
+set -m
+./scripts/travis/kexec.sh prep > kexec-prep.log 2>&1 &
+
 set -x -e
+
+python -c "import fcntl; fcntl.fcntl(1, fcntl.F_SETFL, 0)"
+
+cat /proc/cmdline
+cat /proc/self/mountinfo
 
 TRAVIS_PKGS="protobuf-c-compiler libprotobuf-c-dev libaio-dev python-future
 		libgnutls28-dev libgnutls30 libprotobuf-dev protobuf-compiler
 		libcap-dev libnl-3-dev gdb bash python-protobuf python-yaml
 		libnet-dev util-linux asciidoctor libnl-route-3-dev
 		python-junit.xml python-ipaddress time ccache flake8
-		libbsd-dev"
+		libbsd-dev
+		kexec-tools libssl-dev libelf-dev strace"
 
 X86_64_PKGS="gcc-multilib"
 
@@ -45,6 +91,7 @@ travis_prep () {
 	if [ "$CCACHE" = "1" -a -z "$GCOV" ]; then
 		# ccache is installed by default, need to set it up
 		export CCACHE_DIR=$HOME/.ccache
+		mkdir -p $CCACHE_DIR
 		[ "$CC" = "clang" ] && export CCACHE_CPP2=yes
 		# uncomment the following to get detailed ccache logs
 		#export CCACHE_LOGFILE=$HOME/ccache.log
@@ -59,62 +106,46 @@ travis_prep () {
 	apt-get update -qq
 	apt-get install -qq --no-install-recommends $TRAVIS_PKGS
 	chmod a+x $HOME
+	pip install dropbox
+	export CCACHE_DIR="/home/travis/.ccache"
+	export CC="ccache gcc"
+	export CXX="ccache g++"
+	export PATH="/usr/lib/ccache:$PATH"
 }
 
+cat /proc/self/fdinfo/1
 travis_prep
+cat /proc/self/fdinfo/1
 
 export GCOV
-$CC --version
-time make CC="$CC" -j4
+umask 0000
+make -j4 ${MAKE_VARS}
+ccache -s
+cat /proc/self/fdinfo/1
 
-./criu/criu -v4 cpuinfo dump || :
-./criu/criu -v4 cpuinfo check || :
+./criu/criu check --extra --all || echo $?
+make -j4 ${MAKE_VARS} -C test/zdtm
+python test/zdtm.py run -t zdtm/static/env00
 
-make lint
+cat /proc/self/fdinfo/1
 
-# Check that help output fits into 80 columns
-WIDTH=$(./criu/criu --help | wc --max-line-length)
-if [ "$WIDTH" -gt 80 ]; then
-	echo "criu --help output does not obey 80 characters line width!"
-	exit 1
-fi
+date
+wait # for kexec.sh prep to finish
+cat kexec-prep.log
+./scripts/travis/kexec.sh
+cat /proc/self/fdinfo/1
 
-[ -n "$SKIP_TRAVIS_TEST" ] && exit 0
+dmesg
 
+cat /proc/self/fdinfo/1
 ulimit -c unlimited
-
 echo "|`pwd`/test/abrt.sh %P %p %s %e" > /proc/sys/kernel/core_pattern
+make -j4 ${MAKE_VARS} -C test/zdtm
+cat /proc/self/fdinfo/1
 
-if [ "${COMPAT_TEST}x" = "yx" ] ; then
-	# Dirty hack to keep both ia32 & x86_64 shared libs on a machine:
-	# headers are probably not compatible, so apt-get doesn't allow
-	# installing both versions, while we need one for CRIU and one
-	# for 32-bit tests. A better way would involve launching docker..
-	# But it would require making zdtm.py aware of docker and launching
-	# tests inside the CT.
-	INCOMPATIBLE_LIBS="libaio-dev libcap-dev libnl-3-dev libnl-route-3-dev"
-	IA32_PKGS=""
-	REFUGE=64-refuge
+check_travis_timeout
 
-	mkdir "$REFUGE"
-	for i in $INCOMPATIBLE_LIBS ; do
-		for j in $(dpkg --listfiles $i | grep '\.so$') ; do
-			cp "$j" "$REFUGE/"
-		done
-		IA32_PKGS="$IA32_PKGS $i:i386"
-	done
-	apt-get remove $INCOMPATIBLE_LIBS
-	apt-get install --no-install-recommends $IA32_PKGS
-	mkdir -p /usr/lib/x86_64-linux-gnu/
-	mv "$REFUGE"/* /usr/lib/x86_64-linux-gnu/
-fi
-
-time make CC="$CC" -j4 -C test/zdtm
-
-[ -f "$CCACHE_LOGFILE" ] && cat $CCACHE_LOGFILE
-
-# umask has to be called before a first criu run, so that .gcda (coverage data)
-# files are created with read-write permissions for all.
+cat /proc/self/fdinfo/1
 umask 0000
 ./criu/criu check
 ./criu/criu check --all || echo $?
@@ -122,67 +153,56 @@ umask 0000
 ./criu/criu cpuinfo check
 
 export SKIP_PREP=1
-# The 3.19 kernel (from Ubuntu 14.04) has a bug. When /proc/PID/pagemap
-# is read for a few VMAs in one read call, incorrect data is returned.
-# See https://github.com/checkpoint-restore/criu/issues/207
-# Kernel 4.4 (from Ubuntu 14.04.5 update) fixes this.
-uname -r | grep -q ^3\.19 && export CRIU_PMC_OFF=1
+cat /proc/self/fdinfo/1
 
+chmod a+w -R .
 chmod 0777 test/
 chmod 0777 test/zdtm/static
 chmod 0777 test/zdtm/transition
+cat /proc/self/fdinfo/1
 
-./test/zdtm.py run -a -p 2 --keep-going $ZDTM_OPTS
+check_travis_timeout
+./test/zdtm.py run -a -p 4 --keep-going
+cat /proc/self/fdinfo/1
 
-KERN_MAJ=`uname -r | cut -d. -f1`
-KERN_MIN=`uname -r | cut -d. -f2`
-if [ $KERN_MAJ -ge "4" ] && [ $KERN_MIN -ge "18" ]; then
-	LAZY_EXCLUDE="-x cmdlinenv00 -x maps007"
-else
-	LAZY_EXCLUDE="-x maps007 -x fork -x fork2 -x uffd-events -x cgroupns
-		      -x socket_listen -x socket_listen6 -x cmdlinenv00
-		      -x socket_close_data01 -x file_read -x lazy-thp -x futex"
-fi
-LAZY_EXCLUDE="$LAZY_EXCLUDE -x maps04"
-
-# Starting with 5.4 kernel requires SYS_CAP_PTRACE to use uffd events; as such
-# we cannot run lazy-pages tests in uns
-LAZY_FLAVORS=""
-if [ $KERN_MAJ -ge "5" ] && [ $KERN_MIN -ge "4" ]; then
-    LAZY_FLAVORS = "-f h,ns"
-fi
-
-LAZY_TESTS=.*\(maps0\|uffd-events\|lazy-thp\|futex\|fork\).*
-LAZY_OPTS="-p 2 -T $LAZY_TESTS $LAZY_EXCLUDE $LAZY_FLAVORS $ZDTM_OPTS"
-
-./test/zdtm.py run $LAZY_OPTS --lazy-pages
-./test/zdtm.py run $LAZY_OPTS --remote-lazy-pages
-./test/zdtm.py run $LAZY_OPTS --remote-lazy-pages --tls
-
+check_travis_timeout
 bash ./test/jenkins/criu-fault.sh
+
+check_travis_timeout
 bash ./test/jenkins/criu-fcg.sh
+check_travis_timeout
 bash ./test/jenkins/criu-inhfd.sh
 
-if [ -z "$SKIP_EXT_DEV_TEST" ]; then
-	make -C test/others/mnt-ext-dev/ run
-fi
+check_travis_timeout
+make -C test/others/mnt-ext-dev/ run
 #make -C test/others/exec/ run
 make -C test/others/make/ run CC="$CC"
 make -C test/others/shell-job/ run
 make -C test/others/rpc/ run
 
+check_travis_timeout
 ./test/zdtm.py run -t zdtm/static/env00 --sibling
 
+check_travis_timeout
 ./test/zdtm.py run -t zdtm/transition/maps007 --pre 2 --dedup
+
+check_travis_timeout
 ./test/zdtm.py run -t zdtm/transition/maps007 --pre 2 --noauto-dedup
+
+check_travis_timeout
 ./test/zdtm.py run -t zdtm/transition/maps007 --pre 2 --page-server
+
+check_travis_timeout
 ./test/zdtm.py run -t zdtm/transition/maps007 --pre 2 --page-server --dedup
 
+check_travis_timeout
 ./test/zdtm.py run -t zdtm/static/socket-tcp-local --norst
 
+check_travis_timeout
 ip net add test
 ./test/zdtm.py run -t zdtm/static/env00 -f h --join-ns
 
+check_travis_timeout
 # RPC testing
 ./test/zdtm.py run -t zdtm/static/env00 --rpc		# Basic
 ./test/zdtm.py run -t zdtm/static/env00 --rpc --pre 2 --page-server
@@ -193,7 +213,34 @@ ip net add test
 ./test/zdtm.py run -t zdtm/static/env00 -k always
 ./test/crit-recode.py
 
-# libcriu testing
-make -C test/others/libcriu run
-
 make -C test/others/shell-job
+
+check_travis_timeout
+./test/zdtm.py run -p 2 -T zdtm/static/maps* --lazy-pages
+./test/zdtm.py run -t zdtm/static/env00 --lazy-pages --pre 2
+./test/zdtm.py run -t zdtm/static/env00 --remote-lazy-pages
+
+check_travis_timeout
+git clean -dxf test/zdtm
+make V=1 COMPAT_TEST=y -C test/zdtm/static/ env00
+./test/zdtm.py run -t zdtm/static/env00 -f h
+
+dmesg
+
+if [ -f /proc/lockdep ]; then
+	cat /proc/lockdep | grep WARNING && exit 1 || true
+fi
+
+cat /proc/sys/kernel/tainted
+[ "`cat /proc/sys/kernel/tainted`" = "0" ] ||	exit 1
+
+#check_travis_timeout
+#pip install flake8
+#make lint
+#
+## Check that help output fits into 80 columns
+#WIDTH=$(./criu/criu --help | wc --max-line-length)
+#if [ "$WIDTH" -gt 80 ]; then
+#	echo "criu --help output does not obey 80 characters line width!"
+#	exit 1
+#fi

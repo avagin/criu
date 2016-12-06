@@ -125,7 +125,7 @@ def check_core_files():
     if not reports:
         return False
 
-    while subprocess.Popen(r"ps axf | grep 'abrt\.sh'",
+    while subprocess.Popen(r"ps axf --width 200 | grep 'abrt\.sh'",
                            shell=True).wait() == 0:
         time.sleep(1)
 
@@ -351,7 +351,7 @@ def wait_pid_die(pid, who, tmo=30):
         stime *= 2
     else:
         subprocess.Popen(["ps", "-p", str(pid)]).wait()
-        subprocess.Popen(["ps", "axf", str(pid)]).wait()
+        subprocess.Popen(["ps", "axf", "--width", "200",  str(pid)]).wait()
         raise test_fail_exc("%s die" % who)
 
 
