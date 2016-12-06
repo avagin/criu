@@ -5,10 +5,7 @@ mkdir -p /imgs
 rm -rf /imgs/*
 f=`lsof -p $1 | grep /run/systemd/sessions | awk '{ print $9 }'`
 echo $f
-./criu/criu dump -D /imgs -o dump.log -t $1 -j --tcp-established --ext-unix-sk -v4 -l || {
-	cat /imgs/dump.log > /proc/$1/fd/1
-	exit 1
-}
+./criu/criu dump -D /imgs -o dump.log -t $1 -j --tcp-established --ext-unix-sk -v4 -l
 echo $?
 
 ./crit/crit show /imgs/tty-info.img  | sed 's/"index": \([0-9]*\)/"index": 1\1/' | ./crit/crit encode > /imgs/tty-info.img.new
