@@ -1,10 +1,11 @@
-#!/bin/sh
+#!/bin/bash
 set -x -e
 
 TRAVIS_PKGS="protobuf-c-compiler libprotobuf-c0-dev libaio-dev
 		libprotobuf-dev protobuf-compiler python-ipaddr libcap-dev
-		libnl-3-dev gcc-multilib gdb bash python-protobuf
-		libnet-dev util-linux asciidoc xmlto libnl-route-3-dev"
+		libnl-3-dev gcc-multilib libc6-dev-i386 gdb bash python-protobuf
+		libnet-dev util-linux asciidoc xmlto libnl-route-3-dev
+		kexec-tools libssl-dev libelf-dev strace"
 
 travis_prep () {
 	[ -n "$SKIP_TRAVIS_PREP" ] && return
@@ -40,12 +41,11 @@ travis_prep () {
 	apt-get install -qq --no-install-recommends $TRAVIS_PKGS
 	pip install junit-xml
 	chmod a+x $HOME
+	pip install dropbox
 }
 
 travis_prep
 
-ulimit -c unlimited
-echo "|`pwd`/test/abrt.sh %P %p %s %e" > /proc/sys/kernel/core_pattern
 
 export GCOV
 time make CC="$CC" -j4
@@ -53,6 +53,15 @@ time make CC="$CC" -j4
 [ -n "$SKIP_TRAVIS_TEST" ] && return
 
 time make CC="$CC" -j4 -C test/zdtm
+
+./criu/criu check --extra --all || echo $?
+python test/zdtm.py run -t zdtm/static/env00
+
+./scripts/travis/kexec.sh
+
+exit 0
+ulimit -c unlimited
+echo "|`pwd`/test/abrt.sh %P %p %s %e" > /proc/sys/kernel/core_pattern
 
 [ -f "$CCACHE_LOGFILE" ] && cat $CCACHE_LOGFILE
 
@@ -71,11 +80,12 @@ export SKIP_PREP=1
 # Kernel 4.4 (from Ubuntu 14.04.5 update) fixes this.
 uname -r | grep -q ^3\.19 && export CRIU_PMC_OFF=1
 
+chmod a+w -R .
 chmod 0777 test/
 chmod 0777 test/zdtm/static
 chmod 0777 test/zdtm/transition
 
-./test/zdtm.py run -a -p 2
+./test/zdtm.py run -a -p 2 --keep-going
 
 KERN_MAJ=`uname -r | cut -d. -f1`
 KERN_MIN=`uname -r | cut -d. -f2`
@@ -119,6 +129,21 @@ ip net add test
 ./test/zdtm.py run -t zdtm/static/ptrace_sig -f h --rpc # Error handling (crfail test)
 
 ./test/zdtm.py run --empty-ns -T zdtm/static/socket-tcp*-local --iter 2
+./test/zdtm.py run -t zdtm/static/env00 --lazy-pages --pre 2
+./test/zdtm.py run -t zdtm/static/env00 --remote-lazy-pages
+
+git clean -dxf test/zdtm
+make COMPAT_TEST=y -C test/zdtm/static/ env00
+./test/zdtm.py run -t zdtm/static/env00 -f h
+
+dmesg
+
+if [ -f /proc/lockdep ]; then
+	cat /proc/lockdep | grep WARNING && exit 1 || true
+fi
+
+cat /proc/sys/kernel/tainted
+[ "`cat /proc/sys/kernel/tainted`" = "0" ] ||	exit 1
 
 pip install flake8
 make lint
