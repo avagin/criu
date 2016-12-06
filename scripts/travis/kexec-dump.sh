@@ -34,5 +34,7 @@ EOF
 chmod +x /etc/network/if-pre-up.d/iptablesload
 iptables-save -c > /etc/iptables.rules
 
+kernel=`ls  /boot/vmlinuz* | tail -n 1 | sed 's/.*vmlinuz-\(.*\)/\1/'`
+echo $kernel
 kexec -l /boot/vmlinuz-`uname -r` --initrd=/boot/initrd.img-`uname -r` --reuse-cmdline
 kexec -e
