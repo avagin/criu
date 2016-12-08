@@ -1,14 +1,24 @@
+#include <compel/plugins/std/syscall.h>
+#include <compel/plugins/std/infect.h>
+
+#include "common/scm.h"
+#include "uapi/compel/plugins/std/fds.h"
+#include "uapi/compel/plugins/std/string.h"
+#include "uapi/compel/plugins/std/log.h"
+
 #include "common/compiler.h"
 #include "common/lock.h"
-#include "int.h"
-#include "util-pie.h"
 
-#include "criu-log.h"
+#define pr_err(fmt, ...)	print_on_level(1, fmt, ##__VA_ARGS__)
+#define pr_info(fmt, ...)	print_on_level(3, fmt, ##__VA_ARGS__)
+#define pr_debug(fmt, ...)	print_on_level(4, fmt, ##__VA_ARGS__)
+
 #include "common/bug.h"
-#include "sigframe.h"
-#include "infect-rpc.h"
-#include "infect-pie.h"
-#include "compel/include/rpc-pie-priv.h"
+
+#include "uapi/compel/asm/sigframe.h"
+#include "uapi/compel/infect-rpc.h"
+
+#include "rpc-pie-priv.h"
 
 static int tsock = -1;
 
@@ -79,7 +89,7 @@ static int fini(void)
 		  new_sp, RT_SIGFRAME_REGIP(sigframe));
 
 	sys_close(tsock);
-	log_set_fd(-1);
+	std_log_set_fd(-1);
 
 	fini_sigreturn(new_sp);
 
@@ -130,20 +140,6 @@ out:
 	return 0;
 }
 
-static noinline int unmap_itself(void *data)
-{
-	struct parasite_unmap_args *args = data;
-
-	sys_munmap((void*)(uintptr_t)args->parasite_start, args->parasite_len);
-	/*
-	 * This call to sys_munmap must never return. Instead, the controlling
-	 * process must trap us on the exit from munmap.
-	 */
-
-	BUG();
-	return -1;
-}
-
 static noinline __used int parasite_init_daemon(void *data)
 {
 	struct parasite_init_args *args = data;
@@ -168,8 +164,8 @@ static noinline __used int parasite_init_daemon(void *data)
 
 	ret = recv_fd(tsock);
 	if (ret >= 0) {
-		log_set_fd(ret);
-		log_set_loglevel(args->log_level);
+		std_log_set_fd(ret);
+		std_log_set_loglevel(args->log_level);
 		ret = 0;
 	} else
 		goto err;
@@ -192,30 +188,8 @@ int __used __parasite_entry parasite_service(unsigned int cmd, void *args)
 {
 	pr_info("Parasite cmd %d/%x process\n", cmd, cmd);
 
-	switch (cmd) {
-	case PARASITE_CMD_INIT_DAEMON:
+	if (cmd == PARASITE_CMD_INIT_DAEMON)
 		return parasite_init_daemon(args);
-	case PARASITE_CMD_UNMAP:
-		return unmap_itself(args);
-	}
 
 	return parasite_trap_cmd(cmd, args);
-}
-
-/*
- * Mainally, -fstack-protector is disabled for parasite.
- * But we share some object files, compiled for CRIU with parasite.
- * Those files (like cpu.c) may be compiled with stack protector
- * support. We can't use gcc-ld provided stackprotector callback,
- * as Glibc is unmapped. Let's just try to cure application in
- * case of stack smashing in parasite.
- */
-void __stack_chk_fail(void)
-{
-	/*
-	 * Smash didn't happen in printing part, as it's not shared
-	 * with CRIU, therefore compiled with -fnostack-protector.
-	 */
-	pr_err("Stack smash detected in parasite\n");
-	fini();
 }

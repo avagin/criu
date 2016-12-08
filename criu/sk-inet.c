@@ -11,6 +11,8 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include "../soccr/soccr.h"
+
 #include "libnetlink.h"
 #include "cr_options.h"
 #include "imgset.h"
@@ -115,13 +117,13 @@ static int can_dump_inet_sk(const struct inet_sk_desc *sk)
 {
 	BUG_ON((sk->sd.family != AF_INET) && (sk->sd.family != AF_INET6));
 
-	if (sk->shutdown) {
-		pr_err("Can't dump shutdown inet socket %x\n",
-				sk->sd.ino);
-		return 0;
-	}
-
 	if (sk->type == SOCK_DGRAM) {
+		if (sk->shutdown) {
+			pr_err("Can't dump shutdown inet socket %x\n",
+					sk->sd.ino);
+			return 0;
+		}
+
 		if (sk->wqlen != 0) {
 			pr_err("Can't dump corked dgram socket %x\n",
 					sk->sd.ino);
@@ -163,6 +165,12 @@ static int can_dump_inet_sk(const struct inet_sk_desc *sk)
 		}
 		break;
 	case TCP_ESTABLISHED:
+	case TCP_FIN_WAIT2:
+	case TCP_FIN_WAIT1:
+	case TCP_CLOSE_WAIT:
+	case TCP_LAST_ACK:
+	case TCP_CLOSING:
+	case TCP_SYN_SENT:
 		if (!opts.tcp_established_ok) {
 			pr_err("Connected TCP socket, consider using --%s option.\n",
 					SK_EST_PARAM);
@@ -180,10 +188,24 @@ static int can_dump_inet_sk(const struct inet_sk_desc *sk)
 	return 1;
 }
 
+static int dump_sockaddr(union libsoccr_addr *sa, u32 *pb_port, u32 *pb_addr)
+{
+	if (sa->sa.sa_family == AF_INET) {
+		memcpy(pb_addr, &sa->v4.sin_addr, sizeof(sa->v4.sin_addr));
+		*pb_port = ntohs(sa->v4.sin_port);
+		return 0;
+	} if (sa->sa.sa_family == AF_INET6) {
+		*pb_port = ntohs(sa->v6.sin6_port);
+		memcpy(pb_addr, &sa->v6.sin6_addr, sizeof(sa->v6.sin6_addr));
+		return 0;
+	}
+	return -1;
+}
+
 static struct inet_sk_desc *gen_uncon_sk(int lfd, const struct fd_parms *p, int proto)
 {
 	struct inet_sk_desc *sk;
-	char address;
+	union libsoccr_addr address;
 	socklen_t aux;
 	int ret;
 
@@ -191,25 +213,39 @@ static struct inet_sk_desc *gen_uncon_sk(int lfd, const struct fd_parms *p, int 
 	if (!sk)
 		goto err;
 
-	/* It should has no peer name */
-	aux = sizeof(address);
+	ret  = do_dump_opt(lfd, SOL_SOCKET, SO_DOMAIN, &sk->sd.family, sizeof(sk->sd.family));
+	ret |= do_dump_opt(lfd, SOL_SOCKET, SO_TYPE, &sk->type, sizeof(sk->type));
+	if (ret)
+		goto err;
+
+	if (sk->sd.family == AF_INET)
+		aux = sizeof(struct sockaddr_in);
+	else if (sk->sd.family == AF_INET6)
+		aux = sizeof(struct sockaddr_in6);
+	else {
+		pr_err("Unsupported socket family: %d\n", sk->sd.family);
+		goto err;
+	}
+
 	ret = getsockopt(lfd, SOL_SOCKET, SO_PEERNAME, &address, &aux);
 	if (ret < 0) {
 		if (errno != ENOTCONN) {
 			pr_perror("Unexpected error returned from unconnected socket");
 			goto err;
 		}
-	} else if (ret == 0) {
-		pr_err("Name resolved on unconnected socket\n");
+	} else if (dump_sockaddr(&address, &sk->dst_port, sk->dst_addr))
 		goto err;
-	}
+
+	ret = getsockname(lfd, &address.sa, &aux);
+	if (ret < 0) {
+		if (errno != ENOTCONN) {
+			pr_perror("Unexpected error returned from unconnected socket");
+			goto err;
+		}
+	} else if (dump_sockaddr(&address, &sk->src_port, sk->src_addr))
+		goto err;
 
 	sk->sd.ino = p->stat.st_ino;
-
-	ret  = do_dump_opt(lfd, SOL_SOCKET, SO_DOMAIN, &sk->sd.family, sizeof(sk->sd.family));
-	ret |= do_dump_opt(lfd, SOL_SOCKET, SO_TYPE, &sk->type, sizeof(sk->type));
-	if (ret)
-		goto err;
 
 	if (proto == IPPROTO_TCP) {
 		struct tcp_info info;
@@ -304,7 +340,6 @@ static int do_dump_one_inet_fd(int lfd, u32 id, const struct fd_parms *p, int fa
 	ie.family	= family;
 	ie.proto	= proto;
 	ie.type		= sk->type;
-	ie.state	= sk->state;
 	ie.src_port	= sk->src_port;
 	ie.dst_port	= sk->dst_port;
 	ie.backlog	= sk->wqlen;
@@ -365,9 +400,6 @@ static int do_dump_one_inet_fd(int lfd, u32 id, const struct fd_parms *p, int fa
 	if (dump_socket_opts(lfd, &skopts))
 		goto err;
 
-	if (pb_write_one(img_from_set(glob_imgset, CR_FD_INETSK), &ie, PB_INET_SK))
-		goto err;
-
 	pr_info("Dumping inet socket at %d\n", p->fd);
 	show_one_inet("Dumping", sk);
 	show_one_inet_img("Dumped", &ie);
@@ -382,6 +414,11 @@ static int do_dump_one_inet_fd(int lfd, u32 id, const struct fd_parms *p, int fa
 		err = 0;
 		break;
 	}
+
+	ie.state = sk->state;
+
+	if (pb_write_one(img_from_set(glob_imgset, CR_FD_INETSK), &ie, PB_INET_SK))
+		goto err;
 err:
 	release_skopts(&skopts);
 	xfree(ie.src_addr);
@@ -454,7 +491,7 @@ static struct file_desc_ops inet_desc_ops = {
 
 static inline int tcp_connection(InetSkEntry *ie)
 {
-	return (ie->proto == IPPROTO_TCP) && (ie->state == TCP_ESTABLISHED);
+	return (ie->proto == IPPROTO_TCP && ie->dst_port);
 }
 
 static int collect_one_inetsk(void *o, ProtobufCMessage *base, struct cr_img *i)
@@ -591,6 +628,11 @@ static int open_inet_sk(struct file_desc *d)
 	if (restore_opt(sk, SOL_SOCKET, SO_REUSEADDR, &yes))
 		goto err;
 
+	if (ie->src_port) {
+		if (inet_bind(sk, ii))
+			goto err;
+	}
+
 	if (tcp_connection(ie)) {
 		if (!opts.tcp_established_ok) {
 			pr_err("Connected TCP socket in image\n");
@@ -611,12 +653,6 @@ static int open_inet_sk(struct file_desc *d)
 	 * Listen sockets are easiest ones -- simply
 	 * bind() and listen(), and that's all.
 	 */
-
-	if (ie->src_port) {
-		if (inet_bind(sk, ii))
-			goto err;
-	}
-
 	if (ie->state == TCP_LISTEN) {
 		if (ie->proto != IPPROTO_TCP) {
 			pr_err("Wrong socket in listen state %d\n", ie->proto);
@@ -632,7 +668,7 @@ static int open_inet_sk(struct file_desc *d)
 		mutex_unlock(&ii->port->reuseaddr_lock);
 	}
 
-	if (ie->state == TCP_ESTABLISHED &&
+	if (ie->dst_port &&
 			inet_connect(sk, ii))
 		goto err;
 done:
@@ -654,12 +690,7 @@ err:
 	return -1;
 }
 
-union sockaddr_inet {
-	struct sockaddr_in v4;
-	struct sockaddr_in6 v6;
-};
-
-static int restore_sockaddr(union sockaddr_inet *sa,
+int restore_sockaddr(union libsoccr_addr *sa,
 		int family, u32 pb_port, u32 *pb_addr, u32 ifindex)
 {
 	BUILD_BUG_ON(sizeof(sa->v4.sin_addr.s_addr) > PB_ALEN_INET * sizeof(u32));
@@ -694,7 +725,7 @@ static int restore_sockaddr(union sockaddr_inet *sa,
 int inet_bind(int sk, struct inet_sk_info *ii)
 {
 	bool rst_freebind = false;
-	union sockaddr_inet addr;
+	union libsoccr_addr addr;
 	int addr_size, ifindex = 0;
 
 	if (ii->ie->ifname) {
@@ -750,7 +781,7 @@ int inet_bind(int sk, struct inet_sk_info *ii)
 
 int inet_connect(int sk, struct inet_sk_info *ii)
 {
-	union sockaddr_inet addr;
+	union libsoccr_addr addr;
 	int addr_size;
 
 	addr_size = restore_sockaddr(&addr, ii->ie->family,

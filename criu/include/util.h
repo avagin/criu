@@ -247,7 +247,7 @@ static inline bool issubpath(const char *path, const char *sub_path)
 /*
  * mkdir -p
  */
-int mkdirpat(int fd, const char *path);
+int mkdirpat(int fd, const char *path, int mode);
 
 /*
  * Tests whether a path is a prefix of another path. This is different than
@@ -280,5 +280,20 @@ int setup_tcp_client(char *addr);
 
 #define LAST_PID_PATH		"sys/kernel/ns_last_pid"
 #define PID_MAX_PATH		"sys/kernel/pid_max"
+
+/*
+ * Helpers to organize asynchronous reading from a bunch
+ * of file descriptors.
+ */
+#include <sys/epoll.h>
+
+struct epoll_rfd {
+	int fd;
+	int (*revent)(struct epoll_rfd *);
+};
+
+extern int epoll_add_rfd(int epfd, struct epoll_rfd *);
+extern int epoll_run_rfds(int epfd, struct epoll_event *evs, int nr_fds, int tmo);
+extern int epoll_prepare(int nr_events, struct epoll_event **evs);
 
 #endif /* __CR_UTIL_H__ */

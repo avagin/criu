@@ -1554,7 +1554,7 @@ int cr_pre_dump_tasks(pid_t pid)
 	if (vdso_init())
 		goto err;
 
-	if (connect_to_page_server())
+	if (connect_to_page_server_to_send() < 0)
 		goto err;
 
 	if (setup_alarm_handler())
@@ -1666,7 +1666,7 @@ static int cr_dump_finish(int ret)
 		clean_cr_time_mounts();
 	}
 
-	if (opts.lazy_pages)
+	if (!ret && opts.lazy_pages)
 		ret = cr_lazy_mem_dump();
 
 	pstree_switch_state(root_item,
@@ -1746,7 +1746,7 @@ int cr_dump_tasks(pid_t pid)
 			goto err;
 	}
 
-	if (connect_to_page_server())
+	if (connect_to_page_server_to_send() < 0)
 		goto err;
 
 	if (setup_alarm_handler())

@@ -27,6 +27,13 @@
 #include "infect-priv.h"
 #include "infect-util.h"
 #include "rpc-pie-priv.h"
+#include "infect-util.h"
+
+#define __sys(foo)	foo
+#define __memcpy	memcpy
+
+#include "common/scm.h"
+#include "common/scm-code.c"
 
 #define UNIX_PATH_MAX (sizeof(struct sockaddr_un) - \
 			(size_t)((struct sockaddr_un *) 0)->sun_path)
@@ -45,6 +52,8 @@
 
 #define SI_EVENT(_si_code)	(((_si_code) & 0xFFFF) >> 8)
 
+static int prepare_thread(int pid, struct thread_ctx *ctx);
+
 static inline void close_safe(int *pfd)
 {
 	if (*pfd > -1) {
@@ -53,7 +62,66 @@ static inline void close_safe(int *pfd)
 	}
 }
 
+static int parse_pid_status(int pid, struct seize_task_status *ss)
+{
+	char aux[128];
+	FILE *f;
+
+	sprintf(aux, "/proc/%d/status", pid);
+	f = fopen(aux, "r");
+	if (!f)
+		return -1;
+
+	ss->ppid = -1; /* Not needed at this point */
+	ss->seccomp_mode = SECCOMP_MODE_DISABLED;
+
+	while (fgets(aux, sizeof(aux), f)) {
+		if (!strncmp(aux, "State:", 6)) {
+			ss->state = aux[7];
+			continue;
+		}
+
+		if (!strncmp(aux, "Seccomp:", 8)) {
+			if (sscanf(aux + 9, "%d", &ss->seccomp_mode) != 1)
+				goto err_parse;
+
+			continue;
+		}
+
+		if (!strncmp(aux, "ShdPnd:", 7)) {
+			if (sscanf(aux + 7, "%llx", &ss->shdpnd) != 1)
+				goto err_parse;
+
+			continue;
+		}
+		if (!strncmp(aux, "SigPnd:", 7)) {
+			if (sscanf(aux + 7, "%llx", &ss->sigpnd) != 1)
+				goto err_parse;
+
+			continue;
+		}
+	}
+
+	fclose(f);
+	return 0;
+
+err_parse:
+	fclose(f);
+	return -1;
+}
+
 int compel_stop_task(int pid)
+{
+	int ret;
+	struct seize_task_status ss;
+
+	ret = compel_interrupt_task(pid);
+	if (ret == 0)
+		ret = compel_wait_task(pid, -1, parse_pid_status, &ss);
+	return ret;
+}
+
+int compel_interrupt_task(int pid)
 {
 	int ret;
 
@@ -259,7 +327,7 @@ err:
 	return -1;
 }
 
-int compel_unseize_task(pid_t pid, int orig_st, int st)
+int compel_resume_task(pid_t pid, int orig_st, int st)
 {
 	pr_debug("\tUnseizing %d into %d\n", pid, st);
 
@@ -311,20 +379,27 @@ static int gen_parasite_saddr(struct sockaddr_un *saddr, int key)
 static int prepare_tsock(struct parasite_ctl *ctl, pid_t pid,
 		struct parasite_init_args *args)
 {
-	static int ssock = -1;
+	int ssock = -1;
+	socklen_t sk_len;
+	struct sockaddr_un addr;
 
 	pr_info("Putting tsock into pid %d\n", pid);
 	args->h_addr_len = gen_parasite_saddr(&args->h_addr, getpid());
 
+	ssock = ctl->ictx.sock;
+	sk_len = sizeof(addr);
+
 	if (ssock == -1) {
-		ssock = *ctl->ictx.p_sock;
-		if (ssock == -1) {
-			pr_err("No socket in ictx\n");
-			goto err;
-		}
+		pr_err("No socket in ictx\n");
+		goto err;
+	}
 
-		*ctl->ictx.p_sock = -1;
+	if (getsockname(ssock, (struct sockaddr *) &addr, &sk_len) < 0) {
+		pr_perror("Unable to get name for a socket");
+		return -1;
+	}
 
+	if (sk_len == sizeof(addr.sun_family)) {
 		if (bind(ssock, (struct sockaddr *)&args->h_addr, args->h_addr_len) < 0) {
 			pr_perror("Can't bind socket");
 			goto err;
@@ -368,16 +443,9 @@ static int setup_child_handler(struct parasite_ctl *ctl)
 	return 0;
 }
 
-static int restore_child_handler()
+static int restore_child_handler(struct parasite_ctl *ctl)
 {
-	struct sigaction sa = {
-		.sa_handler	= SIG_DFL, /* XXX -- should be original? */
-		.sa_flags	= SA_SIGINFO | SA_RESTART,
-	};
-
-	sigemptyset(&sa.sa_mask);
-	sigaddset(&sa.sa_mask, SIGCHLD);
-	if (sigaction(SIGCHLD, &sa, NULL)) {
+	if (sigaction(SIGCHLD, &ctl->ictx.orig_handler, NULL)) {
 		pr_perror("Unable to setup SIGCHLD handler");
 		return -1;
 	}
@@ -605,7 +673,7 @@ static int parasite_start_daemon(struct parasite_ctl *ctl)
 	 * while in daemon it is not such.
 	 */
 
-	if (compel_get_task_regs(pid, ctl->orig.regs, ictx->save_regs, ictx->regs_arg)) {
+	if (get_task_regs(pid, ctl->orig.regs, ictx->save_regs, ictx->regs_arg)) {
 		pr_err("Can't obtain regs for thread %d\n", pid);
 		return -1;
 	}
@@ -770,10 +838,18 @@ int compel_map_exchange(struct parasite_ctl *ctl, unsigned long size)
 	return ret;
 }
 
+static inline unsigned long total_pie_size(size_t blob_size, size_t nr_gp)
+{
+	return round_up(blob_size + nr_gp * sizeof(long), page_size());
+}
+
 int compel_infect(struct parasite_ctl *ctl, unsigned long nr_threads, unsigned long args_size)
 {
 	int ret;
-	unsigned long p, map_exchange_size, parasite_size = 0;
+	unsigned long p, map_exchange_size, pie_size, parasite_size = 0;
+
+	if (ctl->pblob.parasite_type != COMPEL_BLOB_CHEADER)
+		goto err;
 
 	if (ctl->ictx.log_fd < 0)
 		goto err;
@@ -788,7 +864,7 @@ int compel_infect(struct parasite_ctl *ctl, unsigned long nr_threads, unsigned l
 	 * without using ptrace at all.
 	 */
 
-	parasite_size = ctl->pblob.size;
+	pie_size = parasite_size = total_pie_size(ctl->pblob.hdr.bsize, ctl->pblob.hdr.nr_gotpcrel);
 
 	ctl->args_size = round_up(args_size, PAGE_SIZE);
 	parasite_size += ctl->args_size;
@@ -804,14 +880,14 @@ int compel_infect(struct parasite_ctl *ctl, unsigned long nr_threads, unsigned l
 
 	pr_info("Putting parasite blob into %p->%p\n", ctl->local_map, ctl->remote_map);
 
-	ctl->parasite_ip = (unsigned long)(ctl->remote_map + ctl->pblob.parasite_ip_off);
-	ctl->addr_cmd = ctl->local_map + ctl->pblob.addr_cmd_off;
-	ctl->addr_args = ctl->local_map + ctl->pblob.addr_arg_off;
+	ctl->parasite_ip = (unsigned long)(ctl->remote_map + ctl->pblob.hdr.parasite_ip_off);
+	ctl->addr_cmd = ctl->local_map + ctl->pblob.hdr.addr_cmd_off;
+	ctl->addr_args = ctl->local_map + ctl->pblob.hdr.addr_arg_off;
 
-	memcpy(ctl->local_map, ctl->pblob.mem, ctl->pblob.size);
-	if (ctl->pblob.nr_relocs)
-		compel_relocs_apply(ctl->local_map, ctl->remote_map, ctl->pblob.bsize,
-				    ctl->pblob.relocs, ctl->pblob.nr_relocs);
+	memcpy(ctl->local_map, ctl->pblob.hdr.mem, pie_size);
+	if (ctl->pblob.hdr.nr_relocs)
+		compel_relocs_apply(ctl->local_map, ctl->remote_map, ctl->pblob.hdr.bsize,
+				    ctl->pblob.hdr.relocs, ctl->pblob.hdr.nr_relocs);
 
 	p = parasite_size;
 
@@ -836,7 +912,25 @@ err:
 	return -1;
 }
 
-int compel_prepare_thread(int pid, struct thread_ctx *ctx)
+struct parasite_thread_ctl *compel_prepare_thread(struct parasite_ctl *ctl, int pid)
+{
+	struct parasite_thread_ctl *tctl;
+
+	tctl = xmalloc(sizeof(*tctl));
+	if (tctl) {
+		if (prepare_thread(pid, &tctl->th)) {
+			xfree(tctl);
+			tctl = NULL;
+		} else {
+			tctl->tid = pid;
+			tctl->ctl = ctl;
+		}
+	}
+
+	return tctl;
+}
+
+static int prepare_thread(int pid, struct thread_ctx *ctx)
 {
 	if (ptrace(PTRACE_GETSIGMASK, pid, sizeof(k_rtsigset_t), &ctx->sigmask)) {
 		pr_perror("can't get signal blocking mask for %d", pid);
@@ -851,7 +945,16 @@ int compel_prepare_thread(int pid, struct thread_ctx *ctx)
 	return 0;
 }
 
-struct parasite_ctl *compel_prepare(int pid)
+void compel_release_thread(struct parasite_thread_ctl *tctl)
+{
+	/*
+	 * No stuff to cure in thread here, all routines leave the
+	 * guy intact (for now)
+	 */
+	xfree(tctl);
+}
+
+struct parasite_ctl *compel_prepare_noctx(int pid)
 {
 	struct parasite_ctl *ctl = NULL;
 
@@ -867,7 +970,7 @@ struct parasite_ctl *compel_prepare(int pid)
 	ctl->tsock = -1;
 	ctl->ictx.log_fd = -1;
 
-	if (compel_prepare_thread(pid, &ctl->orig))
+	if (prepare_thread(pid, &ctl->orig))
 		goto err;
 
 	ctl->rpid = pid;
@@ -879,6 +982,217 @@ struct parasite_ctl *compel_prepare(int pid)
 err:
 	xfree(ctl);
 	return NULL;
+}
+
+/*
+ * Find first executable VMA that would fit the initial
+ * syscall injection.
+ */
+static unsigned long find_executable_area(int pid)
+{
+	char aux[128];
+	FILE *f;
+	unsigned long ret = (unsigned long)MAP_FAILED;
+
+	sprintf(aux, "/proc/%d/maps", pid);
+	f = fopen(aux, "r");
+	if (!f)
+		goto out;
+
+	while (fgets(aux, sizeof(aux), f)) {
+		unsigned long start, end;
+		char *f;
+
+		start = strtoul(aux, &f, 16);
+		end = strtoul(f + 1, &f, 16);
+
+		/* f now points at " rwx" (yes, with space) part */
+		if (f[3] == 'x') {
+			BUG_ON(end - start < PARASITE_START_AREA_MIN);
+			ret = start;
+			break;
+		}
+	}
+
+	fclose(f);
+out:
+	return ret;
+}
+
+/*
+ * This routine is to create PF_UNIX/SOCK_SEQPACKET socket
+ * in the target net namespace
+ */
+static int make_sock_for(int pid)
+{
+	int ret, mfd, fd, sk = -1;
+	char p[32];
+
+	pr_debug("Preparing seqsk for %d\n", pid);
+
+	sprintf(p, "/proc/%d/ns/net", pid);
+	fd = open(p, O_RDONLY);
+	if (fd < 0) {
+		pr_perror("Can't open %p", p);
+		goto out;
+	}
+
+	mfd = open("/proc/self/ns/net", O_RDONLY);
+	if (mfd < 0) {
+		pr_perror("Can't open self netns");
+		goto out_c;
+	}
+
+	if (setns(fd, CLONE_NEWNET)) {
+		pr_perror("Can't setup target netns");
+		goto out_cm;
+	}
+
+	sk = socket(PF_UNIX, SOCK_SEQPACKET | SOCK_NONBLOCK, 0);
+	if (sk < 0)
+		pr_perror("Can't create seqsk");
+
+	ret = setns(mfd, CLONE_NEWNET);
+	if (ret) {
+		pr_perror("Can't restore former netns");
+		if (sk >= 0)
+			close(sk);
+		sk = -1;
+	}
+out_cm:
+	close(mfd);
+out_c:
+	close(fd);
+out:
+	return sk;
+}
+
+static int simple_open_proc(int pid, int mode, const char *fmt, ...)
+{
+	int l;
+	char path[128];
+	va_list args;
+
+	l = sprintf(path, "/proc/%d/", pid);
+
+	va_start(args, fmt);
+	vsnprintf(path + l, sizeof(path) - l, fmt, args);
+	va_end(args);
+
+	return open(path, mode);
+}
+
+static void handle_sigchld(int signal, siginfo_t *siginfo, void *data)
+{
+	int pid, status;
+
+	pid = waitpid(-1, &status, WNOHANG);
+	if (pid <= 0)
+		return;
+
+	pr_err("si_code=%d si_pid=%d si_status=%d\n",
+		siginfo->si_code, siginfo->si_pid, siginfo->si_status);
+
+	if (WIFEXITED(status))
+		pr_err("%d exited with %d unexpectedly\n", pid, WEXITSTATUS(status));
+	else if (WIFSIGNALED(status))
+		pr_err("%d was killed by %d unexpectedly: %s\n",
+			pid, WTERMSIG(status), strsignal(WTERMSIG(status)));
+	else if (WIFSTOPPED(status))
+		pr_err("%d was stopped by %d unexpectedly\n", pid, WSTOPSIG(status));
+
+	/* FIXME Should we exit? */
+	/* exit(1); */
+}
+
+struct plain_regs_struct {
+	user_regs_struct_t regs;
+	user_fpregs_struct_t fpregs;
+};
+
+static int save_regs_plain(void *to, user_regs_struct_t *r, user_fpregs_struct_t *f)
+{
+	struct plain_regs_struct *prs = to;
+
+	prs->regs = *r;
+	prs->fpregs = *f;
+
+	return 0;
+}
+
+#ifndef RT_SIGFRAME_UC_SIGMASK
+#define RT_SIGFRAME_UC_SIGMASK(sigframe)				\
+	(k_rtsigset_t*)&RT_SIGFRAME_UC(sigframe)->uc_sigmask
+#endif
+
+static int make_sigframe_plain(void *from, struct rt_sigframe *f, struct rt_sigframe *rtf, k_rtsigset_t *b)
+{
+	struct plain_regs_struct *prs = from;
+	k_rtsigset_t *blk_sigset;
+
+	/*
+	 * Make sure it's zeroified.
+	 */
+	memset(f, 0, sizeof(*f));
+
+	if (sigreturn_prep_regs_plain(f, &prs->regs, &prs->fpregs))
+		return -1;
+
+	blk_sigset = RT_SIGFRAME_UC_SIGMASK(f);
+	if (b)
+		memcpy(blk_sigset, b, sizeof(k_rtsigset_t));
+	else
+		memset(blk_sigset, 0, sizeof(k_rtsigset_t));
+
+	if (RT_SIGFRAME_HAS_FPU(f)) {
+		if (sigreturn_prep_fpu_frame_plain(f, rtf))
+			return -1;
+	}
+
+	/*
+	 * FIXME What about sas?
+	 * setup_sas(sigframe, core->thread_core->sas);
+	 */
+
+	return 0;
+}
+
+struct parasite_ctl *compel_prepare(int pid)
+{
+	struct parasite_ctl *ctl;
+	struct infect_ctx *ictx;
+
+	ctl = compel_prepare_noctx(pid);
+	if (ctl == NULL)
+		goto out;
+
+	ictx = &ctl->ictx;
+	ictx->task_size = compel_task_size();
+	ictx->open_proc = simple_open_proc;
+	ictx->syscall_ip = find_executable_area(pid);
+	ictx->child_handler = handle_sigchld;
+	sigaction(SIGCHLD, NULL, &ictx->orig_handler);
+
+	ictx->save_regs = save_regs_plain;
+	ictx->make_sigframe = make_sigframe_plain;
+	ictx->regs_arg = xmalloc(sizeof(struct plain_regs_struct));
+	if (ictx->regs_arg == NULL)
+		goto err;
+
+	if (ictx->syscall_ip == (unsigned long)MAP_FAILED)
+		goto err;
+	ictx->sock = make_sock_for(pid);
+	if (ictx->sock < 0)
+		goto err;
+
+out:
+	return ctl;
+
+err:
+	xfree(ictx->regs_arg);
+	xfree(ctl);
+	ctl = NULL;
+	goto out;
 }
 
 static bool task_in_parasite(struct parasite_ctl *ctl, user_regs_struct_t *regs)
@@ -896,7 +1210,7 @@ static int parasite_fini_seized(struct parasite_ctl *ctl)
 	enum trace_flags flag;
 
 	/* stop getting chld from parasite -- we're about to step-by-step it */
-	if (restore_child_handler())
+	if (restore_child_handler(ctl))
 		return -1;
 
 	/* Start to trace syscalls for each thread */
@@ -978,34 +1292,21 @@ int compel_stop_daemon(struct parasite_ctl *ctl)
 
 int compel_cure_remote(struct parasite_ctl *ctl)
 {
+	unsigned long ret;
+
 	if (compel_stop_daemon(ctl))
 		return -1;
 
 	if (!ctl->remote_map)
 		return 0;
 
-	/* Unseizing task with parasite -- it does it himself */
-	if (ctl->addr_cmd) {
-		struct parasite_unmap_args *args;
-
-		*ctl->addr_cmd = PARASITE_CMD_UNMAP;
-
-		args = compel_parasite_args(ctl, struct parasite_unmap_args);
-		args->parasite_start = (uintptr_t)ctl->remote_map;
-		args->parasite_len = ctl->map_length;
-		if (compel_unmap(ctl, ctl->parasite_ip))
-			return -1;
-	} else {
-		unsigned long ret;
-
-		compel_syscall(ctl, __NR(munmap, !compel_mode_native(ctl)), &ret,
-				(unsigned long)ctl->remote_map, ctl->map_length,
-				0, 0, 0, 0);
-		if (ret) {
-			pr_err("munmap for remote map %p, %lu returned %lu\n",
-					ctl->remote_map, ctl->map_length, ret);
-			return -1;
-		}
+	compel_syscall(ctl, __NR(munmap, !compel_mode_native(ctl)), &ret,
+			(unsigned long)ctl->remote_map, ctl->map_length,
+			0, 0, 0, 0);
+	if (ret) {
+		pr_err("munmap for remote map %p, %lu returned %lu\n",
+				ctl->remote_map, ctl->map_length, ret);
+		return -1;
 	}
 
 	return 0;
@@ -1048,10 +1349,11 @@ void *compel_parasite_args_s(struct parasite_ctl *ctl, int args_size)
 	return compel_parasite_args_p(ctl);
 }
 
-int compel_run_in_thread(pid_t pid, unsigned int cmd,
-					struct parasite_ctl *ctl,
-					struct thread_ctx *octx)
+int compel_run_in_thread(struct parasite_thread_ctl *tctl, unsigned int cmd)
 {
+	int pid = tctl->tid;
+	struct parasite_ctl *ctl = tctl->ctl;
+	struct thread_ctx *octx = &tctl->th;
 	void *stack = ctl->r_thread_stack;
 	user_regs_struct_t regs = octx->regs;
 	int ret;
@@ -1246,9 +1548,24 @@ int compel_mode_native(struct parasite_ctl *ctl)
 	return user_regs_native(&ctl->orig.regs);
 }
 
+static inline k_rtsigset_t *thread_ctx_sigmask(struct thread_ctx *tctx)
+{
+	return &tctx->sigmask;
+}
+
+k_rtsigset_t *compel_thread_sigmask(struct parasite_thread_ctl *tctl)
+{
+	return thread_ctx_sigmask(&tctl->th);
+}
+
 k_rtsigset_t *compel_task_sigmask(struct parasite_ctl *ctl)
 {
-	return &ctl->orig.sigmask;
+	return thread_ctx_sigmask(&ctl->orig);
+}
+
+int compel_get_thread_regs(struct parasite_thread_ctl *tctl, save_regs_t save, void * arg)
+{
+	return get_task_regs(tctl->tid, tctl->th.regs, save, arg);
 }
 
 struct infect_ctx *compel_infect_ctx(struct parasite_ctl *ctl)

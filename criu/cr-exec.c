@@ -137,7 +137,7 @@ int cr_exec(int pid, char **opt)
 		goto out;
 	}
 
-	if (compel_stop_task(pid))
+	if (compel_interrupt_task(pid))
 		goto out;
 
 	/*
@@ -192,7 +192,7 @@ int cr_exec(int pid, char **opt)
 out_cure:
 	compel_cure(ctl);
 out_unseize:
-	compel_unseize_task(pid, prev_state, prev_state);
+	compel_resume_task(pid, prev_state, prev_state);
 out:
 	return exit_code;
 }

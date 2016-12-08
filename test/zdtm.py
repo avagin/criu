@@ -681,8 +681,6 @@ class criu_cli:
 			print "Forcing %s fault" % fault
 			env = dict(os.environ, CRIU_FAULT = fault)
 		cr = subprocess.Popen(strace + [criu_bin, action] + args, env = env, preexec_fn = preexec)
-		if action == "lazy-pages":
-			return cr
 		return cr.wait()
 
 
@@ -769,9 +767,12 @@ class criu:
 		self.__iter = 0
 		self.__prev_dump_iter = None
 		self.__page_server = (opts['page_server'] and True or False)
-		self.__lazy_pages = (opts['lazy_pages'] and True or False)
+		self.__remote_lazy_pages = (opts['remote_lazy_pages'] and True or False)
+		self.__lazy_pages = (self.__remote_lazy_pages or
+				     opts['lazy_pages'] and True or False)
 		self.__restore_sibling = (opts['sibling'] and True or False)
 		self.__join_ns = (opts['join_ns'] and True or False)
+		self.__empty_ns = (opts['empty_ns'] and True or False)
 		self.__fault = (opts['fault'])
 		self.__script = opts['script']
 		self.__sat = (opts['sat'] and True or False)
@@ -841,8 +842,6 @@ class criu:
 		__ddir = self.__ddir()
 
 		ret = self.__criu.run(action, s_args, self.__fault, strace, preexec)
-		if action == "lazy-pages":
-			return ret
 
 		grep_errors(os.path.join(__ddir, log))
 		if ret != 0:
@@ -901,6 +900,8 @@ class criu:
 
 		if self.__leave_stopped:
 			a_opts += ['--leave-stopped']
+		if self.__empty_ns:
+			a_opts += ['--empty-ns', 'net']
 
 		self.__criu_act(action, opts = a_opts + opts)
 		if self.__mdedup and self.__iter > 1:
@@ -922,6 +923,9 @@ class criu:
 		if self.__join_ns:
 			r_opts.append("--join-ns")
 			r_opts.append("net:%s" % join_ns_file)
+		if self.__empty_ns:
+			r_opts += ['--empty-ns', 'net']
+			r_opts += ['--action-script', os.getcwd() + '/empty-netns-prep.sh']
 
 		self.__prev_dump_iter = None
 		criu_dir = os.path.dirname(os.getcwd())
@@ -929,11 +933,15 @@ class criu:
 			r_opts.append('--external')
 			r_opts.append('mnt[zdtm]:%s' % criu_dir)
 
-		lazy_pages_p = None
 		if self.__lazy_pages:
-			lazy_pages_p = self.__criu_act("lazy-pages", opts = [])
+			lp_opts = ["--daemon", "--pidfile", "lp.pid"]
+			if self.__remote_lazy_pages:
+				lp_opts += ['--page-server', "--port", "12345"]
+				ps_opts = ["--daemon", "--pidfile", "ps.pid",
+					   "--port", "12345", "--lazy-pages"]
+				self.__criu_act("page-server", opts = ps_opts)
+			self.__criu_act("lazy-pages", opts = lp_opts)
 			r_opts += ["--lazy-pages"]
-			time.sleep(1)  # FIXME wait user fault fd socket
 
 		if self.__leave_stopped:
 			r_opts += ['--leave-stopped']
@@ -944,8 +952,8 @@ class criu:
 			pstree_check_stopped(self.__test.getpid())
 			pstree_signal(self.__test.getpid(), signal.SIGCONT)
 
-		if lazy_pages_p and lazy_pages_p.wait():
-			raise test_fail_exc("CRIU lazy-pages")
+		if self.__lazy_pages:
+			wait_pid_die(int(rpidfile(self.__ddir() + "/lp.pid")), "lazy pages daemon")
 
 	@staticmethod
 	def check(feature):
@@ -1014,14 +1022,19 @@ def cr(cr_api, test, opts):
 
 		sbs('pre-dump')
 
+		os.environ["ZDTM_TEST_PID"] = str(test.getpid())
 		if opts['norst']:
+			try_run_hook(test, ["--pre-dump"])
 			cr_api.dump("dump", opts = ["--leave-running"])
 		else:
+			try_run_hook(test, ["--pre-dump"])
 			cr_api.dump("dump")
 			test.gone()
 			sbs('pre-restore')
 			try_run_hook(test, ["--pre-restore"])
 			cr_api.restore()
+			os.environ["ZDTM_TEST_PID"] = str(test.getpid())
+                        os.environ["ZDTM_IMG_DIR"] = cr_api.logs()
 			try_run_hook(test, ["--post-restore"])
 			sbs('post-restore')
 
@@ -1317,6 +1330,8 @@ class launcher:
 		self.__subs = {}
 		self.__fail = False
 		self.__file_report = None
+		self.__failed = []
+		self.__nr_skip = 0
 		if self.__max > 1 and self.__total > 1:
 			self.__use_log = True
 		elif opts['report']:
@@ -1347,6 +1362,7 @@ class launcher:
 		print "Skipping %s (%s)" % (name, reason)
 		self.__nr += 1
 		self.__runtest += 1
+		self.__nr_skip += 1
 		if self.__file_report:
 			testline = "ok %d - %s # SKIP %s" % (self.__runtest, name, reason)
 			print >> self.__file_report, testline
@@ -1362,9 +1378,9 @@ class launcher:
 		self.__nr += 1
 		self.__show_progress()
 
-		nd = ('nocr', 'norst', 'pre', 'iters', 'page_server', 'sibling', 'stop', 'lazy_pages',
+		nd = ('nocr', 'norst', 'pre', 'iters', 'page_server', 'sibling', 'stop', 'lazy_pages', 'empty_ns',
 				'fault', 'keep_img', 'report', 'snaps', 'sat', 'script', 'rpc',
-				'join_ns', 'dedup', 'sbs', 'freezecg', 'user', 'dry_run', 'noauto_dedup')
+				'join_ns', 'dedup', 'sbs', 'freezecg', 'user', 'dry_run', 'noauto_dedup', 'remote_lazy_pages')
 		arg = repr((name, desc, flavor, {d: self.__opts[d] for d in nd}))
 
 		if self.__use_log:
@@ -1390,6 +1406,7 @@ class launcher:
 			if status != 0:
 				self.__fail = True
 				failed_flavor = decode_flav(os.WEXITSTATUS(status))
+				self.__failed.append([sub['name'], failed_flavor])
 				if self.__file_report:
 					testline = "not ok %d - %s # flavor %s" % (self.__runtest, sub['name'], failed_flavor)
 					details = {'output': open(sub['log']).read()}
@@ -1434,6 +1451,11 @@ class launcher:
 		if self.__file_report:
 			self.__file_report.close()
 		if self.__fail:
+			if opts['keep_going']:
+				print_sep("%d TEST(S) FAILED (TOTAL %d/SKIPPED %d)"
+						% (len(self.__failed), self.__total, self.__nr_skip), "#")
+				for failed in self.__failed:
+					print " * %s(%s)" % (failed[0], failed[1])
 			print_sep("FAIL", "#")
 			sys.exit(1)
 
@@ -1504,20 +1526,15 @@ def run_tests(opts):
 			print "Tracking memory is not available"
 			return
 
-	if opts['keep_going'] and (not opts['all']):
-		print "[WARNING] Option --keep-going is more useful with option --all."
-
 	if opts['all']:
 		torun = all_tests(opts)
 		run_all = True
 	elif opts['tests']:
 		r = re.compile(opts['tests'])
 		torun = filter(lambda x: r.match(x), all_tests(opts))
-		opts['keep_going'] = False
 		run_all = True
 	elif opts['test']:
 		torun = opts['test']
-		opts['keep_going'] = False
 		run_all = False
 	elif opts['from']:
 		if not os.access(opts['from'], os.R_OK):
@@ -1530,6 +1547,10 @@ def run_tests(opts):
 	else:
 		print "Specify test with -t <name> or -a"
 		return
+
+	if opts['keep_going'] and len(torun) < 2:
+		print "[WARNING] Option --keep-going is more useful when running multiple tests"
+		opts['keep_going'] = False
 
 	if opts['exclude']:
 		excl = re.compile(".*(" + "|".join(opts['exclude']) + ")")
@@ -1593,6 +1614,11 @@ def run_tests(opts):
 					l.skip(t, "samens test in the same namespace")
 					continue
 
+			if opts['lazy_pages'] or opts['remote_lazy_pages']:
+				if test_flag(tdesc, 'nolazy'):
+					l.skip(t, "lazy pages are not supported")
+					continue
+
 			test_flavs = tdesc.get('flavor', 'h ns uns').split()
 			opts_flavs = (opts['flavor'] or 'h,ns,uns').split(',')
 			if opts_flavs != ['best']:
@@ -1608,6 +1634,8 @@ def run_tests(opts):
 			# remove ns and uns flavor in join_ns
 			if opts['join_ns']:
 				run_flavs -= set(['ns', 'uns'])
+			if opts['empty_ns']:
+				run_flavs -= set(['h'])
 
 			if run_flavs:
 				l.run_test(t, tdesc, run_flavs)
@@ -1800,6 +1828,7 @@ rp.add_argument("-x", "--exclude", help = "Exclude tests from --all run", action
 
 rp.add_argument("--sibling", help = "Restore tests as siblings", action = 'store_true')
 rp.add_argument("--join-ns", help = "Restore tests and join existing namespace", action = 'store_true')
+rp.add_argument("--empty-ns", help = "Restore tests in empty net namespace", action = 'store_true')
 rp.add_argument("--pre", help = "Do some pre-dumps before dump (n[:pause])")
 rp.add_argument("--snaps", help = "Instead of pre-dumps do full dumps", action = 'store_true')
 rp.add_argument("--dedup", help = "Auto-deduplicate images on iterations", action = 'store_true')
@@ -1824,6 +1853,7 @@ rp.add_argument("-k", "--keep-img", help = "Whether or not to keep images after 
 rp.add_argument("--report", help = "Generate summary report in directory")
 rp.add_argument("--keep-going", help = "Keep running tests in spite of failures", action = 'store_true')
 rp.add_argument("--lazy-pages", help = "restore pages on demand", action = 'store_true')
+rp.add_argument("--remote-lazy-pages", help = "simulate lazy migration", action = 'store_true')
 
 lp = sp.add_parser("list", help = "List tests")
 lp.set_defaults(action = list_tests)

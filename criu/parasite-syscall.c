@@ -182,7 +182,7 @@ int parasite_dump_thread_seized(struct parasite_ctl *ctl, int id,
 	CredsEntry *creds = tc->creds;
 	struct parasite_dump_creds *pc;
 	int ret;
-	struct thread_ctx octx;
+	struct parasite_thread_ctl *tctl;
 
 	BUG_ON(id == 0); /* Leader is dumped in dump_task_core_all */
 
@@ -196,30 +196,32 @@ int parasite_dump_thread_seized(struct parasite_ctl *ctl, int id,
 
 	pc->cap_last_cap = kdat.last_cap;
 
-	ret = compel_prepare_thread(pid, &octx);
-	if (ret)
+	tctl = compel_prepare_thread(ctl, pid);
+	if (!tctl)
 		return -1;
 
 	tc->has_blk_sigset = true;
-	memcpy(&tc->blk_sigset, &octx.sigmask, sizeof(k_rtsigset_t));
+	memcpy(&tc->blk_sigset, compel_thread_sigmask(tctl), sizeof(k_rtsigset_t));
 
-	ret = compel_run_in_thread(pid, PARASITE_CMD_DUMP_THREAD, ctl, &octx);
+	ret = compel_run_in_thread(tctl, PARASITE_CMD_DUMP_THREAD);
 	if (ret) {
 		pr_err("Can't init thread in parasite %d\n", pid);
-		return -1;
+		goto err_rth;
 	}
 
 	ret = alloc_groups_copy_creds(creds, pc);
 	if (ret) {
 		pr_err("Can't copy creds for thread %d\n", pid);
-		return -1;
+		goto err_rth;
 	}
 
-	ret = compel_get_task_regs(pid, octx.regs, save_task_regs, core);
+	ret = compel_get_thread_regs(tctl, save_task_regs, core);
 	if (ret) {
 		pr_err("Can't obtain regs for thread %d\n", pid);
-		return -1;
+		goto err_rth;
 	}
+
+	compel_release_thread(tctl);
 
 	if (compel_mode_native(ctl)) {
 		tid->virt = args->tid;
@@ -228,6 +230,10 @@ int parasite_dump_thread_seized(struct parasite_ctl *ctl, int id,
 		tid->virt = args_c->tid;
 		return dump_thread_core(pid, core, false, args_c);
 	}
+
+err_rth:
+	compel_release_thread(tctl);
+	return -1;
 }
 
 #define ASSIGN_SAS(se, args)							\
@@ -465,7 +471,7 @@ int parasite_drain_fds_seized(struct parasite_ctl *ctl,
 	}
 
 	sk = compel_rpc_sock(ctl);
-	ret = recv_fds(sk, lfds, nr_fds, opts);
+	ret = recv_fds(sk, lfds, nr_fds, opts, sizeof(struct fd_opts));
 	if (ret)
 		pr_err("Can't retrieve FDs from socket\n");
 
@@ -533,21 +539,21 @@ static int make_sigframe(void *arg, struct rt_sigframe *sf, struct rt_sigframe *
 #ifdef CONFIG_PIEGEN
 #define init_blob_relocs(bdesc, blob_type)						\
 	do {										\
-		bdesc->relocs = parasite_##blob_type##_relocs;				\
-		bdesc->nr_relocs = ARRAY_SIZE(parasite_##blob_type##_relocs);		\
+		bdesc->hdr.relocs = parasite_##blob_type##_relocs;			\
+		bdesc->hdr.nr_relocs = ARRAY_SIZE(parasite_##blob_type##_relocs);	\
 	} while (0)
 #else
 #define init_blob_relocs(bdesc, blob_type)
 #endif
 
 #define init_blob_desc(bdesc, blob_type) do {						\
-	pbd->size = pie_size(parasite_##blob_type);					\
-	bdesc->mem = parasite_##blob_type##_blob;					\
-	bdesc->bsize = sizeof(parasite_##blob_type##_blob);				\
+	bdesc->hdr.mem = parasite_##blob_type##_blob;					\
+	bdesc->hdr.bsize = sizeof(parasite_##blob_type##_blob);				\
+	bdesc->hdr.nr_gotpcrel = pie_nr_gotpcrel(parasite_##blob_type);			\
 	/* Setup the rest of a control block */						\
-	bdesc->parasite_ip_off = pblob_offset(blob_type, __export_parasite_head_start);	\
-	bdesc->addr_cmd_off    = pblob_offset(blob_type, __export_parasite_cmd);	\
-	bdesc->addr_arg_off    = pblob_offset(blob_type, __export_parasite_args);	\
+	bdesc->hdr.parasite_ip_off = pblob_offset(blob_type, __export_parasite_head_start);\
+	bdesc->hdr.addr_cmd_off    = pblob_offset(blob_type, __export_parasite_cmd);	\
+	bdesc->hdr.addr_arg_off    = pblob_offset(blob_type, __export_parasite_args);	\
 	init_blob_relocs(bdesc, blob_type);						\
 	} while (0)
 
@@ -567,7 +573,7 @@ struct parasite_ctl *parasite_infect_seized(pid_t pid, struct pstree_item *item,
 		return NULL;
 	}
 
-	ctl = compel_prepare(pid);
+	ctl = compel_prepare_noctx(pid);
 	if (!ctl)
 		return NULL;
 
@@ -575,7 +581,11 @@ struct parasite_ctl *parasite_infect_seized(pid_t pid, struct pstree_item *item,
 
 	ictx->open_proc = do_open_proc;
 	ictx->child_handler = sigchld_handler;
-	ictx->p_sock = &dmpi(item)->netns->net.seqsk;
+	ictx->orig_handler.sa_handler = SIG_DFL;
+	ictx->orig_handler.sa_flags = SA_SIGINFO | SA_RESTART;
+	sigemptyset(&ictx->orig_handler.sa_mask);
+	sigaddset(&ictx->orig_handler.sa_mask, SIGCHLD);
+	ictx->sock = dmpi(item)->netns->net.seqsk;
 	ictx->save_regs = save_task_regs;
 	ictx->make_sigframe = make_sigframe;
 	ictx->regs_arg = item->core[0];
@@ -595,6 +605,8 @@ struct parasite_ctl *parasite_infect_seized(pid_t pid, struct pstree_item *item,
 	ictx->log_fd = log_get_fd();
 
 	pbd = compel_parasite_blob_desc(ctl);
+	pbd->parasite_type = COMPEL_BLOB_CHEADER;
+
 	if (compel_mode_native(ctl))
 		init_blob_desc(pbd, native);
 #ifdef CONFIG_COMPAT

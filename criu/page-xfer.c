@@ -19,6 +19,7 @@
 #include "fcntl.h"
 #include "pstree.h"
 #include "parasite-syscall.h"
+#include "rst_info.h"
 
 static int page_server_sk = -1;
 
@@ -208,9 +209,11 @@ static int check_pagehole_in_parent(struct page_read *p, struct iovec *iov)
 		struct iovec piov;
 		unsigned long pend;
 
-		ret = p->seek_page(p, off, true);
-		if (ret <= 0 || !p->pe)
+		ret = p->seek_pagemap(p, off, true);
+		if (ret <= 0 || !p->pe) {
+			pr_err("Missing %lx in parent pagemap\n", off);
 			return -1;
+		}
 
 		pagemap2iovec(p->pe, &piov);
 		pr_debug("\tFound %p/%zu\n", piov.iov_base, piov.iov_len);
@@ -624,6 +627,31 @@ static int page_server_add(int sk, struct page_server_iov *pi, u32 flags)
 	return 0;
 }
 
+static bool can_send_pages(struct page_pipe_buf *ppb, struct iovec *iov,
+			   struct page_server_iov *pi)
+{
+	unsigned long len = pi->nr_pages * PAGE_SIZE;
+
+	if (!(ppb->flags & PPB_LAZY)) {
+		pr_err("Requested pages are not lazy\n");
+		return false;
+	}
+
+	if (iov->iov_len != len) {
+		pr_err("IOV len %zu does not match requested %lu\n",
+		       iov->iov_len, len);
+		return false;
+	}
+
+	if(pi->vaddr != encode_pointer(iov->iov_base)) {
+		pr_err("IOV start %p does not match requested addr %"PRIx64"\n",
+		       iov->iov_base, pi->vaddr);
+		return false;
+	}
+
+	return true;
+}
+
 static int page_server_get_pages(int sk, struct page_server_iov *pi)
 {
 	struct pstree_item *item;
@@ -648,9 +676,8 @@ static int page_server_get_pages(int sk, struct page_server_iov *pi)
 	ppb = list_first_entry(&pp->bufs, struct page_pipe_buf, l);
 	iov = &ppb->iov[0];
 
-	BUG_ON(!(ppb->flags & PPB_LAZY));
-	BUG_ON(iov->iov_len != pi->nr_pages * PAGE_SIZE);
-	BUG_ON(pi->vaddr != encode_pointer(iov->iov_base));
+	if (!can_send_pages(ppb, iov, pi))
+		return -1;
 
 	if (send_psi(sk, PS_IOV_ADD, pi->nr_pages, pi->vaddr, pi->dst_id))
 		return -1;
@@ -789,14 +816,119 @@ static int page_server_serve(int sk)
 	return ret;
 }
 
+static int fill_page_pipe(struct page_read *pr, struct page_pipe *pp)
+{
+	struct page_pipe_buf *ppb;
+	int i, ret;
+
+	pr->reset(pr);
+
+	while (pr->advance(pr, false)) {
+		unsigned long vaddr = pr->pe->vaddr;
+
+		for (i = 0; i < pr->pe->nr_pages; i++, vaddr += PAGE_SIZE) {
+			if (pagemap_zero(pr->pe))
+				ret = page_pipe_add_hole(pp, vaddr, PP_HOLE_ZERO);
+			else if (pagemap_in_parent(pr->pe))
+				ret = page_pipe_add_hole(pp, vaddr, PP_HOLE_PARENT);
+			else
+				ret = page_pipe_add_page(pp, vaddr, pagemap_lazy(pr->pe) ? PPB_LAZY : 0);
+			if (ret) {
+				pr_err("Failed adding page at %lx\n", vaddr);
+				return -1;
+			}
+		}
+	}
+
+	list_for_each_entry(ppb, &pp->bufs, l) {
+		for (i = 0; i < ppb->nr_segs; i++) {
+			struct iovec iov = get_iov(ppb->iov, i,
+						   pp->flags & PP_COMPAT);
+			if (splice(img_raw_fd(pr->pi), NULL, ppb->p[1], NULL,
+				   iov.iov_len, SPLICE_F_MOVE) != iov.iov_len) {
+				pr_perror("Splice failed");
+				return -1;
+			}
+		}
+	}
+
+	debug_show_page_pipe(pp);
+
+	return 0;
+}
+
+static int page_pipe_from_pagemap(struct page_pipe **pp, int pid)
+{
+	struct page_read pr;
+	int nr_pages = 0;
+
+	if (open_page_read(pid, &pr, PR_TASK) <= 0) {
+		pr_err("Failed to open page read for %d\n", pid);
+		return -1;
+	}
+
+	while (pr.advance(&pr, false))
+		if (pagemap_present(pr.pe))
+			nr_pages += pr.pe->nr_pages;
+
+	*pp = create_page_pipe(nr_pages, NULL, 0);
+	if (!*pp) {
+		pr_err("Cannot create page pipe for %d\n", pid);
+		return -1;
+	}
+
+	if (fill_page_pipe(&pr, *pp))
+		return -1;
+
+	return 0;
+}
+
+static int page_server_init_send(void)
+{
+	struct pstree_item *pi;
+	struct page_pipe *pp;
+
+	BUILD_BUG_ON(sizeof(struct dmp_info) > sizeof(struct rst_info));
+
+	if (prepare_dummy_pstree())
+		return -1;
+
+	for_each_pstree_item(pi) {
+		if (prepare_dummy_task_state(pi))
+			return -1;
+
+		if (!task_alive(pi))
+			continue;
+
+		if (page_pipe_from_pagemap(&pp, pi->pid.virt)) {
+			pr_err("%d: failed to open page-read\n", pi->pid.virt);
+			return -1;
+		}
+
+		/*
+		 * prepare_dummy_pstree presumes 'restore' behaviour,
+		 * but page_server_get_pages uses dmpi() to get access
+		 * to the page-pipe, so we are faking it here.
+		 */
+		memset(rsti(pi), 0, sizeof(struct rst_info));
+		dmpi(pi)->mem_pp = pp;
+	}
+
+	return 0;
+}
+
 int cr_page_server(bool daemon_mode, int cfd)
 {
 	int ask = -1;
 	int sk = -1;
 	int ret;
 
-	if (!opts.lazy_pages)
+	if (!opts.lazy_pages) {
 		up_page_ids_base();
+	} else {
+		if (page_server_init_send())
+			return -1;
+	}
 
 	if (opts.ps_socket != -1) {
 		ret = 0;
@@ -822,7 +954,7 @@ no_server:
 	return ret;
 }
 
-int connect_to_page_server(void)
+static int connect_to_page_server(void)
 {
 	if (!opts.use_page_server)
 		return 0;
@@ -844,6 +976,11 @@ out:
 	 */
 	tcp_cork(page_server_sk, true);
 	return 0;
+}
+
+int connect_to_page_server_to_send(void)
+{
+	return connect_to_page_server();
 }
 
 int disconnect_from_page_server(void)
@@ -887,31 +1024,149 @@ out:
 	return ret ? : status;
 }
 
-int get_remote_pages(int pid, unsigned long addr, int nr_pages, void *dest)
-{
-	int ret;
+struct ps_async_read {
+	unsigned long rb; /* read bytes */
+	unsigned long goal;
 
 	struct page_server_iov pi;
+	void *pages;
 
-	if (send_psi(page_server_sk, PS_IOV_GET, nr_pages, addr, pid))
+	ps_async_read_complete complete;
+	void *priv;
+
+	struct list_head l;
+};
+
+static LIST_HEAD(async_reads);
+
+int page_server_start_async_read(void *buf, int nr_pages,
+		ps_async_read_complete complete, void *priv)
+{
+	struct ps_async_read *ar;
+
+	ar = xmalloc(sizeof(*ar));
+	if (ar == NULL)
 		return -1;
 
-	tcp_nodelay(page_server_sk, true);
+	ar->pages = buf;
+	ar->rb = 0;
+	ar->goal = sizeof(ar->pi) + nr_pages * PAGE_SIZE;
+	ar->complete = complete;
+	ar->priv = priv;
 
-	ret = recv(page_server_sk, &pi, sizeof(pi), MSG_WAITALL);
-	if (ret != sizeof(pi))
+	list_add_tail(&ar->l, &async_reads);
+	return 0;
+}
+
+/*
+ * There are two possible event types we need to handle:
+ * - page info is available as a reply to request_remote_page
+ * - page data is available, and it follows page info we've just received
+ * Since the on dump side communications are completely synchronous,
+ * we can return to epoll right after the reception of page info and
+ * for sure the next time socket event will occur we'll get page data
+ * related to info we've just received
+ */
+static int page_server_async_read(struct epoll_rfd *f)
+{
+	struct ps_async_read *ar;
+	int ret, need;
+	void *buf;
+
+	BUG_ON(list_empty(&async_reads));
+	ar = list_first_entry(&async_reads, struct ps_async_read, l);
+
+	if (ar->rb < sizeof(ar->pi)) {
+		/* Header */
+		buf = ((void *)&ar->pi) + ar->rb;
+		need = sizeof(ar->pi) - ar->rb;
+	} else {
+		/* Page(s) data itself */
+		buf = ar->pages + (ar->rb - sizeof(ar->pi));
+		need = ar->goal - ar->rb;
+	}
+
+	ret = recv(page_server_sk, buf, need, MSG_DONTWAIT);
+	if (ret < 0) {
+		pr_perror("Error reading async data from page server");
 		return -1;
+	}
 
-	/* zero page */
-	if (pi.cmd == PS_IOV_ZERO)
+	ar->rb += ret;
+	if (ar->rb < ar->goal)
 		return 0;
 
-	if (pi.nr_pages > nr_pages)
+	/*
+	 * IO complete -- notify the caller and drop the request
+	 */
+	BUG_ON(ar->rb > ar->goal);
+	ret = ar->complete((int)ar->pi.dst_id, (unsigned long)ar->pi.vaddr,
+				(int)ar->pi.nr_pages, ar->priv);
+
+	list_del(&ar->l);
+	xfree(ar);
+
+	return ret;
+}
+
+static struct epoll_rfd ps_rfd;
+
+int connect_to_page_server_to_recv(int epfd)
+{
+	if (connect_to_page_server())
 		return -1;
 
-	ret = recv(page_server_sk, dest, PAGE_SIZE, MSG_WAITALL);
-	if (ret != PAGE_SIZE)
-		return -1;
+	ps_rfd.fd = page_server_sk;
+	ps_rfd.revent = page_server_async_read;
 
-	return 1;
+	return epoll_add_rfd(epfd, &ps_rfd);
+}
+
+int request_remote_pages(int pid, unsigned long addr, int nr_pages)
+{
+	struct page_server_iov pi = {
+		.cmd		= PS_IOV_GET,
+		.nr_pages	= nr_pages,
+		.vaddr		= addr,
+		.dst_id		= pid,
+	};
+
+	/* We cannot use send_psi here because we have to use MSG_DONTWAIT */
+	if (send(page_server_sk, &pi, sizeof(pi), MSG_DONTWAIT) != sizeof(pi)) {
+		pr_perror("Can't write PSI to server");
+		return -1;
+	}
+
+	tcp_nodelay(page_server_sk, true);
+	return 0;
+}
+
+int receive_remote_pages_info(int *nr_pages, unsigned long *addr, int *pid)
+{
+	struct page_server_iov pi;
+
+	if (recv(page_server_sk, &pi, sizeof(pi), MSG_WAITALL) != sizeof(pi)) {
+		pr_perror("Failed to receive page metadata");
+		return -1;
+	}
+
+	if (pi.cmd == PS_IOV_ZERO)
+		pr_warn("Unexpected ZERO page received for %d.%lx\n",
+				(int)pi.dst_id, (unsigned long)pi.vaddr);
+
+	*nr_pages = pi.nr_pages;
+	*addr = pi.vaddr;
+	*pid = pi.dst_id;
+
+	return 0;
+}
+
+int receive_remote_pages(int len, void *buf)
+{
+	if (recv(page_server_sk, buf, len, MSG_WAITALL) != len) {
+		pr_perror("Failed to receive page data");
+		return -1;
+	}
+
+	return 0;
 }

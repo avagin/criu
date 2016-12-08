@@ -4,5 +4,7 @@
 #include <compel/plugins.h>
 #include <compel/plugins/std/syscall.h>
 #include <compel/plugins/std/string.h>
+#include <compel/plugins/std/infect.h>
+#include <compel/plugins/std/fds.h>
 
 #endif /* COMPEL_PLUGIN_STD_STD_H__ */

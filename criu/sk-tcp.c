@@ -132,6 +132,8 @@ static int dump_tcp_conn_state(struct inet_sk_desc *sk)
 		goto err_r;
 	}
 
+	sk->state = data.state;
+
 	tse.inq_len = data.inq_len;
 	tse.inq_seq = data.inq_seq;
 	tse.outq_len = data.outq_len;
@@ -140,6 +142,7 @@ static int dump_tcp_conn_state(struct inet_sk_desc *sk)
 	tse.has_unsq_len = true;
 	tse.mss_clamp = data.mss_clamp;
 	tse.opt_mask = data.opt_mask;
+
 	if (tse.opt_mask & TCPI_OPT_WSCALE) {
 		tse.snd_wscale = data.snd_wscale;
 		tse.rcv_wscale = data.rcv_wscale;
@@ -224,7 +227,7 @@ err_r:
 
 int dump_one_tcp(int fd, struct inet_sk_desc *sk)
 {
-	if (sk->state != TCP_ESTABLISHED)
+	if (sk->dst_port == 0)
 		return 0;
 
 	pr_info("Dumping TCP connection\n");
@@ -301,7 +304,7 @@ static int restore_tcp_conn_state(int sk, struct libsoccr_sk *socr, struct inet_
 		goto err_c;
 	}
 
-	data.state = TCP_ESTABLISHED;
+	data.state = ii->ie->state;;
 	data.inq_len = tse->inq_len;
 	data.inq_seq = tse->inq_seq;
 	data.outq_len = tse->outq_len;
@@ -336,21 +339,25 @@ static int restore_tcp_conn_state(int sk, struct libsoccr_sk *socr, struct inet_
 		data.rcv_wup = tse->rcv_wup;
 	}
 
+	if (restore_sockaddr(&data.src_addr,
+				ii->ie->family, ii->ie->src_port,
+				ii->ie->src_addr, 0) < 0)
+		goto err_c;
+	if (restore_sockaddr(&data.dst_addr,
+				ii->ie->family, ii->ie->dst_port,
+				ii->ie->dst_addr, 0) < 0)
+		goto err_c;
+
 	(void)data;
 
-	if (libsoccr_set_sk_data_unbound(socr, &data, sizeof(data)))
-		goto err_c;
-
-	if (inet_bind(sk, ii))
-		goto err_c;
-
-	if (inet_connect(sk, ii))
+	/*
+	 * O_NONBLOCK has to be set before libsoccr_set_sk_data_noq(),
+	 * it is required to restore syn-sent sockets.
+	 */
+	if (restore_prepare_socket(sk))
 		goto err_c;
 
 	if (libsoccr_set_sk_data_noq(socr, &data, sizeof(data)))
-		goto err_c;
-
-	if (restore_prepare_socket(sk))
 		goto err_c;
 
 	if (restore_tcp_queues(socr, &data, img))

@@ -5,6 +5,11 @@
 
 #define BUILTIN_SYSCALL_SIZE	8
 
+struct thread_ctx {
+	k_rtsigset_t		sigmask;
+	user_regs_struct_t	regs;
+};
+
 /* parasite control block */
 struct parasite_ctl {
 	int			rpid;					/* Real pid of the victim */
@@ -36,6 +41,12 @@ struct parasite_ctl {
 	struct parasite_blob_desc pblob;
 };
 
+struct parasite_thread_ctl {
+	int			tid;
+	struct parasite_ctl	*ctl;
+	struct thread_ctx	th;
+};
+
 #define MEMFD_FNAME	"CRIUMFD"
 #define MEMFD_FNAME_SZ	sizeof(MEMFD_FNAME)
 
@@ -55,5 +66,12 @@ extern void *remote_mmap(struct parasite_ctl *ctl,
 		void *addr, size_t length, int prot,
 		int flags, int fd, off_t offset);
 extern bool arch_can_dump_task(struct parasite_ctl *ctl);
-
+extern int get_task_regs(pid_t pid, user_regs_struct_t regs, save_regs_t save, void *arg);
+extern int sigreturn_prep_regs_plain(struct rt_sigframe *sigframe,
+				     user_regs_struct_t *regs,
+				     user_fpregs_struct_t *fpregs);
+extern int sigreturn_prep_fpu_frame_plain(struct rt_sigframe *sigframe,
+					  struct rt_sigframe *rsigframe);
+extern int compel_execute_syscall(struct parasite_ctl *ctl,
+		user_regs_struct_t *regs, const char *code_syscall);
 #endif

@@ -272,10 +272,6 @@ static int root_prepare_shared(void)
 	if (ret)
 		goto err;
 
-	ret = open_transport_socket();
-	if (ret)
-		goto err;
-
 	show_saved_files();
 err:
 	return ret;
@@ -716,8 +712,6 @@ static int restore_one_alive_task(int pid, CoreEntry *core)
 	if (prepare_vmas(current, ta))
 		return -1;
 
-	close_service_fd(TRANSPORT_FD_OFF);
-
 	if (setup_uffd(pid, ta))
 		return -1;
 
@@ -813,7 +807,7 @@ static int restore_one_zombie(CoreEntry *core)
 	if (inherit_fd_fini() < 0)
 		return -1;
 
-	if (lazy_pages_setup_zombie())
+	if (lazy_pages_setup_zombie(current->pid.virt))
 		return -1;
 
 	prctl(PR_SET_NAME, (long)(void *)core->tc->comm, 0, 0, 0);
@@ -1464,6 +1458,9 @@ static int restore_task_with_children(void *_arg)
 		fini_restore_mntns();
 	}
 
+	if (open_transport_socket())
+		return -1;
+
 	if (restore_finish_stage(task_entries, CR_STATE_FORKING) < 0)
 		goto err;
 
@@ -1647,7 +1644,7 @@ static void finalize_restore(void)
 			continue;
 
 		/* Unmap the restorer blob */
-		ctl = compel_prepare(pid);
+		ctl = compel_prepare_noctx(pid);
 		if (ctl == NULL)
 			continue;
 
@@ -1850,6 +1847,19 @@ static int restore_root_task(struct pstree_item *init)
 	if (ret)
 		goto out_kill;
 
+	if (opts.empty_ns & CLONE_NEWNET) {
+		/*
+		 * Local TCP connections were locked by network_lock_internal()
+		 * on dump and normally should have been C/R-ed by respectively
+		 * dump_iptables() and restore_iptables() in net.c. However in
+		 * the '--empty-ns net' mode no iptables C/R is done and we
+		 * need to return these rules by hands.
+		 */
+		ret = network_lock_internal();
+		if (ret)
+			goto out_kill;
+	}
+
 	timing_start(TIME_FORK);
 	ret = restore_switch_stage(CR_STATE_RESTORE_SHARED);
 	if (ret < 0)
@@ -2018,6 +2028,19 @@ int prepare_task_entries(void)
 	task_entries->nr_helpers = 0;
 	futex_set(&task_entries->start, CR_STATE_RESTORE_NS);
 	mutex_init(&task_entries->userns_sync_lock);
+
+	return 0;
+}
+
+int prepare_dummy_task_state(struct pstree_item *pi)
+{
+	CoreEntry *core;
+
+	if (open_core(pi->pid.virt, &core))
+		return -1;
+
+	pi->pid.state = core->tc->task_state;
+	core_entry__free_unpacked(core, NULL);
 
 	return 0;
 }

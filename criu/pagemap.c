@@ -2,12 +2,15 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <linux/falloc.h>
+#include <sys/uio.h>
+#include <limits.h>
 
 #include "types.h"
 #include "image.h"
 #include "cr_options.h"
 #include "servicefd.h"
 #include "pagemap.h"
+#include "page-xfer.h"
 
 #include "xmalloc.h"
 #include "protobuf.h"
@@ -19,6 +22,18 @@
 #endif
 
 #define MAX_BUNCH_SIZE 256
+
+/*
+ * One "job" for the preadv() syscall in pagemap.c
+ */
+struct page_read_iov {
+	off_t from;		/* offset in pi file where to start reading from */
+	off_t end;		/* the end of the read == sum to.iov_len -s */
+	struct iovec *to;	/* destination iovs */
+	unsigned int nr;	/* their number */
+
+	struct list_head l;
+};
 
 void pagemap2iovec(PagemapEntry *pe, struct iovec *iov)
 {
@@ -68,6 +83,8 @@ static int punch_hole(struct page_read *pr, unsigned long off,
 	return 0;
 }
 
+static int seek_pagemap_page(struct page_read *pr, unsigned long vaddr);
+
 int dedup_one_iovec(struct page_read *pr, struct iovec *iov)
 {
 	unsigned long off;
@@ -82,11 +99,9 @@ int dedup_one_iovec(struct page_read *pr, struct iovec *iov)
 		struct iovec tiov;
 		struct page_read * prp;
 
-		ret = pr->seek_page(pr, off, false);
-		if (ret == -1)
-			return -1;
-
+		ret = seek_pagemap_page(pr, off);
 		if (ret == 0) {
+			pr_warn("Missing %lx in parent pagemap\n", off);
 			if (off < pr->cvaddr && pr->cvaddr < iov_end)
 				off = pr->cvaddr;
 			else
@@ -123,33 +138,16 @@ int dedup_one_iovec(struct page_read *pr, struct iovec *iov)
 	return 0;
 }
 
-static int advance(struct page_read *pr)
+static int advance(struct page_read *pr, bool skip_zero)
 {
-	pr->curr_pme++;
-	if (pr->curr_pme >= pr->nr_pmes)
-		return 0;
-
-	pr->pe = pr->pmes[pr->curr_pme];
-	pr->cvaddr = pr->pe->vaddr;
-
-	return 1;
-}
-
-static int get_pagemap(struct page_read *pr, struct iovec *iov)
-{
-	for (;;) {
-		if (!advance(pr))
+	do {
+		pr->curr_pme++;
+		if (pr->curr_pme >= pr->nr_pmes)
 			return 0;
-		if (!pagemap_zero(pr->pe))
-			break;
-	}
 
-	if (pagemap_in_parent(pr->pe) && !pr->parent) {
-		pr_err("No parent for snapshot pagemap\n");
-		return -1;
-	}
-
-	pagemap2iovec(pr->pe, iov);
+		pr->pe = pr->pmes[pr->curr_pme];
+		pr->cvaddr = pr->pe->vaddr;
+	} while (skip_zero && pagemap_zero(pr->pe));
 
 	return 1;
 }
@@ -159,40 +157,46 @@ static void skip_pagemap_pages(struct page_read *pr, unsigned long len)
 	if (!len)
 		return;
 
-	pr_debug("\tpr%u Skip %lu bytes from page-dump\n", pr->id, len);
 	if (pagemap_present(pr->pe))
 		pr->pi_off += len;
 	pr->cvaddr += len;
 }
 
-static int seek_pagemap_page(struct page_read *pr, unsigned long vaddr,
-			     bool warn)
+static int seek_pagemap(struct page_read *pr, unsigned long vaddr,
+			bool skip_zero)
 {
 	if (!pr->pe)
-		advance(pr);
+		goto adv;
 
 	do {
 		unsigned long start = pr->pe->vaddr;
 		unsigned long len = pr->pe->nr_pages * PAGE_SIZE;
 		unsigned long end = start + len;
 
-		if (pagemap_zero(pr->pe))
-			continue;
-
 		if (vaddr < pr->cvaddr)
 			break;
 
 		if (vaddr >= start && vaddr < end) {
-			skip_pagemap_pages(pr, vaddr - pr->cvaddr);
+			skip_pagemap_pages(pr, start - pr->cvaddr);
 			return 1;
 		}
 
 		if (end <= vaddr)
 			skip_pagemap_pages(pr, end - pr->cvaddr);
-	} while (advance(pr));
+adv:
+		; /* otherwise "label at end of compound stmt" gcc error */
+	} while (advance(pr, skip_zero));
 
-	if (warn)
-		pr_err("Missing %lx in parent pagemap\n", vaddr);
+	return 0;
+}
+
+static int seek_pagemap_page(struct page_read *pr, unsigned long vaddr)
+{
+	if (seek_pagemap(pr, vaddr, true)) {
+		skip_pagemap_pages(pr, vaddr - pr->cvaddr);
+		return 1;
+	}
+
 	return 0;
 }
 
@@ -206,10 +210,15 @@ static inline void pagemap_bound_check(PagemapEntry *pe, unsigned long vaddr, in
 }
 
 static int read_parent_page(struct page_read *pr, unsigned long vaddr,
-			    int nr, void *buf)
+			    int nr, void *buf, unsigned flags)
 {
 	struct page_read *ppr = pr->parent;
 	int ret;
+
+	if (!ppr) {
+		pr_err("No parent for snapshot pagemap\n");
+		return -1;
+	}
 
 	/*
 	 * Parent pagemap at this point entry may be shorter
@@ -223,9 +232,11 @@ static int read_parent_page(struct page_read *pr, unsigned long vaddr,
 		int p_nr;
 
 		pr_debug("\tpr%u Read from parent\n", pr->id);
-		ret = seek_pagemap_page(ppr, vaddr, true);
-		if (ret <= 0)
+		ret = seek_pagemap_page(ppr, vaddr);
+		if (ret <= 0) {
+			pr_err("Missing %lx in parent pagemap\n", vaddr);
 			return -1;
+		}
 
 		/*
 		 * This is how many pages we have in the parent
@@ -237,7 +248,7 @@ static int read_parent_page(struct page_read *pr, unsigned long vaddr,
 		if (p_nr > nr)
 			p_nr = nr;
 
-		ret = ppr->read_pages(ppr, vaddr, p_nr, buf);
+		ret = ppr->read_pages(ppr, vaddr, p_nr, buf, flags);
 		if (ret == -1)
 			return ret;
 
@@ -258,47 +269,197 @@ static int read_local_page(struct page_read *pr, unsigned long vaddr,
 			   unsigned long len, void *buf)
 {
 	int fd = img_raw_fd(pr->pi);
-	off_t current_vaddr = lseek(fd, pr->pi_off, SEEK_SET);
 	int ret;
 
-	pr_debug("\tpr%u Read page from self %lx/%"PRIx64"\n", pr->id, pr->cvaddr, current_vaddr);
-	ret = read(fd, buf, len);
+	/*
+	 * Flush any pending async requests if any not to break the
+	 * linear reading from the pages.img file.
+	 */
+	if (pr->sync(pr))
+		return -1;
+
+	pr_debug("\tpr%u Read page from self %lx/%"PRIx64"\n", pr->id, pr->cvaddr, pr->pi_off);
+	ret = pread(fd, buf, len, pr->pi_off);
 	if (ret != len) {
 		pr_perror("Can't read mapping page %d", ret);
 		return -1;
 	}
 
-	pr->pi_off += len;
-
 	if (opts.auto_dedup) {
-		ret = punch_hole(pr, current_vaddr, len, false);
-		if (ret == -1) {
+		ret = punch_hole(pr, pr->pi_off, len, false);
+		if (ret == -1)
 			return -1;
-		}
 	}
 
 	return 0;
 }
 
-static int read_pagemap_page(struct page_read *pr, unsigned long vaddr, int nr, void *buf)
+static int enqueue_async_iov(struct page_read *pr, unsigned long len, void *buf)
 {
+	struct page_read_iov *pr_iov;
+	struct iovec *iov;
+
+	pr_iov = xzalloc(sizeof(*pr_iov));
+	if (!pr_iov)
+		return -1;
+
+	pr_iov->from = pr->pi_off;
+	pr_iov->end = pr->pi_off + len;
+
+	iov = xzalloc(sizeof(*iov));
+	if (!iov) {
+		xfree(pr_iov);
+		return -1;
+	}
+
+	iov->iov_base = buf;
+	iov->iov_len = len;
+
+	pr_iov->to = iov;
+	pr_iov->nr = 1;
+
+	list_add_tail(&pr_iov->l, &pr->async);
+
+	return 0;
+}
+
+static int enqueue_async_page(struct page_read *pr, unsigned long vaddr,
+			      unsigned long len, void *buf)
+{
+	struct page_read_iov *cur_async = NULL;
+	struct iovec *iov;
+
+	if (!list_empty(&pr->async))
+		cur_async = list_entry(pr->async.prev, struct page_read_iov, l);
+
+	/*
+	 * We don't have any async requests or we have new read
+	 * request that should happen at pos _after_ some hole from
+	 * the previous one.
+	 * Start the new preadv request here.
+	 */
+	if (!cur_async || pr->pi_off != cur_async->end)
+		return enqueue_async_iov(pr, len, buf);
+
+	/*
+	 * This read is pure continuation of the previous one. Let's
+	 * just add another IOV (or extend one of the existing).
+	 */
+	iov = &cur_async->to[cur_async->nr - 1];
+	if (iov->iov_base + iov->iov_len == buf) {
+		/* Extendable */
+		iov->iov_len += len;
+	} else {
+		/* Need one more target iovec */
+		unsigned int n_iovs = cur_async->nr + 1;
+
+		if (n_iovs >= IOV_MAX)
+			return enqueue_async_iov(pr, len, buf);
+
+		iov = xrealloc(cur_async->to, n_iovs * sizeof(*iov));
+		if (!iov)
+			return -1;
+
+		cur_async->to = iov;
+
+		iov += cur_async->nr;
+		iov->iov_base = buf;
+		iov->iov_len = len;
+
+		cur_async->nr = n_iovs;
+	}
+
+	cur_async->end += len;
+
+	return 0;
+}
+
+static int maybe_read_page_local(struct page_read *pr, unsigned long vaddr,
+		int nr, void *buf, unsigned flags)
+{
+	int ret;
 	unsigned long len = nr * PAGE_SIZE;
 
+	/*
+	 * There's no API in the kernel to start asynchronous
+	 * cached read (or write), so in case someone is asking
+	 * for us for urgent async read, just do the regular
+	 * cached read.
+	 */
+	if ((flags & (PR_ASYNC|PR_ASAP)) == PR_ASYNC)
+		ret = enqueue_async_page(pr, vaddr, len, buf);
+	else {
+		ret = read_local_page(pr, vaddr, len, buf);
+		if (ret == 0 && pr->io_complete)
+			ret = pr->io_complete(pr, vaddr, nr);
+	}
+
+	pr->pi_off += len;
+
+	return ret;
+}
+
+static int read_page_complete(int pid, unsigned long vaddr, int nr_pages, void *priv)
+{
+	int ret = 0;
+	struct page_read *pr = priv;
+
+	if (pr->pid != pid) {
+		pr_err("Out of order read completed (want %d have %d)\n",
+				pr->pid, pid);
+		return -1;
+	}
+
+	if (pr->io_complete)
+		ret = pr->io_complete(pr, vaddr, nr_pages);
+
+	return ret;
+}
+
+static int maybe_read_page_remote(struct page_read *pr, unsigned long vaddr,
+		int nr, void *buf, unsigned flags)
+{
+	int ret, pid;
+
+	/* We always do PR_ASAP mode here (FIXME?) */
+	ret = request_remote_pages(pr->pid, vaddr, nr);
+	if (ret < 0)
+		return ret;
+	if (flags & PR_ASYNC)
+		return page_server_start_async_read(buf, nr, read_page_complete, pr);
+
+	/*
+	 * Note, that for async remote page_read, the actual
+	 * transfer happens in the lazy-pages daemon
+	 */
+	ret = receive_remote_pages_info(&nr, &vaddr, &pid);
+	if (ret == 0)
+		ret = receive_remote_pages(nr * PAGE_SIZE, buf);
+
+	if (ret == 0 && pr->io_complete)
+		ret = pr->io_complete(pr, vaddr, nr);
+
+	return ret;
+}
+
+static int read_pagemap_page(struct page_read *pr, unsigned long vaddr, int nr,
+			     void *buf, unsigned flags)
+{
 	pr_info("pr%u Read %lx %u pages\n", pr->id, vaddr, nr);
 	pagemap_bound_check(pr->pe, vaddr, nr);
 
 	if (pagemap_in_parent(pr->pe)) {
-		if (read_parent_page(pr, vaddr, nr, buf) < 0)
+		if (read_parent_page(pr, vaddr, nr, buf, flags) < 0)
 			return -1;
 	} else if (pagemap_zero(pr->pe)) {
 		/* zero mappings should be skipped by get_pagemap */
 		BUG();
 	} else {
-		if (read_local_page(pr, vaddr, len, buf) < 0)
+		if (pr->maybe_read_page(pr, vaddr, nr, buf, flags) < 0)
 			return -1;
 	}
 
-	pr->cvaddr += len;
+	pr->cvaddr += nr * PAGE_SIZE;
 
 	return 1;
 }
@@ -313,9 +474,42 @@ static void free_pagemaps(struct page_read *pr)
 	xfree(pr->pmes);
 }
 
+static int process_async_reads(struct page_read *pr)
+{
+	int fd, ret = 0;
+	struct page_read_iov *piov, *n;
+
+	fd = img_raw_fd(pr->pi);
+	list_for_each_entry_safe(piov, n, &pr->async, l) {
+		int ret;
+
+		ret = preadv(fd, piov->to, piov->nr, piov->from);
+		if (ret != piov->end - piov->from) {
+			pr_err("Can't read async pr bytes\n");
+			return -1;
+		}
+
+		if (opts.auto_dedup && punch_hole(pr, piov->from, ret, false))
+			return -1;
+
+		BUG_ON(pr->io_complete); /* FIXME -- implement once needed */
+
+		list_del(&piov->l);
+		xfree(piov->to);
+		xfree(piov);
+	}
+
+	if (pr->parent)
+		ret = process_async_reads(pr->parent);
+
+	return ret;
+}
+
 static void close_page_read(struct page_read *pr)
 {
 	int ret;
+
+	BUG_ON(!list_empty(&pr->async));
 
 	if (pr->bunch.iov_len > 0) {
 		ret = punch_hole(pr, 0, 0, true);
@@ -461,7 +655,13 @@ int open_page_read_at(int dfd, int pid, struct page_read *pr, int pr_flags)
 {
 	int flags, i_typ;
 	static unsigned ids = 1;
+	bool remote = pr_flags & PR_REMOTE;
 
+	/*
+	 * Only the top-most page-read can be remote, all the
+	 * others are always local.
+	 */
+	pr_flags &= ~PR_REMOTE;
 	if (opts.auto_dedup)
 		pr_flags |= PR_MOD;
 	if (pr_flags & PR_MOD)
@@ -481,6 +681,7 @@ int open_page_read_at(int dfd, int pid, struct page_read *pr, int pr_flags)
 		return -1;
 	}
 
+	INIT_LIST_HEAD(&pr->async);
 	pr->pe = NULL;
 	pr->parent = NULL;
 	pr->cvaddr = 0;
@@ -514,16 +715,25 @@ int open_page_read_at(int dfd, int pid, struct page_read *pr, int pr_flags)
 		return -1;
 	}
 
-	pr->get_pagemap = get_pagemap;
 	pr->read_pages = read_pagemap_page;
+	pr->advance = advance;
 	pr->close = close_page_read;
 	pr->skip_pages = skip_pagemap_pages;
-	pr->seek_page = seek_pagemap_page;
+	pr->seek_pagemap = seek_pagemap;
 	pr->reset = reset_pagemap;
+	pr->sync = process_async_reads;
+	pr->io_complete = NULL; /* set up by the client if needed */
 	pr->id = ids++;
+	pr->pid = pid;
 
-	pr_debug("Opened page read %u (parent %u)\n",
-			pr->id, pr->parent ? pr->parent->id : 0);
+	if (remote)
+		pr->maybe_read_page = maybe_read_page_remote;
+	else
+		pr->maybe_read_page = maybe_read_page_local;
+
+	pr_debug("Opened %s page read %u (parent %u)\n",
+		 remote ? "remote" : "local", pr->id,
+		 pr->parent ? pr->parent->id : 0);
 
 	return 1;
 }

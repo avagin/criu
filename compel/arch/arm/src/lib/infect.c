@@ -2,6 +2,7 @@
 #include <sys/types.h>
 #include <compel/plugins/std/syscall-codes.h>
 #include <compel/asm/processor-flags.h>
+#include "common/page.h"
 #include "uapi/compel/asm/infect-types.h"
 #include "log.h"
 #include "errno.h"
@@ -25,8 +26,46 @@ static inline __always_unused void __check_code_syscall(void)
 	BUILD_BUG_ON(!is_log2(sizeof(code_syscall)));
 }
 
+int sigreturn_prep_regs_plain(struct rt_sigframe *sigframe,
+			      user_regs_struct_t *regs,
+			      user_fpregs_struct_t *fpregs)
+{
+	struct aux_sigframe *aux = (struct aux_sigframe *)(void *)&sigframe->sig.uc.uc_regspace;
+
+	sigframe->sig.uc.uc_mcontext.arm_r0 = regs->ARM_r0;
+	sigframe->sig.uc.uc_mcontext.arm_r1 = regs->ARM_r1;
+	sigframe->sig.uc.uc_mcontext.arm_r2 = regs->ARM_r2;
+	sigframe->sig.uc.uc_mcontext.arm_r3 = regs->ARM_r3;
+	sigframe->sig.uc.uc_mcontext.arm_r4 = regs->ARM_r4;
+	sigframe->sig.uc.uc_mcontext.arm_r5 = regs->ARM_r5;
+	sigframe->sig.uc.uc_mcontext.arm_r6 = regs->ARM_r6;
+	sigframe->sig.uc.uc_mcontext.arm_r7 = regs->ARM_r7;
+	sigframe->sig.uc.uc_mcontext.arm_r8 = regs->ARM_r8;
+	sigframe->sig.uc.uc_mcontext.arm_r9 = regs->ARM_r9;
+	sigframe->sig.uc.uc_mcontext.arm_r10 = regs->ARM_r10;
+	sigframe->sig.uc.uc_mcontext.arm_fp = regs->ARM_fp;
+	sigframe->sig.uc.uc_mcontext.arm_ip = regs->ARM_ip;
+	sigframe->sig.uc.uc_mcontext.arm_sp = regs->ARM_sp;
+	sigframe->sig.uc.uc_mcontext.arm_lr = regs->ARM_lr;
+	sigframe->sig.uc.uc_mcontext.arm_pc = regs->ARM_pc;
+	sigframe->sig.uc.uc_mcontext.arm_cpsr = regs->ARM_cpsr;
+
+	memcpy(&aux->vfp.ufp.fpregs, &fpregs->fpregs, sizeof(aux->vfp.ufp.fpregs));
+	aux->vfp.ufp.fpscr = fpregs->fpscr;
+	aux->vfp.magic = VFP_MAGIC;
+	aux->vfp.size = VFP_STORAGE_SIZE;
+
+	return 0;
+}
+
+int sigreturn_prep_fpu_frame_plain(struct rt_sigframe *sigframe,
+				   struct rt_sigframe *rsigframe)
+{
+	return 0;
+}
+
 #define PTRACE_GETVFPREGS 27
-int compel_get_task_regs(pid_t pid, user_regs_struct_t regs, save_regs_t save, void *arg)
+int get_task_regs(pid_t pid, user_regs_struct_t regs, save_regs_t save, void *arg)
 {
 	user_fpregs_struct_t vfp;
 	int ret = -1;
@@ -120,3 +159,24 @@ bool arch_can_dump_task(struct parasite_ctl *ctl)
 	 */
 	return true;
 }
+
+/*
+ * Range for task size calculated from the following Linux kernel files:
+ *   arch/arm/include/asm/memory.h
+ *   arch/arm/Kconfig (PAGE_OFFSET values in Memory split section)
+ */
+#define TASK_SIZE_MIN		0x3f000000
+#define TASK_SIZE_MAX		0xbf000000
+#define SZ_1G			0x40000000
+
+unsigned long compel_task_size(void)
+{
+	unsigned long task_size;
+
+	for (task_size = TASK_SIZE_MIN; task_size < TASK_SIZE_MAX; task_size += SZ_1G)
+		if (munmap((void *)task_size, page_size()))
+			break;
+
+	return task_size;
+}
+

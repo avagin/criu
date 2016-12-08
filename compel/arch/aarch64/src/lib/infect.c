@@ -3,6 +3,7 @@
 #include <sys/uio.h>
 #include <linux/elf.h>
 #include <compel/plugins/std/syscall-codes.h>
+#include "common/page.h"
 #include "uapi/compel/asm/infect-types.h"
 #include "log.h"
 #include "errno.h"
@@ -26,7 +27,36 @@ static inline void __always_unused __check_code_syscall(void)
 	BUILD_BUG_ON(!is_log2(sizeof(code_syscall)));
 }
 
-int compel_get_task_regs(pid_t pid, user_regs_struct_t regs, save_regs_t save, void *arg)
+int sigreturn_prep_regs_plain(struct rt_sigframe *sigframe,
+			      user_regs_struct_t *regs,
+			      user_fpregs_struct_t *fpregs)
+{
+	struct fpsimd_context *fpsimd = RT_SIGFRAME_FPU(sigframe);
+
+	memcpy(sigframe->uc.uc_mcontext.regs, regs->regs, sizeof(regs->regs));
+
+	sigframe->uc.uc_mcontext.sp	= regs->sp;
+	sigframe->uc.uc_mcontext.pc	= regs->pc;
+	sigframe->uc.uc_mcontext.pstate	= regs->pstate;
+
+	memcpy(fpsimd->vregs, fpregs->vregs, 32 * sizeof(__uint128_t));
+
+	fpsimd->fpsr = fpregs->fpsr;
+	fpsimd->fpcr = fpregs->fpcr;
+
+	fpsimd->head.magic = FPSIMD_MAGIC;
+	fpsimd->head.size = sizeof(*fpsimd);
+
+	return 0;
+}
+
+int sigreturn_prep_fpu_frame_plain(struct rt_sigframe *sigframe,
+				   struct rt_sigframe *rsigframe)
+{
+	return 0;
+}
+
+int get_task_regs(pid_t pid, user_regs_struct_t regs, save_regs_t save, void *arg)
 {
 	struct iovec iov;
 	user_fpregs_struct_t fpsimd;
@@ -109,3 +139,24 @@ bool arch_can_dump_task(struct parasite_ctl *ctl)
 	 */
 	return true;
 }
+
+/*
+ * Range for task size calculated from the following Linux kernel files:
+ *   arch/arm64/include/asm/memory.h
+ *   arch/arm64/Kconfig
+ *
+ * TODO: handle 32 bit tasks
+ */
+#define TASK_SIZE_MIN (1UL << 39)
+#define TASK_SIZE_MAX (1UL << 48)
+
+unsigned long compel_task_size(void)
+{
+	unsigned long task_size;
+
+	for (task_size = TASK_SIZE_MIN; task_size < TASK_SIZE_MAX; task_size <<= 1)
+		if (munmap((void *)task_size, page_size()))
+			break;
+	return task_size;
+}
+

@@ -1,9 +1,13 @@
 #ifndef __LIBSOCCR_H__
 #define __LIBSOCCR_H__
 #include <linux/types.h>
+#include <netinet/in.h>
 #include <stdint.h>
 
 #include "config.h"
+
+/* All packets with this mark have not to be blocked. */
+#define SOCCR_MARK 0xC114
 
 #ifndef CONFIG_HAS_TCP_REPAIR_WINDOW
 struct tcp_repair_window {
@@ -57,6 +61,12 @@ void libsoccr_set_log(unsigned int level, void (*fn)(unsigned int level, const c
  */
 struct libsoccr_sk;
 
+union libsoccr_addr {
+	struct sockaddr sa;
+	struct sockaddr_in v4;
+	struct sockaddr_in6 v6;
+};
+
 /*
  * Connection info that should be saved after fetching from the
  * socket and given back into the library in two steps (see below).
@@ -80,6 +90,9 @@ struct libsoccr_sk_data {
 	__u32	max_window;
 	__u32	rcv_wnd;
 	__u32	rcv_wup;
+
+	union libsoccr_addr src_addr;
+	union libsoccr_addr dst_addr;
 };
 
 /*
@@ -168,25 +181,18 @@ char *libsoccr_get_queue_bytes(struct libsoccr_sk *sk, int queue_id, int steal);
  * 	sk = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
  *
  * 	h = libsoccr_pause(sk)
- * 	libsoccr_set_sk_data_unbound(h, &data, sizeof(data))
  * 	bind(sk, &name, ...)
- * 	connect(sk, &name, ...)
- * 	libsoccr_set_sk_data(h, &data, sizeof(data))
+ *
+ * 	libsoccr_set_sk_data_noq(h, &data, sizeof(data))
  * 	libsoccr_set_queue_bytes(h, &data, sizeof(data), TCP_RECV_QUEUE, inq)
  * 	libsoccr_set_queue_bytes(h, &data, sizeof(data), TCP_SEND_QUEUE, outq)
+ * 	libsoccr_set_sk_data(h, &data, sizeof(data))
  *
  * 	libsoccr_resume(h)
  *
  * Only after this the packets path from and to the socket can be
  * enabled back.
  */
-
-/*
- * Performs restore action while the socket is not bind()-ed and
- * not connect()-ed. The data should be the one from _get_sk_data
- * call. The data_size is the amount of bytes sitting in there.
- */
-int libsoccr_set_sk_data_unbound(struct libsoccr_sk *sk, struct libsoccr_sk_data *data, unsigned data_size);
 
 /*
  * Performs additional restore actions on bind()-ed and connect()-ed

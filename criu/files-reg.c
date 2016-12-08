@@ -197,10 +197,8 @@ again:
 		if ((ret = mknod(path, gfe->mode, gfe->rdev)) < 0)
 			msg = "Can't create node for ghost dev";
 	} else if (S_ISDIR(gfe->mode)) {
-		if ((ret = mkdir(path, gfe->mode)) < 0) {
-			pr_perror("Can't make ghost dir");
-			goto err;
-		}
+		if ((ret = mkdirpat(AT_FDCWD, path, gfe->mode)) < 0)
+			msg = "Can't make ghost dir";
 	} else {
 		if ((ret = mkreg_ghost(path, gfe->mode, gf, img)) < 0)
 			msg = "Can't create ghost regfile";
@@ -787,6 +785,8 @@ static int dump_linked_remap(char *path, int len, const struct stat *ost,
 
 	rpe.orig_id = id;
 	rpe.remap_id = lid;
+	rpe.has_remap_type = true;
+	rpe.remap_type = REMAP_TYPE__LINKED;
 
 	return pb_write_one(img_from_set(glob_imgset, CR_FD_REMAP_FPATH),
 			&rpe, PB_REMAP_FPATH);

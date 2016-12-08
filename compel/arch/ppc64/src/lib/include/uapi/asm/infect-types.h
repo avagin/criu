@@ -78,31 +78,6 @@ typedef struct {
 
 #define user_regs_native(pregs)	true
 
-/*
- * Copied from the following kernel header files :
- * 	include/linux/auxvec.h
- *	arch/powerpc/include/uapi/asm/auxvec.h
- *	include/linux/mm_types.h
- */
-#define AT_VECTOR_SIZE_BASE	20
-#define AT_VECTOR_SIZE_ARCH	6
-#define AT_VECTOR_SIZE		(2*(AT_VECTOR_SIZE_ARCH + AT_VECTOR_SIZE_BASE + 1))
-
-typedef uint64_t auxv_t;
-
-/* Not used but the structure parasite_dump_thread needs a tls_t field */
-typedef uint64_t tls_t;
-
-/*
- * Copied for the Linux kernel arch/powerpc/include/asm/processor.h
- *
- * NOTE: 32bit tasks are not supported.
- */
-#define TASK_SIZE_USER64	(0x0000400000000000UL)
-#define TASK_SIZE		TASK_SIZE_USER64
-
-static inline unsigned long task_size(void) { return TASK_SIZE; }
-
 #define ARCH_SI_TRAP TRAP_BRKPT
 
 #define __NR(syscall, compat)	__NR_##syscall

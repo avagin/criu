@@ -4,7 +4,6 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <signal.h>
-#include "common/page.h"
 #include <compel/plugins/std/asm/syscall-types.h>
 
 #define SIGMAX			64
@@ -109,38 +108,9 @@ typedef struct {
 
 typedef struct xsave_struct user_fpregs_struct_t;
 
-#ifdef CONFIG_X86_64
-# define TASK_SIZE	((1UL << 47) - PAGE_SIZE)
-#else
-/*
- * Task size may be limited to 3G but we need a
- * higher limit, because it's backward compatible.
- */
-# define TASK_SIZE	(0xffffe000)
-#endif
-
-static inline unsigned long task_size(void) { return TASK_SIZE; }
-
 #define REG_RES(regs)		get_user_reg(&regs, ax)
 #define REG_IP(regs)		get_user_reg(&regs, ip)
 #define REG_SYSCALL_NR(regs)	get_user_reg(&regs, orig_ax)
-
-typedef uint64_t auxv_t;
-
-/*
- * Linux preserves three TLS segments in GDT.
- * Offsets in GDT differ between 32-bit and 64-bit machines.
- * For 64-bit x86 those GDT offsets are the same
- * for native and compat tasks.
- */
-#define GDT_ENTRY_TLS_MIN		12
-#define GDT_ENTRY_TLS_MAX		14
-#define GDT_ENTRY_TLS_NUM		3
-typedef struct {
-	user_desc_t		desc[GDT_ENTRY_TLS_NUM];
-} tls_t;
-
-#define AT_VECTOR_SIZE 44
 
 #define __NR(syscall, compat)	((compat) ? __NR32_##syscall : __NR_##syscall)
 

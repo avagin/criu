@@ -34,22 +34,10 @@ include $(__nmk_dir)msg.mk
 # Needed libraries checks
 include $(SRC_DIR)/criu/Makefile.packages
 
-##
-## System calls library.
-#ifeq ($(ARCH),x86)
-## Do not need 32-bit compatible syscall lib compiled in criu
-#SYSCALL-LIB		:= $(ARCH_DIR)/syscalls-64.built-in.o
-#else
-#SYSCALL-LIB		:= $(ARCH_DIR)/syscalls.built-in.o
-#endif
-#syscalls_lib:
-#	$(Q) $(MAKE) $(call build-as,Makefile.syscalls,$(ARCH_DIR)) all
-.PHONY: syscalls_lib
-
 #
 # Architecture dependent part.
 ARCH-LIB		:= $(ARCH_DIR)/crtools.built-in.o
-$(ARCH-LIB): syscalls_lib
+$(ARCH-LIB):
 	$(Q) $(MAKE) $(build)=$(ARCH_DIR) all
 
 #
@@ -59,7 +47,7 @@ criu/pie/native.lib.a: $(ARCH-LIB)
 
 #
 # PIE code blobs themseves.
-pie: criu/pie/native.lib.a
+pie: criu/pie/native.lib.a compel/plugins/std.built-in.o
 	$(Q) $(MAKE) $(build)=criu/pie all
 .PHONY: pie
 
@@ -73,6 +61,7 @@ PROGRAM-BUILTINS	+= images/built-in.o
 PROGRAM-BUILTINS	+= $(obj)/built-in.o
 PROGRAM-BUILTINS	+= $(ARCH-LIB)
 PROGRAM-BUILTINS	+= compel/libcompel.a
+PROGRAM-BUILTINS	+= soccr/libsoccr.a
 
 $(obj)/built-in.o: pie
 	$(Q) $(MAKE) $(call build-as,Makefile.crtools,criu) all
@@ -119,8 +108,8 @@ install: $(obj)/criu
 	$(E) "  INSTALL " $(obj)/criu
 	$(Q) mkdir -p $(DESTDIR)$(SBINDIR)
 	$(Q) install -m 755 $(obj)/criu $(DESTDIR)$(SBINDIR)
-	$(Q) mkdir -p $(DESTDIR)$(INCLUDEDIR)
-	$(Q) install -m 644 $(UAPI_HEADERS) $(DESTDIR)$(INCLUDEDIR)
+	$(Q) mkdir -p $(DESTDIR)$(INCLUDEDIR)/criu/
+	$(Q) install -m 644 $(UAPI_HEADERS) $(DESTDIR)$(INCLUDEDIR)/criu/
 	$(Q) mkdir -p $(DESTDIR)$(LIBEXECDIR)/criu/scripts
 	$(Q) install -m 755 $(SRC_DIR)/scripts/systemd-autofs-restart.sh $(DESTDIR)$(LIBEXECDIR)/criu/scripts
 .PHONY: install
@@ -128,7 +117,7 @@ install: $(obj)/criu
 uninstall:
 	$(E) " UNINSTALL" criu
 	$(Q) $(RM) $(addprefix $(DESTDIR)$(SBINDIR)/,criu)
-	$(Q) $(RM) $(addprefix $(DESTDIR)$(INCLUDEDIR)/,$(notdir $(UAPI_HEADERS)))
+	$(Q) $(RM) $(addprefix $(DESTDIR)$(INCLUDEDIR)/criu/,$(notdir $(UAPI_HEADERS)))
 	$(Q) $(RM) $(addprefix $(DESTDIR)$(LIBEXECDIR)/criu/scripts/,systemd-autofs-restart.sh)
 .PHONY: uninstall
 

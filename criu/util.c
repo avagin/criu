@@ -484,6 +484,9 @@ int clone_service_fd(int id)
 		int old = __get_service_fd(i, service_fd_id);
 		int new = __get_service_fd(i, id);
 
+		/* Do not dup parent's transport fd */
+		if (i == TRANSPORT_FD_OFF)
+			continue;
 		ret = dup2(old, new);
 		if (ret == -1) {
 			if (errno == EBADF)
@@ -801,14 +804,14 @@ struct vma_area *alloc_vma_area(void)
 	return p;
 }
 
-int mkdirpat(int fd, const char *path)
+int mkdirpat(int fd, const char *path, int mode)
 {
 	size_t i;
 	char made_path[PATH_MAX], *pos;
 
 	if (strlen(path) >= PATH_MAX) {
 		pr_err("path %s is longer than PATH_MAX\n", path);
-		return -1;
+		return -ENOSPC;
 	}
 
 	strcpy(made_path, path);
@@ -821,9 +824,10 @@ int mkdirpat(int fd, const char *path)
 		pos = strchr(made_path + i, '/');
 		if (pos)
 			*pos = '\0';
-		if (mkdirat(fd, made_path, 0755) < 0 && errno != EEXIST) {
+		if (mkdirat(fd, made_path, mode) < 0 && errno != EEXIST) {
+			int ret = -errno;
 			pr_perror("couldn't mkdirpat directory %s", made_path);
-			return -1;
+			return ret;
 		}
 		if (pos) {
 			*pos = '/';
@@ -1184,4 +1188,67 @@ int setup_tcp_client(char *addr)
 	}
 
 	return sk;
+}
+
+int epoll_add_rfd(int epfd, struct epoll_rfd *rfd)
+{
+	struct epoll_event ev;
+
+	ev.events = EPOLLIN;
+	ev.data.ptr = rfd;
+	if (epoll_ctl(epfd, EPOLL_CTL_ADD, rfd->fd, &ev) == -1) {
+		pr_perror("epoll_ctl failed");
+		return -1;
+	}
+
+	return 0;
+}
+
+int epoll_run_rfds(int epollfd, struct epoll_event *evs, int nr_fds, int timeout)
+{
+	int ret = 0, i;
+
+	while (1) {
+		/* FIXME -- timeout should decrease over time...  */
+		ret = epoll_wait(epollfd, evs, nr_fds, timeout);
+		if (ret <= 0) {
+			if (ret < 0)
+				pr_perror("polling failed");
+			else
+				pr_debug("polling timeout\n");
+			break;
+		}
+
+		for (i = 0; i < ret; i++) {
+			struct epoll_rfd *rfd;
+
+			rfd = (struct epoll_rfd *)evs[i].data.ptr;
+			ret = rfd->revent(rfd);
+			if (ret < 0)
+				goto out;
+		}
+	}
+out:
+	return ret;
+}
+
+int epoll_prepare(int nr_fds, struct epoll_event **events)
+{
+	int epollfd;
+
+	*events = xmalloc(sizeof(struct epoll_event) * nr_fds);
+	if (!*events)
+		return -1;
+
+	epollfd = epoll_create(nr_fds);
+	if (epollfd == -1) {
+		pr_perror("epoll_create failed");
+		goto free_events;
+	}
+
+	return epollfd;
+
+free_events:
+	xfree(*events);
+	return -1;
 }

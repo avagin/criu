@@ -1,6 +1,7 @@
 #ifndef __CR_PAGE_READ_H__
 #define __CR_PAGE_READ_H__
 
+#include "common/list.h"
 #include "images/pagemap.pb-c.h"
 
 /*
@@ -41,17 +42,21 @@
  */
 
 struct page_read {
-	/*
-	 * gets next vaddr:len pair to work on.
-	 * Pagemap entries should be returned in sorted order.
-	 */
-	int (*get_pagemap)(struct page_read *, struct iovec *iov);
 	/* reads page from current pagemap */
-	int (*read_pages)(struct page_read *, unsigned long vaddr, int nr, void *);
+	int (*read_pages)(struct page_read *, unsigned long vaddr, int nr,
+			  void *, unsigned flags);
+	/* Advance page_read to the next entry */
+	int (*advance)(struct page_read *pr, bool skip_zero);
 	void (*close)(struct page_read *);
 	void (*skip_pages)(struct page_read *, unsigned long len);
-	int (*seek_page)(struct page_read *pr, unsigned long vaddr, bool warn);
+	int (*seek_pagemap)(struct page_read *pr, unsigned long vaddr,
+			    bool skip_zero);
 	void (*reset)(struct page_read *pr);
+	int (*sync)(struct page_read *pr);
+
+	int (*io_complete)(struct page_read *, unsigned long vaddr, int nr);
+	int (*maybe_read_page)(struct page_read *pr, unsigned long vaddr,
+			int nr, void *buf, unsigned flags);
 
 	/* Private data of reader */
 	struct cr_img *pmi;
@@ -67,18 +72,27 @@ struct page_read {
 
 	struct iovec bunch;		/* record consequent neighbour
 					   iovecs to punch together */
-	unsigned id; /* for logging */
+	unsigned id;			/* for logging */
+	int pid;			/* PID of the process */
 
 	PagemapEntry **pmes;
 	int nr_pmes;
 	int curr_pme;
+
+	struct list_head	async;
 };
 
+/* flags for ->read_pages */
+#define PR_ASYNC	0x1 /* may exit w/o data in the buffer */
+#define PR_ASAP		0x2 /* PR_ASYNC, but start the IO right now */
+
+/* flags for open_page_read */
 #define PR_SHMEM	0x1
 #define PR_TASK		0x2
 
 #define PR_TYPE_MASK	0x3
 #define PR_MOD		0x4	/* Will need to modify */
+#define PR_REMOTE	0x8
 
 /*
  * -1 -- error
