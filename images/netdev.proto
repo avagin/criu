@@ -42,6 +42,14 @@ message net_device_entry {
 	repeated sysctl_entry conf6	= 10;
 
 	optional macvlan_link_entry	macvlan		= 11;
+
+	optional uint32 peer_ifindex	= 12;
+	optional uint32 peer_nsid	= 13;
+}
+
+message netns_id {
+	required uint32	id	= 1;
+	required int32	nsid	= 2;
 }
 
 message netns_entry {
@@ -53,4 +61,6 @@ message netns_entry {
 
 	repeated sysctl_entry def_conf6	= 5;
 	repeated sysctl_entry all_conf6	= 6;
+
+	repeated netns_id nsids		= 7;
 }
