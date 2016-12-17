@@ -366,7 +366,7 @@ int write_netdev_img(NetDeviceEntry *nde, struct cr_imgset *fds, struct nlattr *
 }
 
 static int dump_one_netdev(int type, struct ifinfomsg *ifi,
-		struct nlattr **tb, struct cr_imgset *fds,
+		struct nlattr **tb, struct ns_id *ns, struct cr_imgset *fds,
 		int (*dump)(NetDeviceEntry *, struct cr_imgset *, struct nlattr **info))
 {
 	int ret = -1;
@@ -482,13 +482,13 @@ static char *link_kind(struct ifinfomsg *ifi, struct nlattr **tb)
 }
 
 static int dump_unknown_device(struct ifinfomsg *ifi, char *kind,
-		struct nlattr **tb, struct cr_imgset *fds)
+		struct nlattr **tb, struct ns_id *ns, struct cr_imgset *fds)
 {
 	int ret;
 
 	ret = run_plugins(DUMP_EXT_LINK, ifi->ifi_index, ifi->ifi_type, kind);
 	if (ret == 0)
-		return dump_one_netdev(ND_TYPE__EXTLINK, ifi, tb, fds, NULL);
+		return dump_one_netdev(ND_TYPE__EXTLINK, ifi, tb, ns, fds, NULL);
 
 	if (ret == -ENOTSUP)
 		pr_err("Unsupported link %d (type %d kind %s)\n",
@@ -563,7 +563,7 @@ static int dump_macvlan(NetDeviceEntry *nde, struct cr_imgset *imgset, struct nl
 }
 
 static int dump_one_ethernet(struct ifinfomsg *ifi, char *kind,
-		struct nlattr **tb, struct cr_imgset *fds)
+		struct nlattr **tb, struct ns_id *ns, struct cr_imgset *fds)
 {
 	if (!strcmp(kind, "veth"))
 		/*
@@ -574,11 +574,11 @@ static int dump_one_ethernet(struct ifinfomsg *ifi, char *kind,
 		 * Sigh... we have to assume, that the veth device is a
 		 * connection to the outer world and just dump this end :(
 		 */
-		return dump_one_netdev(ND_TYPE__VETH, ifi, tb, fds, NULL);
+		return dump_one_netdev(ND_TYPE__VETH, ifi, tb, ns, fds, NULL);
 	if (!strcmp(kind, "tun"))
-		return dump_one_netdev(ND_TYPE__TUN, ifi, tb, fds, dump_tun_link);
+		return dump_one_netdev(ND_TYPE__TUN, ifi, tb, ns, fds, dump_tun_link);
 	if (!strcmp(kind, "bridge"))
-		return dump_one_netdev(ND_TYPE__BRIDGE, ifi, tb, fds, dump_bridge);
+		return dump_one_netdev(ND_TYPE__BRIDGE, ifi, tb, ns, fds, dump_bridge);
 	if (!strcmp(kind, "gretap")) {
 		char *name = (char *)RTA_DATA(tb[IFLA_IFNAME]);
 
@@ -595,31 +595,31 @@ static int dump_one_ethernet(struct ifinfomsg *ifi, char *kind,
 		pr_warn("GRE tap device %s not supported natively\n", name);
 	}
 	if (!strcmp(kind, "macvlan"))
-		return dump_one_netdev(ND_TYPE__MACVLAN, ifi, tb, fds, dump_macvlan);
+		return dump_one_netdev(ND_TYPE__MACVLAN, ifi, tb, ns, fds, dump_macvlan);
 
-	return dump_unknown_device(ifi, kind, tb, fds);
+	return dump_unknown_device(ifi, kind, tb, ns, fds);
 }
 
 static int dump_one_gendev(struct ifinfomsg *ifi, char *kind,
-		struct nlattr **tb, struct cr_imgset *fds)
+		struct nlattr **tb, struct ns_id *ns, struct cr_imgset *fds)
 {
 	if (!strcmp(kind, "tun"))
-		return dump_one_netdev(ND_TYPE__TUN, ifi, tb, fds, dump_tun_link);
+		return dump_one_netdev(ND_TYPE__TUN, ifi, tb, ns, fds, dump_tun_link);
 
-	return dump_unknown_device(ifi, kind, tb, fds);
+	return dump_unknown_device(ifi, kind, tb, ns, fds);
 }
 
 static int dump_one_voiddev(struct ifinfomsg *ifi, char *kind,
-		struct nlattr **tb, struct cr_imgset *fds)
+		struct nlattr **tb, struct ns_id *ns, struct cr_imgset *fds)
 {
 	if (!strcmp(kind, "venet"))
-		return dump_one_netdev(ND_TYPE__VENET, ifi, tb, fds, NULL);
+		return dump_one_netdev(ND_TYPE__VENET, ifi, tb, ns, fds, NULL);
 
-	return dump_unknown_device(ifi, kind, tb, fds);
+	return dump_unknown_device(ifi, kind, tb, ns, fds);
 }
 
 static int dump_one_gre(struct ifinfomsg *ifi, char *kind,
-		struct nlattr **tb, struct cr_imgset *fds)
+		struct nlattr **tb, struct ns_id *ns, struct cr_imgset *fds)
 {
 	if (!strcmp(kind, "gre")) {
 		char *name = (char *)RTA_DATA(tb[IFLA_IFNAME]);
@@ -636,7 +636,7 @@ static int dump_one_gre(struct ifinfomsg *ifi, char *kind,
 		pr_warn("GRE tunnel device %s not supported natively\n", name);
 	}
 
-	return dump_unknown_device(ifi, kind, tb, fds);
+	return dump_unknown_device(ifi, kind, tb, ns, fds);
 }
 
 static int dump_one_link(struct nlmsghdr *hdr, struct ns_id *ns, void *arg)
@@ -658,7 +658,7 @@ static int dump_one_link(struct nlmsghdr *hdr, struct ns_id *ns, void *arg)
 	pr_info("\tLD: Got link %d, type %d\n", ifi->ifi_index, ifi->ifi_type);
 
 	if (ifi->ifi_type == ARPHRD_LOOPBACK) 
-		return dump_one_netdev(ND_TYPE__LOOPBACK, ifi, tb, fds, NULL);
+		return dump_one_netdev(ND_TYPE__LOOPBACK, ifi, tb, ns, fds, NULL);
 
 	kind = link_kind(ifi, tb);
 	if (!kind)
@@ -666,20 +666,20 @@ static int dump_one_link(struct nlmsghdr *hdr, struct ns_id *ns, void *arg)
 
 	switch (ifi->ifi_type) {
 	case ARPHRD_ETHER:
-		ret = dump_one_ethernet(ifi, kind, tb, fds);
+		ret = dump_one_ethernet(ifi, kind, tb, ns, fds);
 		break;
 	case ARPHRD_NONE:
-		ret = dump_one_gendev(ifi, kind, tb, fds);
+		ret = dump_one_gendev(ifi, kind, tb, ns, fds);
 		break;
 	case ARPHRD_VOID:
-		ret = dump_one_voiddev(ifi, kind, tb, fds);
+		ret = dump_one_voiddev(ifi, kind, tb, ns, fds);
 		break;
 	case ARPHRD_IPGRE:
-		ret = dump_one_gre(ifi, kind, tb, fds);
+		ret = dump_one_gre(ifi, kind, tb, ns, fds);
 		break;
 	default:
 unk:
-		ret = dump_unknown_device(ifi, kind, tb, fds);
+		ret = dump_unknown_device(ifi, kind, tb, ns, fds);
 		break;
 	}
 
@@ -855,7 +855,7 @@ out:
 
 }
 
-static int dump_links(struct cr_imgset *fds)
+static int dump_links(struct ns_id *ns, struct cr_imgset *fds)
 {
 	int sk, ret;
 	struct {
@@ -879,7 +879,7 @@ static int dump_links(struct cr_imgset *fds)
 	req.nlh.nlmsg_seq = CR_NLMSG_SEQ;
 	req.g.rtgen_family = AF_PACKET;
 
-	ret = do_rtnl_req(sk, &req, sizeof(req), dump_one_link, NULL, NULL, fds);
+	ret = do_rtnl_req(sk, &req, sizeof(req), dump_one_link, NULL, ns, fds);
 	close(sk);
 out:
 	return ret;
@@ -1368,7 +1368,7 @@ static inline int dump_iptables(struct cr_imgset *fds)
 	return 0;
 }
 
-static int dump_netns_conf(struct cr_imgset *fds)
+static int dump_netns_conf(struct ns_id *ns, struct cr_imgset *fds)
 {
 	int ret = -1;
 	int i;
@@ -1638,21 +1638,21 @@ static int mount_ns_sysfs(void)
 	return ns_sysfs_fd >= 0 ? 0 : -1;
 }
 
-int dump_net_ns(int ns_id)
+int dump_net_ns(struct ns_id *ns)
 {
 	struct cr_imgset *fds;
 	int ret;
 
-	fds = cr_imgset_open(ns_id, NETNS, O_DUMP);
+	fds = cr_imgset_open(ns->id, NETNS, O_DUMP);
 	if (fds == NULL)
 		return -1;
 
 	ret = mount_ns_sysfs();
 	if (!(opts.empty_ns & CLONE_NEWNET)) {
 		if (!ret)
-			ret = dump_netns_conf(fds);
+			ret = dump_netns_conf(ns, fds);
 		if (!ret)
-			ret = dump_links(fds);
+			ret = dump_links(ns, fds);
 		if (!ret)
 			ret = dump_ifaddr(fds);
 		if (!ret)
@@ -1674,9 +1674,9 @@ int dump_net_ns(int ns_id)
 	return ret;
 }
 
-static int prepare_net_ns(int nsid)
+static int prepare_net_ns(struct ns_id *ns)
 {
-	int ret = 0;
+	int ret = 0, nsid = ns->id;
 	NetnsEntry *netns = NULL;
 
 	if (!(opts.empty_ns & CLONE_NEWNET)) {
@@ -1740,7 +1740,7 @@ int prepare_net_namespaces()
 			goto err;
 		}
 
-		if (prepare_net_ns(nsid->id))
+		if (prepare_net_ns(nsid))
 			goto err;
 
 		if (open_net_ns(nsid, rsti(root_item)))
