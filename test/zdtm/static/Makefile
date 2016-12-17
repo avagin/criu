@@ -174,6 +174,7 @@ TST_NOFILE	:=				\
 		sock_peercred			\
 		uffd-events			\
 		netns_sub			\
+		netns_sub_veth			\
 #		jobctl00			\
 
 ifneq ($(SRCARCH),arm)
@@ -442,6 +443,7 @@ stopped01:	override CFLAGS += -DZDTM_STOPPED_KILL
 stopped02:	override CFLAGS += -DZDTM_STOPPED_TKILL
 stopped12:	override CFLAGS += -DZDTM_STOPPED_KILL -DZDTM_STOPPED_TKILL
 clone_fs:		override LDLIBS += -pthread
+netns_sub_veth:		override LDLIBS += -lnl-3 -l nl-route-3 -I/usr/include/libnl3
 
 socket-tcp-fin-wait1:	override CFLAGS += -D ZDTM_TCP_FIN_WAIT1
 socket-tcp-fin-wait2:	override CFLAGS += -D ZDTM_TCP_FIN_WAIT2
