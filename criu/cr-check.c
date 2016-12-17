@@ -1046,7 +1046,6 @@ static int check_uffd(void)
 	return 0;
 }
 
-<<<<<<< HEAD
 static int check_userns(void)
 {
 	int ret;
@@ -1233,6 +1232,32 @@ static int check_tun(void)
 	return check_tun_cr(-1);
 }
 
+static int check_nsid(void)
+{
+	if (kerndat_nsid() < 0)
+		return -1;
+
+	if (!kdat.has_nsid) {
+		pr_warn("NSID isn't supported\n");
+		return -1;
+	}
+
+	return 0;
+}
+
+static int check_link_nsid(void)
+{
+	if (kerndat_link_nsid() < 0)
+		return -1;
+
+	if (!kdat.has_link_nsid) {
+		pr_warn("NSID isn't supported\n");
+		return -1;
+	}
+
+	return 0;
+}
+
 struct feature_list {
 	char *name;
 	int (*func)();
@@ -1255,6 +1280,8 @@ static struct feature_list feature_list[] = {
 	{ "lazy_pages", check_uffd },
 	{ "compat_cr", check_compat_cr },
 	{ "sk_ns", check_sk_netns },
+	{ "nsid", check_nsid },
+	{ "link_nsid", check_link_nsid},
 	{ NULL, NULL },
 };
 
