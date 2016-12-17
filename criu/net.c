@@ -365,12 +365,22 @@ int write_netdev_img(NetDeviceEntry *nde, struct cr_imgset *fds, struct nlattr *
 	return pb_write_one(img_from_set(fds, CR_FD_NETDEV), nde, PB_NETDEV);
 }
 
+static int lookup_net_by_netid(struct ns_id *ns, int net_id)
+{
+	struct netns_id *p;
+
+	list_for_each_entry(p, &ns->net.ids, node)
+		if (p->net_id == net_id)
+			return p->id;
+
+	return -1;
+}
+
 static int dump_one_netdev(int type, struct ifinfomsg *ifi,
 		struct nlattr **tb, struct ns_id *ns, struct cr_imgset *fds,
 		int (*dump)(NetDeviceEntry *, struct cr_imgset *, struct nlattr **info))
 {
-	int ret = -1;
-	int i;
+	int ret = -1, i, peer_ifindex;
 	NetDeviceEntry netdev = NET_DEVICE_ENTRY__INIT;
 	SysctlEntry *confs4 = NULL;
 	int size4 = ARRAY_SIZE(devconfs4);
@@ -389,6 +399,31 @@ static int dump_one_netdev(int type, struct ifinfomsg *ifi,
 	netdev.mtu = *(int *)RTA_DATA(tb[IFLA_MTU]);
 	netdev.flags = ifi->ifi_flags;
 	netdev.name = RTA_DATA(tb[IFLA_IFNAME]);
+
+	if (kdat.has_nsid) {
+		peer_ifindex = ifi->ifi_index;
+		if (tb[IFLA_LINK])
+			peer_ifindex = nla_get_u32(tb[IFLA_LINK]);
+
+		netdev.has_peer_ifindex = true;
+		netdev.peer_ifindex = peer_ifindex;
+	}
+
+	if (kdat.has_nsid && tb[IFLA_LINK_NETNSID]) {
+		s32 nsid = nla_get_s32(tb[IFLA_LINK_NETNSID]);
+
+		pr_debug("The peer link is in the %d netns with the %u index\n",
+						nsid, netdev.peer_ifindex);
+
+		nsid = lookup_net_by_netid(ns, nsid);
+		if (nsid < 0) {
+			pr_warn("The %s veth is in an external netns\n",
+								netdev.name);
+		} else {
+			netdev.has_peer_nsid = true;
+			netdev.peer_nsid = nsid;
+		}
+	}
 
 	if (tb[IFLA_ADDRESS] && (type != ND_TYPE__LOOPBACK)) {
 		netdev.has_address = true;
@@ -1014,9 +1049,10 @@ enum {
 #define IFLA_NET_NS_FD	28
 #endif
 
-static void veth_peer_info(NetDeviceEntry *nde, struct newlink_req *req)
+static int veth_peer_info(NetDeviceEntry *nde, struct newlink_req *req, int ns_fd)
 {
 	char key[100], *val;
+	struct ns_id *ns = NULL;
 
 	snprintf(key, sizeof(key), "veth[%s]", nde->name);
 	val = external_lookup_by_key(key);
@@ -1025,7 +1061,25 @@ static void veth_peer_info(NetDeviceEntry *nde, struct newlink_req *req)
 
 		aux = strchrnul(val, '@');
 		addattr_l(&req->h, sizeof(*req), IFLA_IFNAME, val, aux - val);
+		addattr_l(&req->h, sizeof(*req), IFLA_NET_NS_FD, &ns_fd, sizeof(ns_fd));
+		return 0;
 	}
+
+	if (nde->has_peer_nsid) {
+		ns = lookup_ns_by_id(nde->peer_nsid, &net_ns_desc);
+		if (ns->ns_populated) {
+			req->h.nlmsg_type = RTM_SETLINK;
+			return 0;
+		}
+	}
+
+	if (ns) {
+		addattr_l(&req->h, sizeof(*req), IFLA_NET_NS_FD, &ns->net.ns_fd, sizeof(int));
+		return 0;
+	}
+
+	pr_err("Unknown peer net namespace");
+	return -1;
 }
 
 static int veth_link_info(NetDeviceEntry *nde, struct newlink_req *req)
@@ -1034,17 +1088,17 @@ static int veth_link_info(NetDeviceEntry *nde, struct newlink_req *req)
 	struct rtattr *veth_data, *peer_data;
 	struct ifinfomsg ifm;
 
-	BUG_ON(ns_fd < 0);
-
 	addattr_l(&req->h, sizeof(*req), IFLA_INFO_KIND, "veth", 4);
 
 	veth_data = NLMSG_TAIL(&req->h);
 	addattr_l(&req->h, sizeof(*req), IFLA_INFO_DATA, NULL, 0);
 	peer_data = NLMSG_TAIL(&req->h);
 	memset(&ifm, 0, sizeof(ifm));
+
+	ifm.ifi_index = nde->peer_ifindex;
 	addattr_l(&req->h, sizeof(*req), VETH_INFO_PEER, &ifm, sizeof(ifm));
-	veth_peer_info(nde, req);
-	addattr_l(&req->h, sizeof(*req), IFLA_NET_NS_FD, &ns_fd, sizeof(ns_fd));
+
+	veth_peer_info(nde, req, ns_fd);
 	peer_data->rta_len = (void *)NLMSG_TAIL(&req->h) - (void *)peer_data;
 	veth_data->rta_len = (void *)NLMSG_TAIL(&req->h) - (void *)veth_data;
 
@@ -1250,7 +1304,7 @@ static int restore_links(int pid, NetnsEntry **netns)
 
 		ret = restore_link(nde, nlsk, criu_nlsk);
 		if (ret) {
-			pr_err("Can't restore link\n");
+			pr_err("Can't restore link: %d\n", ret);
 			goto exit;
 		}
 
@@ -1830,7 +1884,7 @@ static int prepare_net_ns(struct ns_id *ns)
 	if (!ret)
 		ret = restore_nf_ct(nsid, CR_FD_NETNF_EXP);
 
-	close_service_fd(NS_FD_OFF);
+	ns->ns_populated = true;
 
 	return ret;
 }
