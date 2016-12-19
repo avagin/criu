@@ -639,6 +639,11 @@ static int dump_one_gre(struct ifinfomsg *ifi, char *kind,
 	return dump_unknown_device(ifi, kind, tb, ns, fds);
 }
 
+static int list_one_link(struct nlmsghdr *hdr, struct ns_id *ns, void *arg)
+{
+	return 0;
+}
+
 static int dump_one_link(struct nlmsghdr *hdr, struct ns_id *ns, void *arg)
 {
 	struct cr_imgset *fds = arg;
@@ -853,6 +858,26 @@ static int dump_nf_ct(struct cr_imgset *fds, int type)
 out:
 	return ret;
 
+}
+
+static int list_links(int rtsk, void *args)
+{
+	struct {
+		struct nlmsghdr nlh;
+		struct rtgenmsg g;
+	} req;
+
+	pr_info("Dumping netns links\n");
+
+	memset(&req, 0, sizeof(req));
+	req.nlh.nlmsg_len = sizeof(req);
+	req.nlh.nlmsg_type = RTM_GETLINK;
+	req.nlh.nlmsg_flags = NLM_F_ROOT|NLM_F_MATCH|NLM_F_REQUEST;
+	req.nlh.nlmsg_pid = 0;
+	req.nlh.nlmsg_seq = CR_NLMSG_SEQ;
+	req.g.rtgen_family = AF_PACKET;
+
+	return do_rtnl_req(rtsk, &req, sizeof(req), list_one_link, NULL, NULL, args);
 }
 
 static int dump_links(int rtsk, struct ns_id *ns, struct cr_imgset *fds)
@@ -1369,6 +1394,24 @@ static int dump_netns_conf(struct ns_id *ns, struct cr_imgset *fds)
 	int size6 = ARRAY_SIZE(devconfs6);
 	char def_stable_secret[MAX_STR_CONF_LEN + 1] = {};
 	char all_stable_secret[MAX_STR_CONF_LEN + 1] = {};
+	NetnsId	*ids;
+	struct netns_id *p;
+
+	i = 0;
+	list_for_each_entry(p, &ns->net.ids, node)
+		i++;
+
+	netns.nsids = xmalloc(sizeof(NetnsId *) * i);
+	ids = xmalloc(sizeof(NetnsId) * i);
+	i = 0;
+	list_for_each_entry(p, &ns->net.ids, node) {
+		netns_id__init(&ids[i]);
+		ids[i].id = p->id;
+		ids[i].nsid = p->net_id;
+		netns.nsids[i] = ids + i;
+		i++;
+	}
+	netns.n_nsids = i;
 
 	netns.n_def_conf4 = size4;
 	netns.n_all_conf4 = size4;
@@ -1628,6 +1671,46 @@ static int mount_ns_sysfs(void)
 	return ns_sysfs_fd >= 0 ? 0 : -1;
 }
 
+struct net_id_arg {
+	struct ns_id *ns;
+	int sk;
+};
+
+static int collect_netns_id(struct ns_id *ns, void *oarg)
+{
+	struct net_id_arg *arg = oarg;
+	struct netns_id *netns_id;
+	int nsid = -1;
+
+	if (net_get_nsid(arg->sk, ns->ns_pid, &nsid))
+		return -1;
+
+	if (nsid == -1)
+		return 0;
+
+	netns_id = xmalloc(sizeof(*netns_id));
+	if (!netns_id)
+		return -1;
+
+	pr_debug("Fount the %d id for %d in %d\n", nsid, ns->id, arg->ns->id);
+	netns_id->id = ns->id;
+	netns_id->net_id = nsid;
+
+	list_add(&netns_id->node, &arg->ns->net.ids);
+
+	return 0;
+}
+
+static int dump_netns_ids(int rtsk, struct ns_id *ns)
+{
+	struct net_id_arg arg = {
+		.ns = ns,
+		.sk = rtsk,
+	};
+	return walk_namespaces(&net_ns_desc, collect_netns_id,
+			(void *)&arg);
+}
+
 int dump_net_ns(struct ns_id *ns)
 {
 	struct cr_imgset *fds;
@@ -1647,6 +1730,10 @@ int dump_net_ns(struct ns_id *ns)
 			ret = -1;
 		}
 
+		if (!ret)
+			ret = list_links(sk, NULL);
+		if (!ret)
+			ret = dump_netns_ids(sk, ns);
 		if (!ret)
 			ret = dump_links(sk, ns, fds);
 
@@ -1675,6 +1762,45 @@ int dump_net_ns(struct ns_id *ns)
 	return ret;
 }
 
+static int net_set_nsid(int rtsk, int fd, int nsid);
+static int restore_netns_ids(struct ns_id *ns, NetnsEntry *netns)
+{
+	int i, sk, exit_code = -1;
+
+	sk = socket(PF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
+	if (sk < 0) {
+		pr_perror("Can't open rtnl sock for net dump");
+		return -1;
+	}
+
+	for (i = 0; i < netns->n_nsids; i++) {
+		struct ns_id *tg_ns;
+		struct netns_id *id;
+
+		id = xmalloc(sizeof(*id));
+		if (!id)
+			goto out;
+		id->id = netns->nsids[i]->id;
+		id->net_id = netns->nsids[i]->nsid;
+		list_add(&id->node, &ns->net.ids);
+
+		tg_ns = lookup_ns_by_id(id->id, &net_ns_desc);
+		if (tg_ns == NULL) {
+			pr_err("Unknown namespace: %d\n", id->id);
+			goto out;
+		}
+
+		if (net_set_nsid(sk, tg_ns->net.ns_fd, id->net_id))
+			goto out;
+	}
+
+	exit_code = 0;
+out:
+	close(sk);
+
+	return exit_code;
+}
+
 static int prepare_net_ns(struct ns_id *ns)
 {
 	int ret = 0, nsid = ns->id;
@@ -1682,6 +1808,8 @@ static int prepare_net_ns(struct ns_id *ns)
 
 	if (!(opts.empty_ns & CLONE_NEWNET)) {
 		ret = restore_netns_conf(nsid, &netns);
+		if (!ret)
+			ret = restore_netns_ids(ns, netns);
 		if (!ret)
 			ret = restore_links(nsid, &netns);
 		if (netns)
@@ -1741,12 +1869,22 @@ int prepare_net_namespaces()
 			goto err;
 		}
 
-		if (prepare_net_ns(nsid))
-			goto err;
-
 		if (open_net_ns(nsid, rsti(root_item)))
 			goto err;
 	}
+
+	for (nsid = ns_ids; nsid != NULL; nsid = nsid->next) {
+		if (nsid->nd != &net_ns_desc)
+			continue;
+
+		if (switch_ns_by_fd(nsid->net.ns_fd, &net_ns_desc, NULL))
+			goto err;
+
+		if (prepare_net_ns(nsid))
+			goto err;
+	}
+
+	close_service_fd(NS_FD_OFF);
 
 	return 0;
 err:
@@ -2237,6 +2375,30 @@ static int nsid_cb(struct nlmsghdr *msg, struct ns_id *ns, void *arg)
 
 	if (tb[NETNSA_NSID])
 		*((int *)arg) = nla_get_s32(tb[NETNSA_NSID]);
+
+	return 0;
+}
+
+static int net_set_nsid(int rtsk, int fd, int nsid)
+{
+	struct {
+		struct nlmsghdr nlh;
+		struct rtgenmsg g;
+		char msg[128];
+	} req;
+
+	memset(&req, 0, sizeof(req));
+	req.nlh.nlmsg_len = NLMSG_LENGTH(sizeof(struct rtgenmsg));
+	req.nlh.nlmsg_type = RTM_NEWNSID;
+	req.nlh.nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
+	req.nlh.nlmsg_seq = CR_NLMSG_SEQ;
+	if (addattr_l(&req.nlh, sizeof(req), NETNSA_FD, &fd, sizeof(fd)))
+		return -1;
+	if (addattr_l(&req.nlh, sizeof(req), NETNSA_NSID, &nsid, sizeof(nsid)))
+		return -1;
+
+	if (do_rtnl_req(rtsk, &req, req.nlh.nlmsg_len, NULL, NULL, NULL, NULL) < 0)
+		return -1;
 
 	return 0;
 }
