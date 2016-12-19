@@ -71,6 +71,12 @@ enum ns_type {
 	NS_OTHER,
 };
 
+struct netns_id {
+	unsigned		id;
+	unsigned		net_id;
+	struct list_head	node;
+};
+
 struct ns_id {
 	unsigned int kid;
 	unsigned int id;
@@ -99,6 +105,7 @@ struct ns_id {
 			int ns_fd;	/* a file handle for the namespace */
 			int nlsk;	/* for sockets collection */
 			int seqsk;	/* to talk to parasite daemons */
+			struct list_head ids;
 		} net;
 	};
 };

@@ -302,6 +302,9 @@ struct ns_id *rst_new_ns_id(unsigned int id, pid_t pid,
 		nsid->type = type;
 		nsid_add(nsid, nd, id, pid);
 		nsid->ns_populated = false;
+
+		if (nd == &net_ns_desc)
+			INIT_LIST_HEAD(&nsid->net.ids);
 	}
 
 	return nsid;
@@ -422,6 +425,10 @@ static unsigned int generate_ns_id(int pid, unsigned int kid, struct ns_desc *nd
 	nsid->kid = kid;
 	nsid->ns_populated = true;
 	nsid_add(nsid, nd, ns_next_id++, pid);
+
+	if (nd == &net_ns_desc) {
+		INIT_LIST_HEAD(&nsid->net.ids);
+	}
 
 found:
 	if (ns_ret)
