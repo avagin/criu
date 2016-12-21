@@ -1059,14 +1059,14 @@ static int veth_peer_info(struct net_link *link, struct newlink_req *req,
 		if (!peer_ns)
 			goto out;
 		list_for_each_entry(plink, &peer_ns->net.links, node) {
-			if (plink->nde->ifindex == nde->peer_ifindex && plink->created) {
+			if (plink->nde->ifindex == nde->peer_ifindex &&
+					plink->stage == NET_LINK_CREATED) {
 				req->h.nlmsg_type = RTM_SETLINK;
 				return 0;
 			}
 		}
 	}
 
-	link->created = true;
 	if (peer_ns) {
 		addattr_l(&req->h, sizeof(*req), IFLA_NET_NS_FD, &peer_ns->net.ns_fd, sizeof(int));
 		return 0;
@@ -1302,7 +1302,7 @@ static int read_links(struct ns_id *ns)
 		}
 
 		link->nde = nde;
-		link->created = 0;
+		link->stage = 0;
 		list_add(&link->node, &ns->net.links);
 	}
 	close_image(img);
@@ -1382,7 +1382,7 @@ static int __restore_links(struct ns_id *nsid, int *nrlinks, int *nrcreated)
 	list_for_each_entry_safe(link, t, &nsid->net.links, node) {
 		struct net_link *mlink = NULL;
 
-		if (link->created)
+		if (link->stage == NET_LINK_CREATED)
 			continue;
 
 		(*nrlinks)++;
@@ -1396,7 +1396,7 @@ static int __restore_links(struct ns_id *nsid, int *nrlinks, int *nrcreated)
 				return -1;
 			}
 
-			if (!mlink->created) {
+			if (mlink->stage != NET_LINK_CREATED) {
 				pr_debug("The master %d:%d:%s isn't created yet",
 					nsid->id, mlink->nde->ifindex, mlink->nde->name);
 				continue;
@@ -1409,7 +1409,7 @@ static int __restore_links(struct ns_id *nsid, int *nrlinks, int *nrcreated)
 
 		if (ret == 0) {
 			(*nrcreated)++;
-			link->created = true;
+			link->stage = NET_LINK_CREATED;
 
 			if (mlink && restore_master_link(nsid->net.nlsk, nsid, link))
 				return -1;
@@ -2722,7 +2722,7 @@ int kerndat_link_nsid()
 	if (pid == 0) {
 		NetDeviceEntry nde = NET_DEVICE_ENTRY__INIT;
 		struct net_link link = {
-			.created = false,
+			.stage = 0,
 			.nde = &nde,
 		};
 		int nsfd, sk, ret;
