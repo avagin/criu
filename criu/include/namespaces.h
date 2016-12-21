@@ -78,9 +78,11 @@ struct netns_id {
 	struct list_head	node;
 };
 
+#define	NET_LINK_CREATED 1
+
 struct net_link {
 	NetDeviceEntry		*nde;
-	bool			created;
+	int			stage;
 	struct list_head	node;
 };
 
