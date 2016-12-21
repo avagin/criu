@@ -441,7 +441,6 @@ static int dump_one_netdev(int type, struct ifinfomsg *ifi,
 	}
 
 	if (tb[IFLA_MASTER]) {
-		pr_err("\n");
 		netdev.has_master = true;
 		netdev.master = nla_get_u32(tb[IFLA_MASTER]);
 	}
