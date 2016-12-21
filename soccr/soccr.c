@@ -455,7 +455,7 @@ static int libsoccr_set_sk_data_noq(struct libsoccr_sk *sk,
 		addr_size = sizeof(sk->src_addr->v6);
 
 	if (bind(sk->fd, &sk->src_addr->sa, addr_size)) {
-		loge("Can't bind inet socket back\n");
+		logerr("Can't bind inet socket back\n");
 		return -1;
 	}
 
