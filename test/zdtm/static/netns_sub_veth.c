@@ -62,16 +62,23 @@ int main(int argc, char **argv)
 		return -1;
 	}
 
+	if (system("ip link add name zdtmbr type bridge"))
+		return -1;
+
 	for (i = 0; i < 2; i++) {
 		char cmd[4096];
 
-		snprintf(cmd, sizeof(cmd), "ip link add name zdtm%d index %d netns %d type veth peer name zdtm%d index %d", i, i * 10 + 12, pid[i], i, i * 10 + 12);
+		snprintf(cmd, sizeof(cmd), "ip link add name zdtm%d index %d netns %d type veth peer name zdtm%d index %d",
+				i, i * 10 + 12, pid[i], i, i * 10 + 12);
 		if (system(cmd)) {
 			has_index = 0;
 			snprintf(cmd, sizeof(cmd), "ip link add name zdtm%d netns %d type veth peer name zdtm%d", i, pid[i], i);
 			if (system(cmd))
 				return 1;
 		}
+		snprintf(cmd, sizeof(cmd), "ip link set dev zdtm%d master zdtmbr", i);
+		if (system(cmd))
+			return 1;
 	}
 
 	test_daemon();

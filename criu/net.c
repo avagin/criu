@@ -440,6 +440,12 @@ static int dump_one_netdev(int type, struct ifinfomsg *ifi,
 				(int)netdev.address.len, netdev.name);
 	}
 
+	if (tb[IFLA_MASTER]) {
+		pr_err("\n");
+		netdev.has_master = true;
+		netdev.master = nla_get_u32(tb[IFLA_MASTER]);
+	}
+
 	netdev.n_conf4 = size4;
 	netdev.conf4 = xmalloc(sizeof(SysctlEntry *) * size4);
 	if (!netdev.conf4)
@@ -557,6 +563,7 @@ static int dump_bridge(NetDeviceEntry *nde, struct cr_imgset *imgset, struct nla
 		return -1;
 	}
 
+#if 0
 	ret = is_empty_dir(fd);
 	close(fd);
 	if (ret < 0) {
@@ -568,6 +575,7 @@ static int dump_bridge(NetDeviceEntry *nde, struct cr_imgset *imgset, struct nla
 		pr_err("dumping bridges with attached slaves not supported currently\n");
 		return -1;
 	}
+#endif
 
 	return write_netdev_img(nde, imgset, info);
 }
@@ -1083,17 +1091,13 @@ static int veth_peer_info(struct net_link *link, struct newlink_req *req,
 		if (!peer_ns)
 			goto out;
 		list_for_each_entry(plink, &peer_ns->net.links, node) {
-			if (plink->nde->ifindex == nde->peer_ifindex)
-				pr_err("%d\n", nde->peer_nsid);
 			if (plink->nde->ifindex == nde->peer_ifindex && plink->created) {
-				pr_err("\n");
 				req->h.nlmsg_type = RTM_SETLINK;
 				return 0;
 			}
 		}
 	}
 
-	pr_err("\n");
 	link->created = true;
 	if (peer_ns) {
 		addattr_l(&req->h, sizeof(*req), IFLA_NET_NS_FD, &peer_ns->net.ns_fd, sizeof(int));
@@ -1371,30 +1375,98 @@ exit:
 	return ret;
 }
 
+static int restore_master_link(int nlsk, struct ns_id *ns, struct net_link *link)
+{
+	struct newlink_req req;
+
+	memset(&req, 0, sizeof(req));
+
+	req.h.nlmsg_len = NLMSG_LENGTH(sizeof(struct ifinfomsg));
+	req.h.nlmsg_flags = NLM_F_REQUEST|NLM_F_ACK|NLM_F_CREATE;
+	req.h.nlmsg_type = RTM_SETLINK;
+	req.h.nlmsg_seq = CR_NLMSG_SEQ;
+	req.i.ifi_family = AF_PACKET;
+	req.i.ifi_index = link->nde->ifindex;
+	req.i.ifi_flags = link->nde->flags;
+
+	addattr_l(&req.h, sizeof(req), IFLA_MASTER,
+			&link->nde->master, sizeof(link->nde->master));
+
+	return do_rtnl_req(nlsk, &req, req.h.nlmsg_len, restore_link_cb, NULL, NULL, NULL);
+}
+
+struct net_link *lookup_net_link(struct ns_id *ns, uint32_t ifindex)
+{
+	struct net_link *link;
+
+	list_for_each_entry(link, &ns->net.links, node)
+		if (link->nde->ifindex == ifindex)
+			return link;
+
+	return NULL;
+}
+
 static int restore_links()
 {
+	int exit_code = -1, nlsk = -1, ret, nrcreated, nrlinks;
 	struct net_link *link, *t;
-	int exit_code = -1, nlsk = -1;
 	struct ns_id *nsid;
 
-	for (nsid = ns_ids; nsid != NULL; nsid = nsid->next) {
-		if (nsid->nd != &net_ns_desc)
-			continue;
+	while (true) {
+		nrcreated = 0;
+		nrlinks = 0;
+		for (nsid = ns_ids; nsid != NULL; nsid = nsid->next) {
+			if (nsid->nd != &net_ns_desc)
+				continue;
 
-		if (switch_ns_by_fd(nsid->net.ns_fd, &net_ns_desc, NULL))
-			goto out;
-
-		nlsk = socket(PF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
-		if (nlsk < 0) {
-			pr_perror("Can't create nlk socket");
-			return -1;
-		}
-
-		list_for_each_entry_safe(link, t, &nsid->net.links, node) {
-			if (restore_link(nlsk, nsid, link))
+			if (switch_ns_by_fd(nsid->net.ns_fd, &net_ns_desc, NULL))
 				goto out;
+
+			nlsk = socket(PF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
+			if (nlsk < 0) {
+				pr_perror("Can't create nlk socket");
+				return -1;
+			}
+
+			list_for_each_entry_safe(link, t, &nsid->net.links, node) {
+				struct net_link *mlink = NULL;
+
+				if (link->created)
+					continue;
+
+				nrlinks++;
+
+				if (link->nde->has_master) {
+					mlink = lookup_net_link(nsid, link->nde->master);
+					if (mlink == NULL) {
+						pr_err("Unable to find the %d master\n", link->nde->master);
+						goto out;
+					}
+
+					if (!mlink->created)
+						continue;
+				}
+
+				ret = restore_link(nlsk, nsid, link);
+				if (ret < 0)
+					goto out;
+
+				if (ret == 0) {
+					nrcreated++;
+					link->created = true;
+
+					if (mlink && restore_master_link(nlsk, nsid, link))
+						goto out;
+				}
+			}
+			close_safe(&nlsk);
 		}
-		close_safe(&nlsk);
+		if (nrcreated == nrlinks)
+			break;
+		if (nrcreated == 0) {
+			pr_err("Unable to restore network links");
+			goto out;
+		}
 	}
 
 	exit_code = 0;
@@ -1934,7 +2006,6 @@ static int prepare_net_ns_first_stage(struct ns_id *ns)
 	if (opts.empty_ns & CLONE_NEWNET)
 		return 0;
 
-	pr_err("\n");
 	ret = restore_netns_conf(ns);
 	if (!ret)
 		ret = restore_netns_ids(ns);
@@ -1949,7 +2020,6 @@ static int prepare_net_ns_second_stage(struct ns_id *ns)
 	int ret = 0, nsid = ns->id;
 
 	if (!(opts.empty_ns & CLONE_NEWNET)) {
-		pr_err("\n");
 		if (ns->net.netns)
 			netns_entry__free_unpacked(ns->net.netns, NULL);
 
