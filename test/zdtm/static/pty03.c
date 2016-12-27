@@ -9,6 +9,8 @@
 #include <termios.h>
 #include <signal.h>
 #include <sys/ioctl.h>
+#include <unistd.h>
+#include <sys/wait.h>
 
 const char *test_doc	= "Check a non-opened control terminal";
 const char *test_author	= "Andrey Vagin <avagin@openvz.org>";
@@ -20,6 +22,7 @@ int main(int argc, char *argv[])
 	char buf[sizeof(teststr)];
 	int master, slave, ret;
 	char *slavename;
+	pid_t pid;
 
 	test_init(argc, argv);
 
@@ -46,8 +49,25 @@ int main(int argc, char *argv[])
 
 	close(slave);
 
+	pid = fork();
+	if (pid < 0)
+		return 1;
+
+	if (pid == 0) {
+		slave = open("/dev/tty", O_RDWR);
+		if (slave == -1) {
+			pr_perror("Can't open the controll terminal");
+			return -1;
+		}
+		test_waitsig();
+		return 0;
+	}
+
 	test_daemon();
 	test_waitsig();
+
+	kill(pid, SIGTERM);
+	wait(NULL);
 
 	slave = open("/dev/tty", O_RDWR);
 	if (slave == -1) {
