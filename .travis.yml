@@ -18,4 +18,4 @@ env:
 script:
   - sudo make -C scripts/travis $TR_ARCH
 after_success:
-  - make -C scripts/travis after_success
+  - sudo make -C scripts/travis after_success
