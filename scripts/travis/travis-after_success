@@ -11,6 +11,6 @@ tar -c --files-from=gcno-list | tar -x -C test/zdtm/static/chroot.dir.test/`pwd`
 tar -c --files-from=gcno-list | tar -x -C test/zdtm/static/chroot-file.dir.test/`pwd`/
 
 apt-get install -qq -y lcov
-gem install --no-user-install coveralls-lcov
+gem install -V --no-user-install coveralls-lcov
 lcov --directory . --capture --output-file coverage.info
 coveralls-lcov coverage.info
