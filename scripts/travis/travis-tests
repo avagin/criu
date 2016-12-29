@@ -20,7 +20,6 @@ travis_prep () {
 			MAKE_VARS=CC=clang
 		fi
 	chmod a+x $HOME
-	gem install -V --no-user-install coveralls-lcov
 }
 
 travis_prep
