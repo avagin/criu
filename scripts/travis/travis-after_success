@@ -3,7 +3,7 @@ set -x -e
 
 cd ../../
 
-sudo chown -R travis .
+sudo chown -R travis:travis .
 
 # We only need to run the below for gcov-enabled builds
 test -z "$GCOV" && exit 0
