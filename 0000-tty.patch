@@ -1,0 +1,50 @@
+From 2833b428393cd0ef81e46577d524ef5419b0c7a0 Mon Sep 17 00:00:00 2001
+From: Andrei Vagin <avagin@virtuozzo.com>
+Date: Wed, 4 Jan 2017 02:28:32 +0300
+Subject: [PATCH 0/6] A few fixes to c/r a docker container with a console
+
+runc creates a pty pair from a container devpts and bind-mounts
+the slave into /dev/console and handles the master externally.
+
+This series solve there problems:
+* notify about abandoned master pty-s via rpc
+* restore bind-mounted slave pty-s
+* create a detached mount when a temporary directory can't be created
+
+https://github.com/opencontainers/runc/issues/1202
+
+Andrei Vagin (6):
+  tty: notify about orphan tty-s via rpc
+  fdstore: add a storage for file descriptors
+  tty: split pty_open_ptmx_index()
+  mount: create a slave pty if it has to be bind-mounted to somewhere
+  mount: clone a mount namespace to open a detached mount
+  zdtm: check a case when a slave pty is mounted to somewhere
+
+ criu/Makefile.crtools             |   1 +
+ criu/action-scripts.c             |  20 +++++-
+ criu/cr-restore.c                 |  30 ++++++--
+ criu/cr-service.c                 |  27 +++++--
+ criu/fdstore.c                    |  86 +++++++++++++++++++++++
+ criu/filesystems.c                |   2 +
+ criu/include/action-scripts.h     |   6 +-
+ criu/include/cr_options.h         |   1 +
+ criu/include/fdstore.h            |   8 +++
+ criu/include/servicefd.h          |   2 +
+ criu/include/tty.h                |   3 +
+ criu/mount.c                      |  18 ++++-
+ criu/tty.c                        | 144 ++++++++++++++++++++++++++++++++++----
+ images/rpc.proto                  |   2 +
+ test/zdtm/static/Makefile         |   3 +
+ test/zdtm/static/pty-console.c    |   1 +
+ test/zdtm/static/pty-console.desc |   1 +
+ test/zdtm/static/pty01.c          |  14 ++++
+ 18 files changed, 338 insertions(+), 31 deletions(-)
+ create mode 100644 criu/fdstore.c
+ create mode 100644 criu/include/fdstore.h
+ create mode 120000 test/zdtm/static/pty-console.c
+ create mode 100644 test/zdtm/static/pty-console.desc
+
+-- 
+2.7.4
+
