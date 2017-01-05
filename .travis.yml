@@ -3,7 +3,10 @@ sudo: required
 dist: trusty
 env:
  matrix:
-  - TR_ARCH=local
+  - TR_ARCH=local KGIT=git://git.kernel.org/pub/scm/linux/kernel/git/next/linux-next.git
+  - TR_ARCH=local KGIT=git://git.kernel.org/pub/scm/linux/kernel/git/davem/net-next.git
+  - TR_ARCH=local KGIT="git://git.kernel.org/pub/scm/linux/kernel/git/ebiederm/user-namespace.git -b for-testing"
+  - TR_ARCH=local KGIT="git://git.kernel.org/pub/scm/linux/kernel/git/ebiederm/user-namespace.git -b for-next"
  global:
   - secure: "pLXteR7eodHe2qp5q1wB+W53OOd/9b5q1IHPajh5ES86Yvut5ig7pUhmLU75hDcu7TPeISYl2//Et9xxbBF0h2z1dqtTlvAnN+THBmIZ4Yv4X+LMkD532sI/AQpCJHVOXQ5r6tLgWQqL0zEC20ImC0LaJfz6qFSmdQ8uX/r61r8="
 script:
