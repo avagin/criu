@@ -669,14 +669,14 @@ static int autofs_mnt_open(const char *mnt_path, dev_t devid)
 
 	pr_info("%s: open mount %s\n", __func__, mnt_path);
 
-	size = sizeof(*param) + strlen(mnt_path) + 1;
+	size = sizeof(*param) + strlen(mnt_path) + 2;
 	param = xmalloc(size);
 	if (!param)
 		return -1;
 
 	init_autofs_dev_ioctl(param);
 	param->size = size;
-	strcpy(param->path, mnt_path);
+	sprintf(param->path, "%s/", mnt_path);
 	param->openmount.devid = devid;
 
 	err = autofs_dev_ioctl(AUTOFS_DEV_IOCTL_OPENMOUNT, param);
@@ -690,7 +690,7 @@ static int autofs_mnt_open(const char *mnt_path, dev_t devid)
 	return fd;
 }
 
-static int autofs_create_dentries(const struct mount_info *mi, char *mnt_path)
+static int autofs_create_dentries(const struct mount_info *mi, const char *mnt_path)
 {
 	struct mount_info *c;
 
@@ -703,9 +703,10 @@ static int autofs_create_dentries(const struct mount_info *mi, char *mnt_path)
 					__func__, c->mountpoint);
 			return -1;
 		}
-		path = xsprintf("%s%s", mnt_path, basename);
+		path = xsprintf("%s/%s", mnt_path, basename);
 		if (!path)
 			return -1;
+		pr_err("%s\n", path);
 		if (mkdir(path, 0555) < 0) {
 			pr_perror("Failed to create autofs dentry %s", path);
 			return -1;
@@ -715,13 +716,13 @@ static int autofs_create_dentries(const struct mount_info *mi, char *mnt_path)
 	return 0;
 }
 
-static int autofs_populate_mount(const struct mount_info *mi,
+static int autofs_populate_mount(const struct mount_info *mi, const char *dst,
 				 const AutofsEntry *entry)
 {
 	if (entry->mode != AUTOFS_MODE_INDIRECT)
 		return 0;
 
-	return autofs_create_dentries(mi, mi->mountpoint);
+	return autofs_create_dentries(mi, dst);
 }
 
 static int autofs_post_mount(const char *mnt_path, dev_t mnt_dev,
@@ -990,8 +991,9 @@ static int autofs_restore_entry(struct mount_info *mi, AutofsEntry **entry)
 	return 0;
 }
 
-int autofs_mount(struct mount_info *mi, const char *source, const
-		 char *filesystemtype, unsigned long mountflags)
+int autofs_mount(struct mount_info *mi, const char *source,
+		const char *dst, const char *filesystemtype,
+		unsigned long mountflags)
 {
 	AutofsEntry *entry;
 	autofs_info_t *info;
@@ -1028,7 +1030,7 @@ int autofs_mount(struct mount_info *mi, const char *source, const
 	pr_info("autofs: mounting to %s with options: \"%s\"\n",
 			mi->mountpoint, opts);
 
-	if (mount(source, mi->mountpoint, filesystemtype, mountflags, opts) < 0) {
+	if (mount(source, dst, filesystemtype, mountflags, opts) < 0) {
 		pr_perror("Failed to mount autofs to %s", mi->mountpoint);
 		goto free_opts;
 	}
@@ -1044,19 +1046,19 @@ int autofs_mount(struct mount_info *mi, const char *source, const
 	 * data is not ready yet. So, let's put in on mi->private and copy to
 	 * shared data in autofs_add_mount_info().
 	 */
-	if (stat(mi->mountpoint, &buf) < 0) {
+	if (stat(dst, &buf) < 0) {
 		pr_perror("Failed to stat %s", mi->mountpoint);
 		goto free_info;
 	}
 	info->mnt_dev = buf.st_dev;
 
 	/* We need to create dentries for nested mounts */
-	ret = autofs_populate_mount(mi, entry);
+	ret = autofs_populate_mount(mi, dst, entry);
 	if (ret < 0)
 		goto free_info;
 
 	/* In case of catatonic mounts all we need as the function call below */
-	ret = autofs_post_mount(mi->mountpoint, buf.st_dev, entry->timeout);
+	ret = autofs_post_mount(dst, buf.st_dev, entry->timeout);
 	if (ret < 0)
 		goto free_info;
 

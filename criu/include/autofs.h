@@ -12,8 +12,9 @@ bool is_autofs_pipe(unsigned long inode);
 struct mount_info;
 int autofs_parse(struct mount_info *pm);
 int autofs_dump(struct mount_info *pm);
-int autofs_mount(struct mount_info *mi, const char *source, const
-		 char *filesystemtype, unsigned long mountflags);
+int autofs_mount(struct mount_info *mi, const char *source,
+		const char *dst, const char *filesystemtype,
+		unsigned long mountflags);
 
 #include <linux/limits.h>
 #include <linux/auto_fs.h>
