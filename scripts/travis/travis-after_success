@@ -1,14 +1,17 @@
 #!/bin/sh
 set -x -e
 
+# We only need to run the below for gcov-enabled builds
+test -z "$GCOV" && exit 0
+
 cd ../../
 
 sudo chown -R travis:travis .
 
-# We only need to run the below for gcov-enabled builds
-test -z "$GCOV" && exit 0
+ls -l ./test/ext_mounts
+ls -l ./test/zdtm/static/mnt_ext_auto.test
 
-find -name '*.gcno' > gcno-list
+find -name '*.gcno' > gcno-list || true
 tar -c --files-from=gcno-list | tar -x -C test/zdtm/static/chroot.dir.test/`pwd`/
 tar -c --files-from=gcno-list | tar -x -C test/zdtm/static/chroot-file.dir.test/`pwd`/
 
