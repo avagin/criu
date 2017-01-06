@@ -6,6 +6,7 @@ test -z "$GCOV" && exit 0
 
 cd ../../
 
+sudo rm -rf images/*gc*
 sudo apt-get install -qq -y lcov
 gem install -V --no-user-install coveralls-lcov
 lcov --directory . --capture --output-file coverage.info --ignore-errors graph
