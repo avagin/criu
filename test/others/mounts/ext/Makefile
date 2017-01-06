@@ -1,3 +1,5 @@
+CFLAGS=-Wall
+
 all: ext-mount.so ns_init
 
 ext-mount.so: ext-mount.c
