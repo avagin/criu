@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 set -x -e
 
 TRAVIS_PKGS="protobuf-c-compiler libprotobuf-c0-dev libaio-dev
