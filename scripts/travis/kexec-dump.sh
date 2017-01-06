@@ -53,7 +53,7 @@ echo $DROPBOX_TOKEN > /dropbox
 echo $TRAVIS_BUILD_ID > /travis_id
 set -x
 
-kernel=`ls  /boot/vmlinuz* | tail -n 1 | sed 's/.*vmlinuz-\(.*\)/\1/'`
+kernel=`ls -c /boot/vmlinuz* | head -n 1 | sed 's/.*vmlinuz-\(.*\)/\1/'`
 echo $kernel
 kexec -l /boot/vmlinuz-$kernel --initrd=/boot/initrd.img-$kernel --reuse-cmdline
 kexec -e
