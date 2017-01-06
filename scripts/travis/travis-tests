@@ -87,7 +87,7 @@ if [ -f /proc/lockdep ]; then
 fi
 
 cat /proc/sys/kernel/tainted
-[ "`cat /proc/sys/kernel/tainted`" == "0" ] ||	exit 1
+[ "`cat /proc/sys/kernel/tainted`" = "0" ] ||	exit 1
 
 pip install flake8
 make lint
