@@ -8,8 +8,10 @@ cd ../../
 
 sudo chown -R travis:travis .
 
-ls -l ./test/ext_mounts
-ls -l ./test/zdtm/static/mnt_ext_auto.test
+sudo cat /proc/self/mountinfo
+sudo ls -l ./test
+sudo ls -ld ./test/ext_mounts
+sudo ls -ld ./test/zdtm/static/mnt_ext_auto.test
 
 find -name '*.gcno' > gcno-list || true
 tar -c --files-from=gcno-list | tar -x -C test/zdtm/static/chroot.dir.test/`pwd`/
