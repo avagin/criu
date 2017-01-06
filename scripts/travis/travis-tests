@@ -80,6 +80,15 @@ ip net add test
 ./test/zdtm.py run -t zdtm/static/env00 --rpc		# Basic
 ./test/zdtm.py run -t zdtm/static/ptrace_sig -f h --rpc # Error handling (crfail test)
 
+dmesg
+
+if [ -f /proc/lockdep ]; then
+	cat /proc/lockdep | grep WARNING && exit 1 || true
+fi
+
+cat /proc/sys/kernel/tainted
+[ "`cat /proc/sys/kernel/tainted`" == "0" ] ||	exit 1
+
 pip install flake8
 make lint
 
