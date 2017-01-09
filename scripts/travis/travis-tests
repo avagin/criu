@@ -51,6 +51,7 @@ export SKIP_PREP=1
 # https://github.com/xemul/criu/issues/207
 export CRIU_PMC_OFF=1
 
+chmod a+w -R .
 chmod 0777 test/
 chmod 0777 test/zdtm/static
 chmod 0777 test/zdtm/transition
@@ -79,6 +80,13 @@ ip net add test
 # RPC testing
 ./test/zdtm.py run -t zdtm/static/env00 --rpc		# Basic
 ./test/zdtm.py run -t zdtm/static/ptrace_sig -f h --rpc # Error handling (crfail test)
+
+./test/zdtm.py run -t zdtm/static/env00 --lazy-pages --pre 2
+./test/zdtm.py run -t zdtm/static/env00 --remote-lazy-pages
+
+git clean -dxf test/zdtm
+make COMPAT_TEST=y -C test/zdtm/static/ env00
+./test/zdtm.py run -t zdtm/static/env00 -f h
 
 dmesg
 
