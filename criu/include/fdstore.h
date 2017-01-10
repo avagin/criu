@@ -13,5 +13,6 @@ int fdstore_add(int fd);
 
 /* Get a file descriptor from a storage by id */
 int fdstore_get(int id);
+int fdstore_self_test(void);
 
 #endif

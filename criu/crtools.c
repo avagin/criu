@@ -49,6 +49,7 @@
 #include "fault-injection.h"
 #include "lsm.h"
 #include "proc_parse.h"
+#include "fdstore.h"
 
 #include "setproctitle.h"
 #include "sysctl.h"
@@ -807,6 +808,14 @@ int main(int argc, char *argv[], char *envp[])
 			return cpuinfo_dump();
 		else if (!strcmp(argv[optind + 1], "check"))
 			return cpuinfo_check();
+	}
+
+	if (!strcmp(argv[optind], "self-test")) {
+		int ret = 0;
+
+		ret |= fdstore_self_test();
+
+		return ret ? 1 : 0;
 	}
 
 	pr_msg("Error: unknown command: %s\n", argv[optind]);

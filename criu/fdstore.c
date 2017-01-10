@@ -4,6 +4,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <fcntl.h>
 
 #include "common/scm.h"
 #include "servicefd.h"
@@ -91,4 +92,80 @@ int fdstore_get(int id)
 		return -1;
 	}
 	return fd;
+}
+
+int fdstore_self_test()
+{
+	int fd, ids[2], i;
+	char buf[10];
+
+	pr_info("=== Check the fdstore subsytem ===\n");
+	if (fdstore_init())
+		return -1;
+
+	fd = open("/dev/null", O_RDWR);
+	if (fd < 0) {
+		pr_perror("Unable to open /dev/null");
+		return -1;
+	}
+
+	ids[0] = fdstore_add(fd);
+	if (ids[0] < 0)
+		return -1;
+
+	close(fd);
+	pr_info("Add /dev/null -> %d\n", ids[0]);
+
+	fd = open("/dev/zero", O_RDONLY);
+	if (fd < 0) {
+		pr_perror("Unable to open /dev/zero");
+		return -1;
+	}
+
+	ids[1] = fdstore_add(fd);
+	if (ids[1] < 0)
+		return -1;
+	pr_info("Add /dev/zero -> %d\n", ids[1]);
+
+	for (i = 2; ; i++) {
+		if (fdstore_add(fd) < 0)
+			break;
+	}
+	pr_info("The capacity of fdstore is %d descriptors\n", i);
+	close(fd);
+
+	fd = fdstore_get(ids[1]);
+	if (fd < 0)
+		return -1;
+	close(fd);
+	fd = fdstore_get(ids[0]);
+	if (fd < 0)
+		return -1;
+	close(fd);
+	fd = fdstore_get(ids[1]);
+	if (fd < 0)
+		return -1;
+	close(fd);
+
+	fd = fdstore_get(ids[1]);
+	if (fd < 0)
+		return -1;
+
+	if (read(fd, buf, sizeof(buf)) != sizeof(buf)) {
+		pr_perror("Unable to read /dev/zero");
+		return -1;
+	}
+	close(fd);
+
+	fd = fdstore_get(ids[0]);
+	if (fd < 0)
+		return -1;
+
+	if (read(fd, buf, sizeof(buf)) != 0) {
+		pr_perror("Unable to read /dev/null");
+		return -1;
+	}
+	close(fd);
+
+	return 0;
 }
