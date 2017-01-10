@@ -35,6 +35,7 @@ make ${MAKE_VARS} -C test/zdtm
 ./criu/criu check --all || echo $?
 ./criu/criu cpuinfo dump
 ./criu/criu cpuinfo check
+./criu/criu self-test
 
 umask 0000
 export SKIP_PREP=1
