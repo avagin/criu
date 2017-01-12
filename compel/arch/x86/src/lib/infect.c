@@ -385,6 +385,13 @@ int ptrace_flush_breakpoints(pid_t pid)
 		return -1;
 	}
 
+	if (ptrace(PTRACE_POKEUSER, pid,
+			offsetof(struct user, u_debugreg[DR_FIRSTADDR]),
+			0)) {
+		pr_perror("Unable to setup a breakpoint into %d", pid);
+		return -1;
+	}
+
 	return 0;
 }
 
