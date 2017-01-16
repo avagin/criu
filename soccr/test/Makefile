@@ -12,6 +12,8 @@ tcp-constructor: tcp-constructor.c ../libsoccr.a
 clean:
 	rm -f tcp-constructor
 
+tcp-conn: tcp-conn.c
+
 test: tcp-constructor
 	python run.py ./$(RUN)
 
