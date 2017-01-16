@@ -13,8 +13,10 @@ clean:
 	rm -f tcp-constructor
 
 tcp-conn: tcp-conn.c
+	$(CC) $(CFLAGS) tcp-conn.c -o tcp-conn $(LDFLAGS)
 
-test: tcp-constructor
+test: tcp-constructor tcp-conn
+	unshare -n sh -c "ip link set up dev lo; ./tcp-conn"
 	python run.py ./$(RUN)
 
 .PHONY: test
