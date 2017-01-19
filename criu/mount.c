@@ -396,14 +396,7 @@ static struct mount_info *mnt_build_ids_tree(struct mount_info *list, struct mou
 
 static unsigned int mnt_depth(struct mount_info *m)
 {
-	unsigned int depth = 0;
-	char *c;
-
-	for (c = m->mountpoint; *c != '\0'; c++)
-		if (*c == '/')
-			depth++;
-
-	return depth;
+	return strlen(m->mountpoint);
 }
 
 static void mnt_resort_siblings(struct mount_info *tree)
@@ -436,7 +429,7 @@ static void mnt_resort_siblings(struct mount_info *tree)
 			if (mnt_depth(p) <= depth)
 				break;
 
-		list_add(&m->siblings, &p->siblings);
+		list_add_tail(&m->siblings, &p->siblings);
 		mnt_resort_siblings(m);
 	}
 
