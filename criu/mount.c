@@ -1591,49 +1591,6 @@ static int restore_ext_mount(struct mount_info *mi)
 	return ret;
 }
 
-static char mnt_clean_path[] = "/tmp/cr-tmpfs.XXXXXX";
-
-static int mount_clean_path()
-{
-	/*
-	 * To make a bind mount, we need to have access to a source directory,
-	 * which can be over-mounted. The idea is to mount a source mount in
-	 * an intermediate place without MS_REC and then create a target mounts.
-	 * This intermediate place should be a private mount to not affect
-	 * properties of the source mount.
-	 */
-	if (mkdtemp(mnt_clean_path) == NULL) {
-		pr_perror("Unable to create a temporary directory");
-		return -1;
-	}
-
-	if (mount(mnt_clean_path, mnt_clean_path, NULL, MS_BIND, NULL)) {
-		pr_perror("Unable to mount tmpfs into %s", mnt_clean_path);
-		return -1;
-	}
-
-	if (mount(NULL, mnt_clean_path, NULL, MS_PRIVATE, NULL)) {
-		pr_perror("Unable to mark %s as private", mnt_clean_path);
-		return -1;
-	}
-
-	return 0;
-}
-
-static int umount_clean_path()
-{
-	if (umount2(mnt_clean_path, MNT_DETACH)) {
-		pr_perror("Unable to umount %s", mnt_clean_path);
-		return -1;
-	}
-
-	if (rmdir(mnt_clean_path)) {
-		pr_perror("Unable to remove %s", mnt_clean_path);
-	}
-
-	return 0;
-}
-
 static int do_bind_mount(struct mount_info *mi)
 {
 	char *root, *cut_root, rpath[PATH_MAX], *mp;
@@ -2336,9 +2293,6 @@ static int populate_mnt_ns(void)
 		return -1;
 	chdir(mnt_roots);
 
-	if (mount_clean_path())
-		return -1;
-
 	ret = mnt_tree_for_each(pms, do_mount_one);
 	if (ret)
 		return -1;
@@ -2386,8 +2340,6 @@ static int populate_mnt_ns(void)
 		close_safe(&m->fd);
 	}
 
-	if (umount_clean_path())
-		return -1;
 	return ret;
 }
 
