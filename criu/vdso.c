@@ -427,10 +427,21 @@ static int vdso_mmap_compat(struct vdso_symtable *native,
 	}
 	waitpid(pid, &status, WUNTRACED);
 
-	if (!WIFEXITED(status) || WEXITSTATUS(status))
-		pr_err("Compat vdso helper failed\n");
-	else
+	if (!WIFEXITED(status) || WEXITSTATUS(status)) {
+		pr_err("Compat vdso helper failed with ");
+		if (WIFEXITED(status))
+			pr_err("exit code %d\n", WEXITSTATUS(status));
+		else if (WIFSIGNALED(status))
+			pr_err("signal %d\n", WTERMSIG(status));
+		else if (WIFSTOPPED(status))
+			pr_err("unexpected stop by %d\n", WSTOPSIG(status));
+		else if (WIFCONTINUED(status))
+			pr_err("running away\n");
+		else
+			pr_err("unknown status\n");
+	} else {
 		ret = 0;
+	}
 
 out_kill:
 	kill(pid, SIGKILL);
