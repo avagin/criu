@@ -12,7 +12,7 @@ echo $f
 	touch /reboot.failed
 	exit 1
 }
-./scripts/dropbox_upload.py /imgs/dump.log
+./scripts/dropbox_upload.py /imgs/dump.log || true
 
 ./crit/crit show /imgs/tty-info.img  | sed 's/"index": \([0-9]*\)/"index": 1\1/' | ./crit/crit encode > /imgs/tty-info.img.new
 ./crit/crit show /imgs/reg-files.img  | sed 's|/dev/pts/\([0-9]*\)|/dev/pts/1\1|' | ./crit/crit encode > /imgs/reg-files.img.new
