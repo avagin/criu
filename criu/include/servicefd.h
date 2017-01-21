@@ -16,6 +16,7 @@ enum sfd_type {
 			 *  For restore -- CRIU ns' proc
 			 */
 	ROOT_FD_OFF,	/* Root of the namespace we dump/restore */
+	MNTID_FD_OFF,
 	CGROUP_YARD,
 	USERNSD_SK,	/* Socket for usernsd */
 	NS_FD_OFF,	/* Node's net namespace fd */

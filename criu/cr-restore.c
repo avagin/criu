@@ -2081,6 +2081,9 @@ int cr_restore_tasks(void)
 	if (prepare_pstree() < 0)
 		goto err;
 
+       if (read_mnt_ns_img())
+               goto err;
+
 	if (crtools_prepare_shared() < 0)
 		goto err;
 
@@ -3189,9 +3192,16 @@ static int sigreturn_restore(pid_t pid, struct task_restore_args *task_args, uns
 	if (restore_fs(current))
 		goto err;
 
+	if (current == root_item && (root_ns_mask & CLONE_NEWNS)) {
+		futex_wait_while_gt(&task_args->task_entries->nr_in_progress, 1);
+		if (fini_mnt_ns())
+			goto err;
+	}
+
 	close_image_dir();
 	close_proc();
 	close_service_fd(ROOT_FD_OFF);
+	close_service_fd(MNTID_FD_OFF);
 	close_service_fd(USERNSD_SK);
 
 	__gcov_flush();

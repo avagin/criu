@@ -830,7 +830,7 @@ class criu:
 		if self.__sat:
 			fname = os.path.join(self.__ddir(), action + '.strace')
 			print_fname(fname, 'strace')
-			strace = ["strace", "-o", fname, '-T']
+			strace = ["strace", "-s", "256", "-o", fname, '-T']
 			if action == 'restore':
 				strace += ['-f']
 				s_args += ['--action-script', os.getcwd() + '/../scripts/fake-restore.sh']

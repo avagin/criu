@@ -1107,6 +1107,8 @@ static int open_fdinfos(int pid, struct list_head *list)
 			if (ret)
 				break;
 		}
+		if (ret)
+			break;
 	}
 
 	return ret;
@@ -1252,7 +1254,6 @@ int restore_fs(struct pstree_item *me)
 	 * Now do chroot/chdir. Chroot goes first as it calls chdir into
 	 * dd_root so we'd need to fix chdir after it anyway.
 	 */
-
 	ret = fchroot(dd_root);
 	if (ret < 0) {
 		pr_perror("Can't change root");

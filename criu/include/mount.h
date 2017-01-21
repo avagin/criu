@@ -83,6 +83,7 @@ extern void mnt_entry_free(struct mount_info *mi);
 extern int __mntns_get_root_fd(pid_t pid);
 extern int mntns_get_root_fd(struct ns_id *ns);
 extern int mntns_get_root_by_mnt_id(int mnt_id);
+extern int mntns_get_mount_fd(int mnt_id);
 extern struct ns_id *lookup_nsid_by_mnt_id(int mnt_id);
 
 extern int open_mount(unsigned int s_dev);
@@ -91,6 +92,7 @@ extern int open_mountpoint(struct mount_info *pm);
 
 extern struct mount_info *collect_mntinfo(struct ns_id *ns, bool for_dump);
 extern int prepare_mnt_ns(void);
+extern int fini_mnt_ns(void);
 
 extern int pivot_root(const char *new_root, const char *put_old);
 

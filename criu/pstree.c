@@ -225,7 +225,7 @@ struct pstree_item *__alloc_pstree_item(bool rst)
 void init_pstree_helper(struct pstree_item *ret)
 {
 	ret->pid.state = TASK_HELPER;
-	rsti(ret)->clone_flags = CLONE_FILES | CLONE_FS;
+	rsti(ret)->clone_flags = 0;
 	task_entries->nr_helpers++;
 }
 

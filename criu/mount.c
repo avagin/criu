@@ -803,13 +803,18 @@ int __open_mountpoint(struct mount_info *pm, int mnt_fd)
 	int ret;
 
 	if (mnt_fd == -1) {
-		int mntns_root;
 
-		mntns_root = mntns_get_root_fd(pm->nsid);
-		if (mntns_root < 0)
-			return -1;
+		if (mnt_roots)
+			mnt_fd = mntns_get_mount_fd(pm->mnt_id); /* restore */
+		else {
+			int mntns_root;
 
-		mnt_fd = openat(mntns_root, pm->ns_mountpoint, O_RDONLY);
+			mntns_root = mntns_get_root_fd(pm->nsid);
+			if (mntns_root < 0)
+				return -1;
+
+			mnt_fd = openat(mntns_root, pm->ns_mountpoint, O_RDONLY);
+		}
 		if (mnt_fd < 0) {
 			pr_perror("Can't open %s", pm->ns_mountpoint);
 			return -1;
@@ -2164,6 +2169,8 @@ int rst_get_mnt_root(int mnt_id, char *path, int plen)
 	if (!(root_ns_mask & CLONE_NEWNS) || mnt_id == -1)
 		goto rroot;
 
+	return snprintf(path, plen, "%s/%d", mnt_roots, mnt_id);
+
 	m = lookup_mnt_id(mnt_id);
 	if (m == NULL)
 		return -1;
@@ -2255,6 +2262,7 @@ void fini_restore_mntns(void)
 }
 
 static int construct_tree(struct mount_info *mi);
+static int construct_mntns(struct ns_id *nsid);
 static int populate_mnt_ns(void)
 {
 	struct mount_info *pms;
@@ -2300,20 +2308,82 @@ static int populate_mnt_ns(void)
 	if (sort_groups())
 		return -1;
 
+	return 0;
+}
+
+int fini_mnt_ns(void)
+{
 	struct ns_id *nsid;
+	int rst = -1, cwd = -1, exit_code = -1;
+
+	cwd = open_proc(PROC_SELF, "cwd");
+	if (cwd < 0) {
+		pr_err("Unable to get cwd\n");
+		goto out;
+	}
+
+	rst = open_proc(PROC_SELF, "ns/mnt");
+	if (rst < 0)
+		goto out;
+
 	for (nsid = ns_ids; nsid != NULL; nsid = nsid->next) {
+		int fd;
+
 		if (nsid->nd != &mnt_ns_desc)
 			continue;
 
-		if (construct_tree(nsid->mnt.mntinfo_tree))
-			return -1;
-		nsid->mnt.root_mnt_id = nsid->mnt.mntinfo_tree->mnt_id;
+		fd = open_proc(nsid->ns_pid, "ns/mnt");
+		if (setns(fd, CLONE_NEWNS)) {
+			pr_perror("Can't set mntns");
+			close(rst);
+			close(fd);
+			goto out;
+		}
+		close(fd);
+
+		if (chdir(mnt_roots)) {
+			pr_perror("Unable to change a dir");
+			goto out;
+		}
+
+		if (construct_mntns(nsid))
+			goto out;
+
+		if (cr_pivot_root(get_yard_path(nsid->mnt.mntinfo_tree, false)))
+			goto out;
+
+		if (setns(rst, CLONE_NEWNS)) {
+			pr_perror("Can't restore mntns back");
+			goto out;
+		}
 	}
 
+	if (fchdir(cwd)) {
+		pr_perror("Unable to change cwd");
+		goto out;
+	}
+
+	exit_code = 0;
+out:
+	close_safe(&rst);
+	close_safe(&cwd);
+
+	return exit_code;
+}
+
+static int construct_mntns(struct ns_id *nsid)
+{
 	struct mount_info *m;
+
+	if (construct_tree(nsid->mnt.mntinfo_tree))
+		return 1;
+
 	for (m = mntinfo; m != NULL; m = m->next) {
 		int group = m->shared_id;
 		char path[PATH_MAX];
+
+		if (m->nsid != nsid)
+			continue;
 
 		if (group == 0)
 			group = m->master_id;
@@ -2340,7 +2410,7 @@ static int populate_mnt_ns(void)
 		close_safe(&m->fd);
 	}
 
-	return ret;
+	return 0;
 }
 
 static int construct_tree(struct mount_info *mi)
@@ -2525,6 +2595,9 @@ int prepare_mnt_ns(void)
 	for (nsid = ns_ids; nsid != NULL; nsid = nsid->next) {
 		if (nsid->nd != &mnt_ns_desc)
 			continue;
+
+		nsid->mnt.root_mnt_id = nsid->mnt.mntinfo_tree->mnt_id;
+
 		/* Create the new mount namespace */
 		if (unshare(CLONE_NEWNS)) {
 			pr_perror("Unable to create a new mntns");
@@ -2532,14 +2605,12 @@ int prepare_mnt_ns(void)
 		}
 
 
-		chdir(mnt_roots);
-		if (cr_pivot_root(get_yard_path(nsid->mnt.mntinfo_tree, false)))
-			goto err;
-
 		/* Pin one with a file descriptor */
 		nsid->mnt.ns_fd = open_proc(PROC_SELF, "ns/mnt");
 		if (nsid->mnt.ns_fd < 0)
 			goto err;
+
+		chdir(mnt_roots);
 
 		/* root_fd is used to restore file mappings */
 		nsid->mnt.root_fd = open_proc(PROC_SELF, "root");
@@ -2692,6 +2763,35 @@ int mntns_get_root_by_mnt_id(int mnt_id)
 	BUG_ON(mntns == NULL);
 
 	return mntns_get_root_fd(mntns);
+}
+
+int mntns_get_mount_fd(int mnt_id)
+{
+	char path[PATH_MAX];
+	struct mount_info *mi;
+	int root, fd, mfd;
+
+	if (mnt_id < 0)
+		return mntns_get_root_by_mnt_id(mnt_id);
+
+	mi = lookup_mnt_id(mnt_id);
+	if (mi == NULL)
+		return -1;
+
+	root = mntns_get_root_fd(mi->nsid);
+
+	snprintf(path, sizeof(path), "%s/%d", mnt_roots, mnt_id);
+	fd = openat(root, path, O_PATH);
+	if (fd < 0) {
+		pr_perror("Unable to open %s", path);
+		return -1;
+	}
+
+	close_service_fd(MNTID_FD_OFF);
+	mfd = install_service_fd(MNTID_FD_OFF, fd);
+	close(fd);
+
+	return mfd;
 }
 
 struct collect_mntns_arg {

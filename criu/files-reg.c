@@ -360,9 +360,10 @@ static int open_remap_linked(struct reg_file_info *rfi,
 		int rfd;
 		struct stat st;
 
-		rfd = mntns_get_root_by_mnt_id(rfi->rfe->mnt_id);
+		rfd = mntns_get_mount_fd(rfi->rfe->mnt_id);
 		if (fstatat(rfd, rfi->remap->rpath, &st, AT_SYMLINK_NOFOLLOW)) {
 			pr_perror("Can't get owner of link remap %s", rfi->remap->rpath);
+			sleep(1000);
 			return -1;
 		}
 
@@ -717,7 +718,7 @@ static int linkat_hard(int odir, char *opath, int ndir, char *npath, uid_t uid, 
 
 static int create_link_remap(char *path, int len, int lfd,
 				u32 *idp, struct ns_id *nsid,
-				const struct stat *st)
+				const struct stat *st, int mnt_id)
 {
 	char link_name[PATH_MAX], *tmp;
 	RegFileEntry rfe = REG_FILE_ENTRY__INIT;
@@ -754,6 +755,10 @@ static int create_link_remap(char *path, int len, int lfd,
 	rfe.pos		= 0;
 	rfe.fown	= &fwn;
 	rfe.name	= link_name + 1;
+	if (mnt_id >= 0 && (root_ns_mask & CLONE_NEWNS)) {
+		rfe.mnt_id	= mnt_id;
+		rfe.has_mnt_id  = true;
+	}
 
 	/* Any 'unique' name works here actually. Remap works by reg-file ids. */
 	snprintf(tmp + 1, sizeof(link_name) - (size_t)(tmp - link_name - 1), "link_remap.%d", rfe.id);
@@ -782,12 +787,12 @@ again:
 }
 
 static int dump_linked_remap(char *path, int len, const struct stat *ost,
-				int lfd, u32 id, struct ns_id *nsid)
+				int lfd, u32 id, struct ns_id *nsid, int mnt_id)
 {
 	u32 lid;
 	RemapFilePathEntry rpe = REMAP_FILE_PATH_ENTRY__INIT;
 
-	if (create_link_remap(path, len, lfd, &lid, nsid, ost))
+	if (create_link_remap(path, len, lfd, &lid, nsid, ost, mnt_id))
 		return -1;
 
 	rpe.orig_id = id;
@@ -1035,7 +1040,7 @@ static int check_path_remap(struct fd_link *link, const struct fd_parms *parms,
 		 * links on it) to have some persistent name at hands.
 		 */
 		pr_debug("Dump silly-rename linked remap for %x\n", id);
-		return dump_linked_remap(rpath + 1, plen - 1, ost, lfd, id, nsid);
+		return dump_linked_remap(rpath + 1, plen - 1, ost, lfd, id, nsid, parms->mnt_id);
 	}
 
 	mntns_root = mntns_get_root_fd(nsid);
@@ -1053,7 +1058,7 @@ static int check_path_remap(struct fd_link *link, const struct fd_parms *parms,
 
 		if (errno == ENOENT)
 			return dump_linked_remap(rpath + 1, plen - 1,
-							ost, lfd, id, nsid);
+							ost, lfd, id, nsid, parms->mnt_id);
 
 		pr_perror("Can't stat path");
 		return -1;
@@ -1321,8 +1326,8 @@ static int make_parent_dirs_if_need(int mntns_root, char *path)
 
 	p = last_delim = strrchr(path, '/');
 	if (!p) {
-		pr_err("Path %s has no parent dir", path);
-		return -1;
+		pr_err("Path %s has no parent dir\n", path);
+		return 0;
 	}
 	*p = '\0';
 
@@ -1408,7 +1413,7 @@ static int rfi_remap(struct reg_file_info *rfi, int *level)
 
 out:
 	pr_debug("%d: Link %s -> %s\n", tmi->mnt_id, rpath, path);
-	mntns_root = mntns_get_root_fd(tmi->nsid);
+	mntns_root = mntns_get_mount_fd(tmi->mnt_id);
 
 out_root:
 	*level = make_parent_dirs_if_need(mntns_root, path);
@@ -1493,7 +1498,7 @@ int open_path(struct file_desc *d,
 		}
 	}
 
-	mntns_root = mntns_get_root_by_mnt_id(rfi->rfe->mnt_id);
+	mntns_root = mntns_get_mount_fd(rfi->rfe->mnt_id);
 ext:
 	tmp = open_cb(mntns_root, rfi, arg);
 	if (tmp < 0) {
@@ -1703,6 +1708,7 @@ struct file_desc *try_collect_special_file(u32 id, int optional)
 static int collect_one_regfile(void *o, ProtobufCMessage *base, struct cr_img *i)
 {
 	struct reg_file_info *rfi = o;
+	struct mount_info *mi;
 	static char dot[] = ".";
 
 	rfi->rfe = pb_msg(base, RegFileEntry);
@@ -1711,6 +1717,19 @@ static int collect_one_regfile(void *o, ProtobufCMessage *base, struct cr_img *i
 		rfi->path = dot;
 	else
 		rfi->path = rfi->rfe->name + 1;
+
+	if (rfi->rfe->mnt_id >= 0) {
+		mi = lookup_mnt_id(rfi->rfe->mnt_id);
+		if (mi == NULL)
+			return -1;
+
+		rfi->path = rfi->rfe->name + strlen(mi->ns_mountpoint);
+		if (rfi->path[0] == 0)
+			rfi->path = dot;
+		else if (rfi->path[0] == '/')
+			rfi->path++;
+	}
+
 	rfi->remap = NULL;
 	rfi->size_mode_checked = false;
 
