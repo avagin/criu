@@ -1,7 +1,7 @@
 From 1f045e967bad27b87a8eddbe5aa6bdd5e350bbdf Mon Sep 17 00:00:00 2001
 From: Andrei Vagin <avagin@virtuozzo.com>
 Date: Thu, 1 Sep 2016 00:57:58 +0300
-Subject: [PATCH 0/11 v2] Dump and restore nested network namespaces
+Subject: [PATCH 0/10 v3] Dump and restore nested network namespaces
 
 This is an initial support for nested network namespaces.
 
@@ -27,48 +27,51 @@ v2: * fix commetns from Pavel
       in one netns
     * drop patches with a new ioctl to get netns for unconnected and
       unbound sockets, because it is not in the upstream kernel.
+v3:
+   * fix comments from Pavel
 
-Andrei Vagin (8):
-  net: save network namespaces for sockets
-  net: bind and listen a parasite socket for each network namespace
-  net: allow to dump and restore more than one network namespace
+Andrei Vagin (10):
+  [v2] net: save network namespaces for sockets
+  restore: add a function to wait when other tasks finish a stage
+  [v2] net: allow to dump and restore more than one network namespace
+  util: move open_proc_fd to service_fd
   net: set a proper network namespace to create a socket
-  net: rename pid into nsid for prepare_net_ns()
+  kerndat: check the SIOCGSKNS ioctl
+  net: add a way to get a network namespace for a socket
   files: split collect_fd on allocate_fd and handle_fd
   files: add a function to reopen fd as an unused fd
   zdtm: add a test for nested network namespaces
 
- criu/cr-restore.c               |  40 ++++++--
- criu/files.c                    |  82 ++++++++++++++--
+ criu/cr-check.c                 |  14 +++
+ criu/cr-restore.c               |  67 +++++++++++--
+ criu/files.c                    |  87 ++++++++++++++---
  criu/include/files.h            |   3 +
- criu/include/libnetlink.h       |   5 +-
- criu/include/namespaces.h       |   4 +-
+ criu/include/kerndat.h          |   1 +
+ criu/include/namespaces.h       |   7 +-
  criu/include/net.h              |   6 +-
- criu/include/parasite.h         |   2 +
- criu/include/sk-packet.h        |   2 +-
+ criu/include/servicefd.h        |   1 +
  criu/include/sockets.h          |  11 ++-
- criu/libnetlink.c               |  13 +--
- criu/namespaces.c               |   6 +-
- criu/net.c                      | 187 +++++++++++++++++++++++++++++++-----
- criu/parasite-syscall.c         |  22 +----
- criu/pstree.c                   |   4 +
- criu/sk-inet.c                  |  21 ++++-
- criu/sk-netlink.c               |  19 +++-
- criu/sk-packet.c                |  10 +-
- criu/sk-unix.c                  |  17 +++-
- criu/sockets.c                  |  70 ++++++++++----
+ criu/kerndat.c                  |   7 ++
+ criu/mount.c                    |  15 +--
+ criu/namespaces.c               |   8 +-
+ criu/net.c                      | 179 ++++++++++++++++++++++++++++++++++-
+ criu/pstree.c                   |   6 ++
+ criu/sk-inet.c                  |  19 +++-
+ criu/sk-netlink.c               |  17 +++-
+ criu/sk-packet.c                |   8 +-
+ criu/sk-unix.c                  |  11 ++-
+ criu/sockets.c                  |  40 +++++++-
+ criu/util.c                     |  18 ++--
  images/packet-sock.proto        |   1 +
  images/sk-inet.proto            |   1 +
  images/sk-netlink.proto         |   1 +
- images/sk-packet.proto          |   1 +
  images/sk-unix.proto            |   2 +
  test/zdtm/static/Makefile       |   1 +
  test/zdtm/static/netns_sub.c    | 203 ++++++++++++++++++++++++++++++++++++++++
  test/zdtm/static/netns_sub.desc |   1 +
- 27 files changed, 630 insertions(+), 105 deletions(-)
+ 27 files changed, 678 insertions(+), 57 deletions(-)
  create mode 100644 test/zdtm/static/netns_sub.c
  create mode 100644 test/zdtm/static/netns_sub.desc
 
 -- 
 2.7.4
-
