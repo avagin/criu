@@ -27,6 +27,7 @@
 #include "fs-magic.h"
 #include "pstree.h"
 #include "util.h"
+#include "fdstore.h"
 
 #ifndef SOCK_DIAG_BY_FAMILY
 #define SOCK_DIAG_BY_FAMILY 20
@@ -762,7 +763,7 @@ int set_netns(uint32_t ns_id)
 		pr_err("Unable to find a network namespace");
 		return -1;
 	}
-	nsfd = open_proc(root_item->pid->ns[0].virt, "fd/%d", ns->net.ns_fd);
+	nsfd = fdstore_get(ns->net.fd_id);
 	if (nsfd < 0)
 		return -1;
 	if (setns(nsfd, CLONE_NEWNET)) {

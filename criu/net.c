@@ -36,6 +36,7 @@
 #include "kerndat.h"
 #include "util.h"
 #include "external.h"
+#include "fdstore.h"
 
 #include "protobuf.h"
 #include "images/netdev.pb-c.h"
@@ -2011,6 +2012,13 @@ static int prepare_net_ns_second_stage(struct ns_id *ns)
 	if (!ret)
 		ret = restore_nf_ct(nsid, CR_FD_NETNF_EXP);
 
+	if (!ret) {
+		ns->net.fd_id = fdstore_add(ns->net.ns_fd);
+		if (ns->net.fd_id < 0)
+			ret = -1;
+	}
+	close_safe(&ns->net.ns_fd);
+
 	ns->ns_populated = true;
 
 	return ret;
@@ -2018,18 +2026,13 @@ static int prepare_net_ns_second_stage(struct ns_id *ns)
 
 static int open_net_ns(struct ns_id *nsid, struct rst_info *rst)
 {
-	int fd, tfd;
+	int fd;
 
 	/* Pin one with a file descriptor */
 	fd = open_proc(PROC_SELF, "ns/net");
 	if (fd < 0)
 		return -1;
-	tfd = reopen_as_unused_fd(fd, rst);
-	if (tfd < 0) {
-		close(fd);
-		return -1;
-	}
-	nsid->net.ns_fd = tfd;
+	nsid->net.ns_fd = fd;
 
 	return 0;
 }
@@ -2095,20 +2098,6 @@ err:
 	return -1;
 }
 
-void fini_net_namespaces()
-{
-	struct ns_id *nsid;
-
-	if (!(root_ns_mask & CLONE_NEWNET))
-		return;
-
-	for (nsid = ns_ids; nsid != NULL; nsid = nsid->next) {
-		if (nsid->nd != &net_ns_desc)
-			continue;
-		close_safe(&nsid->net.ns_fd);
-	}
-}
-
 static int do_restore_task_net_ns(struct ns_id *nsid, struct pstree_item *current)
 {
 	int fd;
@@ -2116,7 +2105,7 @@ static int do_restore_task_net_ns(struct ns_id *nsid, struct pstree_item *curren
 	if (!(root_ns_mask & CLONE_NEWNET))
 		return 0;
 
-	fd = open_proc(root_item->pid->ns[0].virt, "fd/%d", nsid->net.ns_fd);
+	fd = fdstore_get(nsid->net.fd_id);
 	if (fd < 0)
 		return -1;
 

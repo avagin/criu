@@ -111,7 +111,8 @@ struct ns_id {
 		} mnt;
 
 		struct {
-			int ns_fd;	/* a file handle for the namespace */
+				int fd_id;	/* a file handle for the namespace */
+				int ns_fd;
 			int nlsk;	/* for sockets collection */
 			int seqsk;	/* to talk to parasite daemons */
 			struct list_head ids;

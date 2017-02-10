@@ -78,6 +78,7 @@
 #include "fault-injection.h"
 #include "sk-queue.h"
 #include "sigframe.h"
+#include "fdstore.h"
 
 #include "parasite-syscall.h"
 #include "files-reg.h"
@@ -1396,6 +1397,10 @@ static int restore_task_with_children(void *_arg)
 
 	/* Restore root task */
 	if (current->parent == NULL) {
+
+		if (fdstore_init())
+			goto err;
+
 		if (join_namespaces()) {
 			pr_perror("Join namespaces failed");
 			goto err;
@@ -2943,7 +2948,6 @@ static int sigreturn_restore(pid_t pid, struct task_restore_args *task_args, uns
 	if (current->parent == NULL) {
 		/* Wait when all tasks restored all files */
 		restore_wait_other_tasks();
-		fini_net_namespaces();
 	}
 
 	/*
@@ -3225,6 +3229,7 @@ static int sigreturn_restore(pid_t pid, struct task_restore_args *task_args, uns
 	close_proc();
 	close_service_fd(ROOT_FD_OFF);
 	close_service_fd(USERNSD_SK);
+	close_service_fd(FDSTORE_SK_OFF);
 
 	__gcov_flush();
 
