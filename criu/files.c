@@ -686,28 +686,19 @@ int rst_file_params(int fd, FownEntry *fown, int flags)
 	return 0;
 }
 
-static struct fdinfo_list_entry *allocate_fd(int pid, FdinfoEntry *e, struct rst_info *rst_info)
+static int collect_fd(int pid, FdinfoEntry *e, struct rst_info *rst_info)
 {
-	struct fdinfo_list_entry *new_le;
+	struct fdinfo_list_entry *le, *new_le;
+	struct file_desc *fdesc;
 
 	pr_info("Collect fdinfo pid=%d fd=%d id=%#x\n",
 		pid, e->fd, e->id);
 
 	new_le = shmalloc(sizeof(*new_le));
 	if (!new_le)
-		return NULL;
+		return -1;
 
 	fle_init(new_le, pid, e);
-	collect_task_fd(new_le, rst_info);
-
-	return new_le;
-}
-
-static int handle_fd(struct fdinfo_list_entry *new_le, struct rst_info *rst_info)
-{
-	struct fdinfo_list_entry *le;
-	struct file_desc *fdesc;
-	FdinfoEntry *e = new_le->fe;
 
 	fdesc = find_file_desc(e);
 	if (fdesc == NULL) {
@@ -722,21 +713,12 @@ static int handle_fd(struct fdinfo_list_entry *new_le, struct rst_info *rst_info
 	if (fdesc->ops->collect_fd)
 		fdesc->ops->collect_fd(fdesc, new_le, rst_info);
 
+	collect_task_fd(new_le, rst_info);
+
 	list_add_tail(&new_le->desc_list, &le->desc_list);
 	new_le->desc = fdesc;
 
 	return 0;
-}
-
-static int collect_fd(int pid, FdinfoEntry *e, struct rst_info *rst_info)
-{
-	struct fdinfo_list_entry *le;
-
-	le = allocate_fd(pid, e, rst_info);
-	if (le == NULL)
-		return -1;
-
-	return handle_fd(le, rst_info);
 }
 
 FdinfoEntry *dup_fdinfo(FdinfoEntry *old, int fd, unsigned flags)
@@ -795,7 +777,7 @@ int prepare_ctl_tty(int pid, struct rst_info *rst_info, u32 ctl_tty_id)
 	return 0;
 }
 
-int collect_fd_pid(struct pstree_item *item)
+int prepare_fd_pid(struct pstree_item *item)
 {
 	int ret = 0;
 	struct cr_img *img;
@@ -816,7 +798,6 @@ int collect_fd_pid(struct pstree_item *item)
 		return -1;
 
 	while (1) {
-		struct fdinfo_list_entry *le;
 		FdinfoEntry *e;
 
 		ret = pb_read_one_eof(img, &e, PB_FDINFO);
@@ -829,28 +810,15 @@ int collect_fd_pid(struct pstree_item *item)
 			break;
 		}
 
-		le = allocate_fd(pid, e, rst_info);
-		if (le == NULL) {
+		ret = collect_fd(pid, e, rst_info);
+		if (ret < 0) {
 			fdinfo_entry__free_unpacked(e, NULL);
-			ret = -1;
 			break;
 		}
 	}
 
 	close_image(img);
 	return ret;
-}
-
-int prepare_fd_pid(struct pstree_item *item)
-{
-	struct rst_info *rst_info = rsti(item);
-	struct fdinfo_list_entry *le, *t;
-	list_for_each_entry_safe(le, t, &rst_info->fds, ps_list) {
-		if (handle_fd(le, rst_info))
-			return -1;
-	}
-
-	return 0;
 }
 
 #define SETFL_MASK (O_APPEND | O_ASYNC | O_NONBLOCK | O_NDELAY | O_DIRECT | O_NOATIME)
