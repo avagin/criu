@@ -69,8 +69,7 @@ chmod 0777 test/
 chmod 0777 test/zdtm/static
 chmod 0777 test/zdtm/transition
 
-./test/zdtm.py run -a -p 2
-./test/zdtm.py run -a -p 2 --lazy-pages -x maps007
+./test/zdtm.py run -a -p 2 --keep-going
 
 bash ./test/jenkins/criu-fault.sh
 bash ./test/jenkins/criu-fcg.sh
@@ -96,7 +95,7 @@ ip net add test
 ./test/zdtm.py run -t zdtm/static/env00 --rpc		# Basic
 ./test/zdtm.py run -t zdtm/static/ptrace_sig -f h --rpc # Error handling (crfail test)
 
-./test/zdtm.py run -t zdtm/static/env00 --lazy-pages --pre 2
+./test/zdtm.py run -p 2 -T zdtm/static/maps --lazy-pages
 ./test/zdtm.py run -t zdtm/static/env00 --remote-lazy-pages
 
 git clean -dxf test/zdtm
