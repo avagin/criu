@@ -70,20 +70,7 @@ chmod 0777 test/
 chmod 0777 test/zdtm/static
 chmod 0777 test/zdtm/transition
 
-./test/zdtm.py run -a -p 2
-
-KERN_MAJ=`uname -r | cut -d. -f1`
-KERN_MIN=`uname -r | cut -d. -f2`
-if [ $KERN_MAJ -ge "4" ] && [ $KERN_MIN -ge "11" ]; then
-	LAZY_EXCLUDE="-x cmdlinenv00"
-else
-	LAZY_EXCLUDE="-x maps007 -x fork -x fork2 -x uffd-events -x cgroupns
-		      -x socket_listen -x socket_listen6 -x cmdlinenv00
-		      -x socket_close_data01 -x file_read"
-fi
-LAZY_EXCLUDE="$LAZY_EXCLUDE -x futex -x lazy-thp"
-./test/zdtm.py run -a -p 2 --lazy-pages $LAZY_EXCLUDE
-./test/zdtm.py run -a -p 2 --remote-lazy-pages $LAZY_EXCLUDE
+./test/zdtm.py run -a -p 2 --keep-going
 
 bash ./test/jenkins/criu-fault.sh
 bash ./test/jenkins/criu-fcg.sh
@@ -111,7 +98,7 @@ ip net add test
 ./test/zdtm.py run -t zdtm/static/ptrace_sig -f h --rpc # Error handling (crfail test)
 
 ./test/zdtm.py run --empty-ns -T zdtm/static/socket-tcp*-local --iter 2
-./test/zdtm.py run -t zdtm/static/env00 --lazy-pages --pre 2
+./test/zdtm.py run -p 2 -T zdtm/static/maps* --lazy-pages
 ./test/zdtm.py run -t zdtm/static/env00 --remote-lazy-pages
 
 git clean -dxf test/zdtm
