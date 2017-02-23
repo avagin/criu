@@ -2102,8 +2102,10 @@ static int do_mount_one(struct mount_info *mi)
 
 	if (rst_mnt_is_root(mi)) {
 		/* do_mount_root() is called from populate_mnt_ns() */
-		if (mount(opts.root, mi->mountpoint, NULL, MS_BIND | MS_REC, NULL))
+		if (mount(opts.root, mi->mountpoint, NULL, MS_BIND | MS_REC, NULL)) {
+			pr_perror("Unable to mount %s %s\n", opts.root, mi->mountpoint);
 			return -1;
+		}
 		if (do_mount_root(mi))
 			return -1;
 		mi->mounted = true;
