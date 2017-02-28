@@ -1,0 +1,19 @@
+CGROUPS
+M: Cyrill Gorcunov <gorcunov@openvz.org>
+M: Tycho Andersen <tycho.andersen@canonical.com> 
+F: criu/cgroup.c 
+
+TTY
+M: Cyrill Gorcunov <gorcunov@openvz.org>
+F: criu/tty.c
+
+MEMORY:
+M: Mike Rapoport <rppt@linux.vnet.ibm.com>
+F: criu/page*.c
+
+THE REST
+M: Andrei Vagin <avagin@virtuozzo.com>
+M: Pavel Emelyanov <xemul@virtuozzo.com>
+Q: https://patchwork.criu.org/project/criu/list/
+F: *
+F: */
