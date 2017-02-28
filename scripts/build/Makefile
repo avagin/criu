@@ -13,6 +13,8 @@ binfmt_misc:
 
 alpine:
 	docker build  -t criu-$@ -f Dockerfile.alpine $(DB_ARGS) ../..
+fc-rawhide:
+	docker build  -t criu-$@ -f Dockerfile.rawhide $(DB_ARGS) ../..
 
 %: Dockerfile.% qemu-user-static binfmt_misc
 	docker build  -t criu-$@ -f $< $(DB_ARGS) ../..
