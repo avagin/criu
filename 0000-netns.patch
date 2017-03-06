@@ -1,79 +1,48 @@
-From 1f045e967bad27b87a8eddbe5aa6bdd5e350bbdf Mon Sep 17 00:00:00 2001
+From a6a49d9673d389d49410e2f9d790828679e06988 Mon Sep 17 00:00:00 2001
 From: Andrei Vagin <avagin@virtuozzo.com>
-Date: Thu, 1 Sep 2016 00:57:58 +0300
-Subject: [PATCH 0/9 v5] Dump and restore nested network namespaces
+Date: Wed, 1 Mar 2017 02:48:29 +0300
+Subject: [PATCH 00/12] Dump and restore internal veth devices
 
-This is an initial support for nested network namespaces.
+This series adds support for internal veth devices. Here is no tricks.
+We create a veth pair and for one of these devices we set a netns id
+where it has to be created. Another device is created in the current
+network namespace.
 
-It was implemented to handle systemd services with private networks:
+Andrei Vagin (12):
+  images: add a network namespace id into images
+  kerndat: check whether a kernel supports netns id-s or not
+  netlink: add nla_get_s32()
+  net: transfer ns_id structures to functions about c/r-ing netns
+  netns: create a netlink route socket out of dump_links()
+  netns: dump and restore network namespace ID-s
+  net: give ns_id to link_info functions
+  netns: restore internal veth devices
+  net: split restore_links on read and restore parts
+  net: create a list of all links
+  net: dump and restore connected to a bridge links
+  test: check veth devices from two network namespaces
 
-"""
-When PrivateNetwork=yes is set in the [Service] section of a systemd service
-unit file, the processes run for the service will run in a private network
-namespace whith a private loopback network interface, and no other network
-devices.
-"""
-
-How it works:
-* All network devices are restored in the root task.
-* A process sets an required network namespace to restore a socket
-* Processes sets their network namespaces after restoring all sockets (files)
-
-Known issues:
-* veth devices between network namespaces are not supported
-
-v2: * fix commetns from Pavel
-    * improve the test to check that all processes are not restored
-      in one netns
-    * drop patches with a new ioctl to get netns for unconnected and
-      unbound sockets, because it is not in the upstream kernel.
-v3:
-   * fix comments from Pavel
-v4: * use a unix socket to store net namespace descriptors
-v5: add more comments and cleanups
-
-Andrei Vagin (10):
-  [v2] net: save network namespaces for sockets
-  restore: add a function to wait when other tasks finish a stage
-  [v2] net: allow to dump and restore more than one network namespace
-  util: move open_proc_fd to service_fd
-  net: set a proper network namespace to create a socket
-  kerndat: check the SIOCGSKNS ioctl
-  net: add a way to get a network namespace for a socket
-  files: split collect_fd on allocate_fd and handle_fd
-  files: add a function to reopen fd as an unused fd
-  zdtm: add a test for nested network namespaces
-
- criu/cr-check.c                 |  14 +++
- criu/cr-restore.c               |  67 +++++++++++--
- criu/files.c                    |  87 ++++++++++++++---
- criu/include/files.h            |   3 +
- criu/include/kerndat.h          |   1 +
- criu/include/namespaces.h       |   7 +-
- criu/include/net.h              |   6 +-
- criu/include/servicefd.h        |   1 +
- criu/include/sockets.h          |  11 ++-
- criu/kerndat.c                  |   7 ++
- criu/mount.c                    |  15 +--
- criu/namespaces.c               |   8 +-
- criu/net.c                      | 179 ++++++++++++++++++++++++++++++++++-
- criu/pstree.c                   |   6 ++
- criu/sk-inet.c                  |  19 +++-
- criu/sk-netlink.c               |  17 +++-
- criu/sk-packet.c                |   8 +-
- criu/sk-unix.c                  |  11 ++-
- criu/sockets.c                  |  40 +++++++-
- criu/util.c                     |  18 ++--
- images/packet-sock.proto        |   1 +
- images/sk-inet.proto            |   1 +
- images/sk-netlink.proto         |   1 +
- images/sk-unix.proto            |   2 +
- test/zdtm/static/Makefile       |   1 +
- test/zdtm/static/netns_sub.c    | 203 ++++++++++++++++++++++++++++++++++++++++
- test/zdtm/static/netns_sub.desc |   1 +
- 27 files changed, 678 insertions(+), 57 deletions(-)
- create mode 100644 test/zdtm/static/netns_sub.c
- create mode 100644 test/zdtm/static/netns_sub.desc
+ criu/cr-check.c                      |  28 ++
+ criu/include/kerndat.h               |   2 +
+ criu/include/libnetlink.h            |   2 +
+ criu/include/namespaces.h            |  17 +
+ criu/include/net.h                   |  10 +-
+ criu/include/tun.h                   |   3 +-
+ criu/kerndat.c                       |  26 +
+ criu/libnetlink.c                    |   5 +
+ criu/namespaces.c                    |  13 +-
+ criu/net.c                           | 927 ++++++++++++++++++++++++++++-------
+ criu/tun.c                           |   5 +-
+ images/netdev.proto                  |  12 +
+ scripts/build/Dockerfile.tmpl        |   1 +
+ scripts/travis/travis-tests          |   2 +-
+ test/zdtm/static/Makefile            |   2 +
+ test/zdtm/static/netns_sub_veth.c    | 117 +++++
+ test/zdtm/static/netns_sub_veth.desc |   6 +
+ 17 files changed, 1002 insertions(+), 176 deletions(-)
+ create mode 100644 test/zdtm/static/netns_sub_veth.c
+ create mode 100644 test/zdtm/static/netns_sub_veth.desc
 
 -- 
 2.7.4
+
