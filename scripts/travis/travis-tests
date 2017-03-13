@@ -12,8 +12,8 @@ cat /proc/self/mountinfo
 TRAVIS_PKGS="protobuf-c-compiler libprotobuf-c0-dev libaio-dev
 		libprotobuf-dev protobuf-compiler python-ipaddr libcap-dev
 		libnl-3-dev gcc-multilib libc6-dev-i386 gdb bash python-protobuf
-		libnet-dev util-linux asciidoc xmlto libnl-route-3-dev
-		kexec-tools libssl-dev libelf-dev strace"
+		libnet-dev util-linux asciidoc libnl-route-3-dev
+		kexec-tools libssl-dev libelf-dev strace ccache"
 
 travis_prep () {
 	[ -n "$SKIP_TRAVIS_PREP" ] && return
@@ -41,13 +41,17 @@ travis_prep () {
 	apt-get install -qq --no-install-recommends $TRAVIS_PKGS
 	chmod a+x $HOME
 	pip install dropbox
+	export CCACHE_DIR="/home/travis/.ccache"
+	export CC="ccache gcc"
+	export CXX="ccache g++"
+	export PATH="/usr/lib/ccache:$PATH"
 }
 
 travis_prep
 
-
 export GCOV
 make -j4 ${MAKE_VARS}
+ccache -s
 
 ./criu/criu check --extra --all || echo $?
 make -j4 ${MAKE_VARS} -C test/zdtm
