@@ -36,6 +36,7 @@ true && {
 	make olddefconfig
 	time make -j 4
 	make kernelrelease
+	ccache -s
 	cd ..
 }
 
