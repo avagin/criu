@@ -6,7 +6,7 @@ collection of files. You can then use the files to restore and run the
 application from the point it was frozen at. The distinctive feature of the CRIU
 project is that it is mainly implemented in user space.
 
-The project home is at http://criu.org.
+The project home is at https://criu.org.
 
 Pages worth starting with are:
 - [Kernel configuration, compilation, etc](http://criu.org/Installation)
