@@ -37,6 +37,7 @@
 #include "util.h"
 #include "external.h"
 #include "fdstore.h"
+#include "clone-noasan.h"
 
 #include "protobuf.h"
 #include "images/netdev.pb-c.h"
@@ -2147,7 +2148,7 @@ int prepare_net_namespaces()
 	}
 
 	close_service_fd(NS_FD_OFF);
-	ret = 0;
+	return 0;
 err:
 	if (ret)
 		pr_err("Can't create net_ns\n");

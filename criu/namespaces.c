@@ -33,6 +33,7 @@
 #include "common/scm.h"
 #include "fdstore.h"
 #include "proc_parse.h"
+#include "clone-noasan.h"
 
 static struct ns_desc *ns_desc_array[] = {
 	&net_ns_desc,
@@ -997,10 +998,9 @@ static int dump_user_ns(void *arg)
 
 	if (switch_ns(ns->parent->ns_pid, &user_ns_desc, NULL) < 0) {
 		pr_err("Can't enter user namespace\n");
-		return -1;
+		_exit(1);
 	}
-
-	return __dump_user_ns(ns);
+	_exit(__dump_user_ns(ns) == 0 ? 0 : 1);
 }
 
 int collect_user_ns(struct ns_id *ns, void *oarg)
