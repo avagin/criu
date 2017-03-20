@@ -1,4 +1,5 @@
 #!/bin/sh
+dmesg
 pip install dropbox
 cd ../../../
 tar -czf criu-$TRAVIS_JOB_ID.tar.gz criu
