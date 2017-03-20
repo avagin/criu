@@ -30,12 +30,15 @@ while :; do
 	echo $pid
 done
 
+kernelrelease=""
 true && {
 	cd linux
 	yes "" | make localyesconfig
 	make olddefconfig
-	make -j 4
+	time make -j 4 || exit 1
 	make kernelrelease
+	kernelrelease=$(make -s --no-print-directory kernelrelease)
+	echo -- $kernelrelease
 	ccache -s
 	cd ..
 }
@@ -54,6 +57,7 @@ for i in `seq 10`; do
 	ps axf
 	if [ -f /rebooted ]; then
 		uname -a
+		[ "$kernelrelease" == "`uname -r`" ] || exit 1
 		exit 0;
 	fi
 	if [ -f /reboot.failed ]; then
@@ -61,3 +65,5 @@ for i in `seq 10`; do
 		exit 1;
 	fi
 done
+
+exit 1
