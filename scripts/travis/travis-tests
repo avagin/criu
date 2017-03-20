@@ -62,6 +62,8 @@ wait # for kexec.sh prep to finish
 cat kexec-prep.log
 ./scripts/travis/kexec.sh
 
+dmesg
+
 ulimit -c unlimited
 echo "|`pwd`/test/abrt.sh %P %p %s %e" > /proc/sys/kernel/core_pattern
 make -j4 ${MAKE_VARS} -C test/zdtm
