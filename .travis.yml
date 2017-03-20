@@ -13,6 +13,7 @@ env:
   - TTT=pre-akpm KGIT="http://kernel.googlesource.com/pub/scm/linux/kernel/git/next/linux-next.git -b akpm-base"
   - TTT=cgroup   KGIT="http://kernel.googlesource.com/pub/scm/linux/kernel/git/tj/cgroup.git -b for-next"
   - TTT=vfs      KGIT="http://kernel.googlesource.com/pub/scm/linux/kernel/git/viro/vfs.git -b for-next"
+  - TTT=tty      KGIT="git://git.kernel.org/pub/scm/linux/kernel/git/gregkh/tty.git -b tty-next"
  global:
   - secure: "pLXteR7eodHe2qp5q1wB+W53OOd/9b5q1IHPajh5ES86Yvut5ig7pUhmLU75hDcu7TPeISYl2//Et9xxbBF0h2z1dqtTlvAnN+THBmIZ4Yv4X+LMkD532sI/AQpCJHVOXQ5r6tLgWQqL0zEC20ImC0LaJfz6qFSmdQ8uX/r61r8="
 script:
