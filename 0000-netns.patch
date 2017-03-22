@@ -1,6 +1,6 @@
 From a6a49d9673d389d49410e2f9d790828679e06988 Mon Sep 17 00:00:00 2001
 From: Andrei Vagin <avagin@virtuozzo.com>
-Date: Wed, 1 Mar 2017 02:48:29 +0300
+Date: Wed, 22 Mar 2017 02:48:29 +0300
 Subject: [PATCH 00/12] Dump and restore internal veth devices
 
 This series adds support for internal veth devices. Here is no tricks.
@@ -9,14 +9,14 @@ where it has to be created. Another device is created in the current
 network namespace.
 
 Andrei Vagin (12):
-  images: add a network namespace id into images
+  [v2] images: add a network namespace id into images
   kerndat: check whether a kernel supports netns id-s or not
   netlink: add nla_get_s32()
   net: transfer ns_id structures to functions about c/r-ing netns
   netns: create a netlink route socket out of dump_links()
-  netns: dump and restore network namespace ID-s
+  [v2] netns: dump and restore network namespace ID-s
   net: give ns_id to link_info functions
-  netns: restore internal veth devices
+  [v2] netns: restore internal veth devices
   net: split restore_links on read and restore parts
   net: create a list of all links
   net: dump and restore connected to a bridge links
@@ -25,21 +25,21 @@ Andrei Vagin (12):
  criu/cr-check.c                      |  28 ++
  criu/include/kerndat.h               |   2 +
  criu/include/libnetlink.h            |   2 +
- criu/include/namespaces.h            |  17 +
+ criu/include/namespaces.h            |  28 ++
  criu/include/net.h                   |  10 +-
  criu/include/tun.h                   |   3 +-
  criu/kerndat.c                       |  26 +
  criu/libnetlink.c                    |   5 +
  criu/namespaces.c                    |  13 +-
- criu/net.c                           | 927 ++++++++++++++++++++++++++++-------
+ criu/net.c                           | 944 ++++++++++++++++++++++++++++-------
  criu/tun.c                           |   5 +-
- images/netdev.proto                  |  12 +
+ images/netdev.proto                  |  18 +
  scripts/build/Dockerfile.tmpl        |   1 +
  scripts/travis/travis-tests          |   2 +-
- test/zdtm/static/Makefile            |   2 +
- test/zdtm/static/netns_sub_veth.c    | 117 +++++
+ test/zdtm/static/Makefile            |   3 +
+ test/zdtm/static/netns_sub_veth.c    | 179 +++++++
  test/zdtm/static/netns_sub_veth.desc |   6 +
- 17 files changed, 1002 insertions(+), 176 deletions(-)
+ 17 files changed, 1099 insertions(+), 176 deletions(-)
  create mode 100644 test/zdtm/static/netns_sub_veth.c
  create mode 100644 test/zdtm/static/netns_sub_veth.desc
 
