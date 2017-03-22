@@ -1,12 +1,14 @@
 From a6a49d9673d389d49410e2f9d790828679e06988 Mon Sep 17 00:00:00 2001
 From: Andrei Vagin <avagin@virtuozzo.com>
 Date: Wed, 22 Mar 2017 02:48:29 +0300
-Subject: [PATCH 00/12] Dump and restore internal veth devices
+Subject: [PATCH 00/12 v2] Dump and restore internal veth devices
 
 This series adds support for internal veth devices. Here is no tricks.
 We create a veth pair and for one of these devices we set a netns id
 where it has to be created. Another device is created in the current
 network namespace.
+
+v2: add more comments and small cleanups
 
 Andrei Vagin (12):
   [v2] images: add a network namespace id into images
