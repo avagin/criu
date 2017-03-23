@@ -53,5 +53,5 @@ echo $DROPBOX_TOKEN > /dropbox
 echo $TRAVIS_BUILD_ID > /travis_id
 set -x
 
-kexec -l linux/arch/x86/boot/bzImage --command-line "root=/dev/sda1 cgroup_enable=memory swapaccount=1 apparmor=0 console=ttyS0 console=ttyS0 debug raid=noautodetect slub_debug=FZP"
+kexec -l $KPATH/arch/x86/boot/bzImage --command-line "root=/dev/sda1 cgroup_enable=memory swapaccount=1 apparmor=0 console=ttyS0 console=ttyS0 debug raid=noautodetect slub_debug=FZP"
 kexec -e
