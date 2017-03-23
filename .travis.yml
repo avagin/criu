@@ -19,7 +19,7 @@ env:
   - TTT=percpu   KGIT="git://git.kernel.org/pub/scm/linux/kernel/git/tj/percpu.git -b for-next"
   - TTT=workqueues KGIT="git://git.kernel.org/pub/scm/linux/kernel/git/tj/wq.git -b for-next"
  global:
-  - secure: "pLXteR7eodHe2qp5q1wB+W53OOd/9b5q1IHPajh5ES86Yvut5ig7pUhmLU75hDcu7TPeISYl2//Et9xxbBF0h2z1dqtTlvAnN+THBmIZ4Yv4X+LMkD532sI/AQpCJHVOXQ5r6tLgWQqL0zEC20ImC0LaJfz6qFSmdQ8uX/r61r8="
+  - secure: "ZCihFe3YSxaTnyfSxjLClNxHF4qyrxC56abniyUsIyTNO9B7oTG8DMCn0GNrfrk/qYANxfeaXDh6g0j6A1n2xx4fzZeUWXoPusZnW7tQ9GU0RYiWEIRXdZ7/9UdnO/W0GL3S1O0L+4iEZ+jXhnb8H3eLDmJXNLAMn2lmON8XfJs="
 script:
   - sudo make -C scripts/travis local
 after_success:
