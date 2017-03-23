@@ -2,15 +2,22 @@
 set -x
 
 if [ "$1" = 'prep' ]; then
-	time git clone --depth 1 $KGIT linux
+	if [ -n "$KGIT" ]; then
+		time git clone --depth 1 $KGIT linux
+		KPATH=linux
+	fi
 	modprobe tun
 	modprobe macvlan
 	modprobe veth
 
-	cp scripts/linux-next-config linux/.config
-	cd linux
+	cp scripts/linux-next-config $KPATH/.config
+	cd $KPATH
 	make olddefconfig
 	exit 0
+fi
+
+if [ -z "$KPATH" ]; then
+	export KPATH=linux
 fi
 
 uname -a
@@ -32,7 +39,7 @@ done
 
 kernelrelease=""
 true && {
-	cd linux
+	cd $KPATH
 	yes "" | make localyesconfig
 	make olddefconfig
 	time make -j 4 || exit 1
