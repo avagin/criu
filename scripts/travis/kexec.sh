@@ -39,6 +39,7 @@ done
 
 kernelrelease=""
 true && {
+	old_pwd=`pwd`
 	cd $KPATH
 	yes "" | make localyesconfig
 	make olddefconfig
@@ -47,7 +48,7 @@ true && {
 	kernelrelease=$(make -s --no-print-directory kernelrelease)
 	echo -- $kernelrelease
 	ccache -s
-	cd ..
+	cd $old_pwd
 }
 
 # Disable Docker daemon start after reboot; upstart way
