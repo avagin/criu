@@ -2036,7 +2036,10 @@ static int prepare_net_ns_second_stage(struct ns_id *ns)
 		ns->net.nsfd_id = fdstore_add(fd);
 		if (ns->net.nsfd_id < 0)
 			ret = -1;
-		close(fd);
+
+		/* fd for the root is closed in prepare_net_namespaces() */
+		if (ns->type != NS_ROOT)
+			close(fd);
 	}
 
 	ns->ns_populated = true;
@@ -2094,8 +2097,8 @@ static int create_net_ns(void *arg)
 
 int prepare_net_namespaces()
 {
-	struct ns_id *nsid, *root_ns = NULL;
-	int ret = -1;
+	struct ns_id *nsid;
+	int ret = -1, rst = -1;
 
 	if (!(root_ns_mask & CLONE_NEWNET))
 		return 0;
@@ -2116,9 +2119,6 @@ int prepare_net_namespaces()
 	for (nsid = ns_ids; nsid != NULL; nsid = nsid->next) {
 		if (nsid->nd != &net_ns_desc)
 			continue;
-
-		if (nsid->type == NS_ROOT)
-			root_ns = nsid;
 
 		if (switch_ns_by_fd(nsid->net.ns_fd, &net_ns_desc, NULL))
 			goto err;
@@ -2141,6 +2141,9 @@ int prepare_net_namespaces()
 		if (nsid->nd != &net_ns_desc)
 			continue;
 
+		if (nsid->type == NS_ROOT)
+			rst = nsid->net.ns_fd;
+
 		if (switch_ns_by_fd(nsid->net.ns_fd, &net_ns_desc, NULL))
 			goto err;
 
@@ -2150,11 +2153,12 @@ int prepare_net_namespaces()
 		close_safe(&nsid->net.nlsk);
 	}
 
-	if (root_ns == NULL) {
-		pr_err("Unable to find the root network namespace\n");
+	if (rst < 0) {
+		pr_err("Unable to find the root net namespace");
 		goto err;
 	}
-	if (switch_ns_by_fd(root_ns->net.ns_fd, &net_ns_desc, NULL))
+
+	if (restore_ns(rst, &net_ns_desc))
 		goto err;
 
 	close_service_fd(NS_FD_OFF);
@@ -2162,6 +2166,7 @@ int prepare_net_namespaces()
 err:
 	if (ret)
 		pr_err("Can't create net_ns\n");
+	close_safe(&rst);
 
 	return ret;
 }
