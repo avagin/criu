@@ -2094,7 +2094,7 @@ static int create_net_ns(void *arg)
 
 int prepare_net_namespaces()
 {
-	struct ns_id *nsid;
+	struct ns_id *nsid, *root_ns = NULL;
 	int ret = -1;
 
 	if (!(root_ns_mask & CLONE_NEWNET))
@@ -2116,6 +2116,9 @@ int prepare_net_namespaces()
 	for (nsid = ns_ids; nsid != NULL; nsid = nsid->next) {
 		if (nsid->nd != &net_ns_desc)
 			continue;
+
+		if (nsid->type == NS_ROOT)
+			root_ns = nsid;
 
 		if (switch_ns_by_fd(nsid->net.ns_fd, &net_ns_desc, NULL))
 			goto err;
@@ -2146,6 +2149,13 @@ int prepare_net_namespaces()
 
 		close_safe(&nsid->net.nlsk);
 	}
+
+	if (root_ns == NULL) {
+		pr_err("Unable to find the root network namespace\n");
+		goto err;
+	}
+	if (switch_ns_by_fd(root_ns->net.ns_fd, &net_ns_desc, NULL))
+		goto err;
 
 	close_service_fd(NS_FD_OFF);
 	return 0;
