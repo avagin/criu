@@ -35,6 +35,8 @@ static int grow_shared(struct rst_mem_type_s *t, unsigned long size)
 {
 	void *aux;
 
+	if (size == 0)
+		return 0;
 	size = rst_mem_grow(size);
 
 	/*
@@ -88,8 +90,12 @@ static int grow_remap(struct rst_mem_type_s *t, int flag, unsigned long size)
 		 * a completely new one and force callers use objects'
 		 * cpos-s.
 		 */
+		void *ptr = mmap(NULL, t->size + size, PROT_NONE, MAP_ANONYMOUS | MAP_PRIVATE, 0, 0);
+		if (ptr == MAP_FAILED)
+			return -1;
 		aux = mremap(t->buf, t->size,
-				t->size + size, MREMAP_MAYMOVE);
+				t->size + size, MREMAP_MAYMOVE | MREMAP_FIXED, ptr);
+		munmap(t->buf, t->size);
 	}
 	if (aux == MAP_FAILED)
 		return -1;
@@ -167,11 +173,15 @@ void *rst_mem_remap_ptr(unsigned long pos, int type)
 void *rst_mem_alloc(unsigned long size, int type)
 {
 	struct rst_mem_type_s *t = &rst_mems[type];
+	unsigned long add_size = 0;
 	void *ret;
 
 	BUG_ON(!t->enabled);
 
-	if ((t->free_bytes < size) && t->grow(t, size)) {
+	if (t->free_bytes < size)
+		add_size = size;
+
+	if (t->grow(t, add_size)) {
 		pr_perror("Can't grow rst mem");
 		return NULL;
 	}
