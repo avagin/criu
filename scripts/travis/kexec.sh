@@ -45,8 +45,8 @@ true && {
 	cd $KPATH
 	yes "" | make localyesconfig
         sed -i "s/.*CONFIG_KASAN.*/CONFIG_KASAN=y/" .config
-	docker run -v `pwd`:/mnt -w /mnt criu-kernel make olddefconfig || exit 1
-	docker run -v `pwd`:/mnt -w /mnt criu-kernel make -j 4 || exit 1
+	docker run -v `pwd`:/mnt/kernel -v ~/.ccache:/mnt/ccache -w /mnt/kernel criu-kernel make olddefconfig || exit 1
+	docker run -v `pwd`:/mnt/kernel -v ~/.ccache:/mnt/ccache -w /mnt/kernel criu-kernel make -j 4 || exit 1
 	make kernelrelease
 	kernelrelease=$(make -s --no-print-directory kernelrelease)
 	echo -- $kernelrelease

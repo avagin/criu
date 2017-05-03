@@ -31,6 +31,7 @@ travis_prep () {
 	if [ "$CCACHE" = "1" -a -z "$GCOV" ]; then
 		# ccache is installed by default, need to set it up
 		export CCACHE_DIR=$HOME/.ccache
+		mkdir -p $CCACHE_DIR
 		[ "$CC" = "clang" ] && export CCACHE_CPP2=yes
 		# uncomment the following to get detailed ccache logs
 		#export CCACHE_LOGFILE=$HOME/ccache.log
