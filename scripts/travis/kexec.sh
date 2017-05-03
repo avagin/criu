@@ -1,6 +1,8 @@
 #!/bin/bash
 set -x
 
+docker build  -t criu-kernel -f scripts/build/Dockerfile.kernel . || exit 1
+
 if [ "$1" = 'prep' ]; then
 	if [ -n "$KGIT" ]; then
 		time git clone --depth 1 $KGIT linux
@@ -42,8 +44,11 @@ true && {
 	old_pwd=`pwd`
 	cd $KPATH
 	yes "" | make localyesconfig
-	make olddefconfig
-	time make -j 4 || exit 1
+	if [ "$KASAN" = "1" ]; then
+        	sed -i "s/.*CONFIG_KASAN.*/CONFIG_KASAN=y/" .config
+	fi
+	docker run -v `pwd`:/mnt/kernel -v ~/.ccache:/mnt/ccache -w /mnt/kernel criu-kernel make olddefconfig || exit 1
+	time docker run -v `pwd`:/mnt/kernel -v ~/.ccache:/mnt/ccache -w /mnt/kernel criu-kernel make -j 4 || exit 1
 	make kernelrelease
 	kernelrelease=$(make -s --no-print-directory kernelrelease)
 	echo -- $kernelrelease
