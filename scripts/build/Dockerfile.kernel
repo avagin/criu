@@ -1,0 +1,6 @@
+FROM ubuntu:latest
+
+RUN apt-get update -qq && apt-get install -qq \
+                gcc libssl-dev libelf-dev make bc build-essential git ccache
+
+ENV CC="ccache gcc" CCACHE_DIR=/mnt/ccache

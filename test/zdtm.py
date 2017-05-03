@@ -121,7 +121,7 @@ def check_core_files():
 	if not reports:
 		return False
 
-	while subprocess.Popen("ps axf | grep 'abrt\.sh'", shell = True).wait() == 0:
+	while subprocess.Popen("ps axf --width 200 | grep 'abrt\.sh'", shell = True).wait() == 0:
 		time.sleep(1)
 
 	for i in reports:
@@ -329,8 +329,8 @@ def wait_pid_die(pid, who, tmo = 30):
 		time.sleep(stime)
 		stime *= 2
 	else:
-		subprocess.Popen(["ps", "-p", str(pid)]).wait()
-		subprocess.Popen(["ps", "axf", str(pid)]).wait()
+		subprocess.Popen(["ps", "-p", str(pid), "--width", "200"]).wait()
+		subprocess.Popen(["ps", "axf", "--width", "200"]).wait()
 		raise test_fail_exc("%s die" % who)
 
 
@@ -1183,7 +1183,7 @@ def cr(cr_api, test, opts):
 			try_run_hook(test, ["--pre-restore"])
 			cr_api.restore()
 			os.environ["ZDTM_TEST_PID"] = str(test.getpid())
-                        os.environ["ZDTM_IMG_DIR"] = cr_api.logs()
+			os.environ["ZDTM_IMG_DIR"] = cr_api.logs()
 			try_run_hook(test, ["--post-restore"])
 			sbs('post-restore')
 
@@ -1432,15 +1432,18 @@ def do_run_test(tname, tdesc, flavs, opts):
 		print_sep("Run %s in %s" % (tname, f))
 		if opts['dry_run']:
 			continue
+		start = time.time()
 		flav = flavors[f](opts)
 		t = tclass(tname, tdesc, flav, fcg)
 		cr_api = criu(opts)
 
 		try:
 			t.start()
+			print "start time for %s: %.2f" % (tname, time.time() - start)
 			s = get_visible_state(t)
 			try:
 				cr(cr_api, t, opts)
+				print "C/R time for %s: %.2f" % (tname, time.time() - start)
 			except test_fail_expected_exc as e:
 				if e.cr_action == "dump":
 					t.stop()
@@ -1468,7 +1471,7 @@ def do_run_test(tname, tdesc, flavs, opts):
 		else:
 			if opts['keep_img'] != 'always':
 				cr_api.cleanup()
-			print_sep("Test %s PASS" % tname)
+			print_sep("Test %s PASS (%.2f)" % (tname, time.time() - start))
 
 
 class launcher:
@@ -1554,7 +1557,7 @@ class launcher:
 		sub = subprocess.Popen(["./zdtm_ct", "zdtm.py"],
 				env = dict(os.environ, CR_CT_TEST_INFO = arg),
 				stdout = log, stderr = subprocess.STDOUT, close_fds = True)
-		self.__subs[sub.pid] = {'sub': sub, 'log': logf, 'name': name}
+		self.__subs[sub.pid] = {'sub': sub, 'log': logf, 'name': name, 'time': time.time()}
 
 		if test_flag(desc, 'excl'):
 			self.wait()
@@ -1568,7 +1571,7 @@ class launcher:
 				pid, status = os.waitpid(0, flags)
 			except OSError, e:
 				if e.errno == errno.EINTR:
-					subprocess.Popen(["ps", "axf"]).wait()
+					subprocess.Popen(["ps", "axf", "--width", "200"]).wait()
 					continue
 				signal.alarm(0)
 				raise e
@@ -1591,6 +1594,7 @@ class launcher:
 				if sub['log']:
 					add_to_output(sub['log'])
 			else:
+				print "%.2f - %s" % (time.time() - sub['time'], sub['name'])
 				if self.__file_report:
 					testline = "ok %d - %s" % (self.__runtest, sub['name'])
 					print >> self.__file_report, testline
