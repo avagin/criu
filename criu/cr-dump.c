@@ -1109,6 +1109,7 @@ static int dump_zombies(void)
 			continue;
 
 		if (vpid(item) < 0) {
+			BUG_ON(kdat.has_nspid);
 			if (!pidns)
 				vpid(item) = item->pid->real;
 			else if (root_item == item) {
@@ -1122,8 +1123,10 @@ static int dump_zombies(void)
 		if (parse_pid_stat(vpid(item), &pps_buf) < 0)
 			goto err;
 
-		vsid(item) = pps_buf.sid;
-		vpgid(item) = pps_buf.pgid;
+		if (!kdat.has_nspid) {
+			vsid(item) = pps_buf.sid;
+			vpgid(item) = pps_buf.pgid;
+		}
 
 		BUG_ON(!list_empty(&item->children));
 		if (dump_one_zombie(item, &pps_buf) < 0)
