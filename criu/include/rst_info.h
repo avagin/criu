@@ -21,6 +21,7 @@ struct fdt {
 	 * The fdt table was restrored, if fdt_lock is equal to nr + 1
 	 */
 	futex_t			fdt_lock;
+	mutex_t			fdt_mutex;
 };
 
 struct _MmEntry;

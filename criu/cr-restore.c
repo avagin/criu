@@ -1585,6 +1585,9 @@ static int restore_task_with_children(void *_arg)
 		BUG();
 	}
 
+	if (open_transport_socket())
+		goto err;
+
 	timing_start(TIME_FORK);
 
 	if (create_children_and_session())
@@ -1596,9 +1599,6 @@ static int restore_task_with_children(void *_arg)
 		goto err;
 
 	restore_pgid();
-
-	if (open_transport_socket())
-		return -1;
 
 	if (current->parent == NULL) {
 		/*
