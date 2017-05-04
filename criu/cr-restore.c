@@ -1494,8 +1494,9 @@ static int create_children_and_session(void)
 static int restore_task_with_children(void *_arg)
 {
 	struct cr_clone_arg *ca = _arg;
+	struct ns_id *pid_ns;
+	int ret, fd;
 	pid_t pid;
-	int ret;
 
 	current = ca->item;
 
@@ -1585,6 +1586,25 @@ static int restore_task_with_children(void *_arg)
 
 		if (root_prepare_shared())
 			goto err;
+	}
+
+	if (ca->clone_flags & CLONE_NEWPID) {
+		pid_ns = lookup_ns_by_id(current->ids->pid_ns_id, &pid_ns_desc);
+		if (!pid_ns) {
+			pr_err("Can't find pid_ns\n");
+			return -1;
+		}
+		fd = open_proc(PROC_SELF, "ns/pid");
+		if (fd < 0) {
+			pr_err("Can't get self pid_ns\n");
+			return -1;
+		}
+		pid_ns->pid.nsfd_id = fdstore_add(fd);
+		close(fd);
+		if (pid_ns->pid.nsfd_id < 0) {
+			pr_err("Can't add fd to fdstore\n");
+			return -1;
+		}
 	}
 
 	if (restore_task_mnt_ns(current))
