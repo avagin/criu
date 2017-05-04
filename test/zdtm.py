@@ -1565,19 +1565,23 @@ class launcher:
 	def __wait_one(self, flags):
 		pid = -1
 		status = -1
-		signal.alarm(10)
+		signal.alarm(30)
 		while True:
 			try:
 				pid, status = os.waitpid(0, flags)
 			except OSError, e:
 				if e.errno == errno.EINTR:
 					subprocess.Popen(["ps", "axf", "--width", "200"]).wait()
+					if int(open("/proc/sys/kernel/tainted").read()) != 0:
+						subprocess.Popen(["dmesg"]).wait()
 					continue
 				signal.alarm(0)
 				raise e
 			else:
 				break
 		signal.alarm(0)
+		if int(open("/proc/sys/kernel/tainted").read()) != 0:
+			subprocess.Popen(["dmesg"]).wait()
 
 		self.__runtest += 1
 		if pid != 0:
