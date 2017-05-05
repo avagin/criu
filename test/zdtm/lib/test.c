@@ -133,6 +133,7 @@ err_u:
 	unlink(tmp);
 	return -1;
 }
+static int ppipe[2];
 
 void test_init(int argc, char **argv)
 {
@@ -160,6 +161,8 @@ void test_init(int argc, char **argv)
 		}
 	}
 
+	if (unshare(CLONE_NEWPID))
+		exit(1);
 	val = getenv("ZDTM_GROUPS");
 	if (val) {
 		char *tok = NULL;
@@ -208,6 +211,9 @@ void test_init(int argc, char **argv)
 	setup_outfile();
 	redir_stdfds();
 
+	if (pipe(ppipe))
+		exit(1);
+
 	pid = fork();
 	if (pid < 0) {
 		pr_perror("Daemonizing failed");
@@ -215,24 +221,12 @@ void test_init(int argc, char **argv)
 	}
 
 	if (pid) {	/* parent will exit when the child is ready */
-		test_waitsig();
+		char c;
+		close(ppipe[1]);
 
-		if (futex_get(&sig_received) == SIGCHLD) {
-			int ret;
-			if (waitpid(pid, &ret, 0) != pid) {
-				pr_perror("Unable to wait %d", pid);
-				exit(1);
-			}
+		read(ppipe[0], &c, sizeof(c));
+		close(ppipe[0]);
 
-			if (WIFEXITED(ret)) {
-				pr_err("Test exited unexpectedly with code %d\n", WEXITSTATUS(ret));
-				exit(1);
-			}
-			if (WIFSIGNALED(ret)) {
-				pr_err("Test exited on unexpected signal %d\n", WTERMSIG(ret));
-				exit(1);
-			}
-		}
 
 		if (write_pidfile(pid))
 			exit(1);
@@ -240,6 +234,7 @@ void test_init(int argc, char **argv)
 		_exit(0);
 	}
 
+	close(ppipe[0]);
 	if (setsid() < 0) {
 		pr_perror("Can't become session group leader");
 		exit(1);
@@ -259,21 +254,11 @@ void test_init(int argc, char **argv)
 
 void test_daemon()
 {
-	pid_t ppid;
+	char c = 0;
 
-	ppid = getppid();
-	if (ppid <= 1) {
-		pr_perror("Test orphaned");
-		goto out;
-	}
-
-	if (kill(ppid, SIGTERM))
-		goto out;
+	write(ppipe[1], &c, 1);
+	close(ppipe[1]);
 	return;
-out:
-	/* kill out our process group for safety */
-	kill(0, SIGKILL);
-	exit(1);
 }
 
 int test_go(void)
