@@ -5,6 +5,7 @@ cache: ccache
 env:
  matrix:
   - TTT=linux    KGIT="http://kernel.googlesource.com/pub/scm/linux/kernel/git/torvalds/linux.git"
+  - TTT=linux-t  KGIT="http://kernel.googlesource.com/pub/scm/linux/kernel/git/torvalds/linux.git" KTEST=1
   - TTT=next     KGIT="http://kernel.googlesource.com/pub/scm/linux/kernel/git/next/linux-next.git" GCOV=1
   - TTT=next-kasan     KGIT="http://kernel.googlesource.com/pub/scm/linux/kernel/git/next/linux-next.git" KASAN=1
   - TTT=net-next KGIT="http://kernel.googlesource.com/pub/scm/linux/kernel/git/davem/net-next.git"

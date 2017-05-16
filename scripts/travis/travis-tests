@@ -99,6 +99,16 @@ make -j4 ${MAKE_VARS} -C test/zdtm
 
 check_travis_timeout
 
+if [ -n "KTEST" ]; then
+	if [ -z "$KPATH" ]; then
+		KPATH=linux
+	fi
+	cd linux/tools/testing/selftests/ || exit 1
+	make || exit 1
+	make run_tests || exit 1
+	exit 0
+fi
+
 ./criu/criu check
 ./criu/criu check --all || echo $?
 ./criu/criu cpuinfo dump
