@@ -1573,7 +1573,7 @@ static int do_new_mount(struct mount_info *mi)
 		close(fd);
 	}
 
-	if (mflags && mount(NULL, mi->mountpoint, NULL,
+	if (mflags && mount(NULL, path, NULL,
 				MS_REMOUNT | MS_BIND | mflags, NULL)) {
 		pr_perror("Unable to apply bind-mount options");
 		return -1;
