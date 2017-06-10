@@ -1021,7 +1021,7 @@ static int send_fd_to_self(int fd, struct fdinfo_list_entry *fle)
 {
 	int dfd = fle->fe->fd;
 
-	if (fd == dfd)
+	if (fd == dfd || dfd < 0)
 		return 0;
 
 	/* make sure we won't clash with an inherit fd */
@@ -1075,18 +1075,21 @@ static int setup_and_serve_out(struct fdinfo_list_entry *fle, int new_fd)
 	struct file_desc *d = fle->desc;
 	pid_t pid = fle->pid;
 
-	if (reopen_fd_as(fle->fe->fd, new_fd))
-		return -1;
+	if ((int)fle->fe->fd >= 0) {
+		if (reopen_fd_as(fle->fe->fd, new_fd))
+			return -1;
 
-	if (fcntl(fle->fe->fd, F_SETFD, fle->fe->flags) == -1) {
-		pr_perror("Unable to set file descriptor flags");
-		return -1;
+		if (fcntl(fle->fe->fd, F_SETFD, fle->fe->flags) == -1) {
+			pr_perror("Unable to set file descriptor flags");
+			return -1;
+		}
+		new_fd = fle->fe->fd;
 	}
 
 	BUG_ON(fle->stage != FLE_INITIALIZED);
 	fle->stage = FLE_OPEN;
 
-	if (serve_out_fd(pid, fle->fe->fd, d))
+	if (serve_out_fd(pid, new_fd, d))
 		return -1;
 	return 0;
 }
@@ -1124,8 +1127,11 @@ static int open_fd(struct fdinfo_list_entry *fle)
 		if (setup_and_serve_out(fle, new_fd) < 0)
 			return -1;
 	}
+
+	if ((int)fle->fe->fd < 0)
+		close(new_fd);
 fixup_ctty:
-	if (ret == 0) {
+	if (ret == 0 && (int)fle->fe->fd >= 0) {
 		if (fle->fe->fd == get_service_fd(CTL_TTY_OFF)) {
 			ret = tty_restore_ctl_terminal(fle->desc, fle->fe->fd);
 			if (ret == -1)
@@ -1211,7 +1217,7 @@ static int open_fdinfos(struct pstree_item *me)
 	 * Fake fles may be used for restore other
 	 * file types, so their closing is delayed.
 	 */
-	close_fdinfos(&fake);
+if (0)	close_fdinfos(&fake);
 splice:
 	list_splice(&fake, list);
 	list_splice(&completed, list);
@@ -1762,7 +1768,6 @@ int add_fake_fds_masters(void)
 	struct fdinfo_list_entry *fle;
 	struct file_desc *fdesc, *tmp;
 	FdinfoEntry *fe;
-	int fd;
 
 	list_for_each_entry_safe(fdesc, tmp, &fake_master_head, fake_master_list) {
 		fle = list_first_entry(&fdesc->fd_info_head,
@@ -1773,8 +1778,7 @@ int add_fake_fds_masters(void)
 		 * their number is too big, or you want support
 		 * file->user_ns.
 		 */
-		fd = find_unused_fd(root_item, -1);
-		fe = dup_fdinfo(fle->fe, fd, fle->fe->flags);
+		fe = dup_fdinfo(fle->fe, -1, fle->fe->flags);
 		if (!fe)
 			goto err;
 
