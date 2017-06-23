@@ -40,7 +40,7 @@ cat /proc/self/mountinfo
 TRAVIS_PKGS="protobuf-c-compiler libprotobuf-c0-dev libaio-dev
 		libprotobuf-dev protobuf-compiler python-ipaddr libcap-dev
 		libnl-3-dev gcc-multilib libc6-dev-i386 gdb bash python-protobuf
-		libnet-dev util-linux asciidoc libnl-route-3-dev
+		libnet-dev util-linux asciidoc xmlto libnl-route-3-dev
 		kexec-tools libssl-dev libelf-dev strace ccache"
 
 travis_prep () {

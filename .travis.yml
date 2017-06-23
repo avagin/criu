@@ -2,7 +2,6 @@ language: c
 sudo: required
 dist: trusty
 cache: ccache
-group: edge
 env:
  matrix:
   - TTT=linux    KGIT="http://kernel.googlesource.com/pub/scm/linux/kernel/git/torvalds/linux.git"
