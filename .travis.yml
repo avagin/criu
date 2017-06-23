@@ -23,7 +23,7 @@ env:
   - secure: "ZCihFe3YSxaTnyfSxjLClNxHF4qyrxC56abniyUsIyTNO9B7oTG8DMCn0GNrfrk/qYANxfeaXDh6g0j6A1n2xx4fzZeUWXoPusZnW7tQ9GU0RYiWEIRXdZ7/9UdnO/W0GL3S1O0L+4iEZ+jXhnb8H3eLDmJXNLAMn2lmON8XfJs="
 script:
   - sudo apt-get update
-  - sudo apt-get install -qq --no-install-recommends protobuf-c-compiler libprotobuf-c0-dev libaio-dev libprotobuf-dev protobuf-compiler python-ipaddr libcap-dev libnl-3-dev gcc-multilib libc6-dev-i386 gdb bash python-protobuf libnet-dev util-linux asciidoc libnl-route-3-dev kexec-tools libssl-dev libelf-dev strace ccache
+  - sudo apt-get install -qq --no-install-recommends protobuf-c-compiler libprotobuf-c0-dev libaio-dev libprotobuf-dev protobuf-compiler python-ipaddr libcap-dev libnl-3-dev gcc-multilib libc6-dev-i386 gdb bash python-protobuf libnet-dev util-linux asciidoc xmlto libnl-route-3-dev kexec-tools libssl-dev libelf-dev strace ccache
   - sudo make -C scripts/travis local
 after_success:
   - ccache -s
