@@ -50,7 +50,6 @@ true && {
 	docker run -v `pwd`:/mnt/kernel -v ~/.ccache:/mnt/ccache -w /mnt/kernel criu-kernel make olddefconfig || exit 1
 	time docker run -v `pwd`:/mnt/kernel -v ~/.ccache:/mnt/ccache -w /mnt/kernel criu-kernel make -j 4 || exit 1
 	make kernelrelease
-	cat .config
 	kernelrelease=$(make -s --no-print-directory kernelrelease)
 	echo -- $kernelrelease
 	ccache -s
