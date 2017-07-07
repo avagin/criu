@@ -8,7 +8,7 @@ fini()
 	date
 
 	if [ -f /proc/lockdep ]; then
-		cat /proc/lockdep | grep WARNING && exit 1 || true
+		dmesg | grep WARNING && exit 1 || true
 	fi
 
 	cat /proc/sys/kernel/tainted
@@ -26,6 +26,9 @@ check_travis_timeout()
     echo elapsed time: $((cur - start))
     test $((cur - start)) -lt $((40 * 60)) || fini
     [ "`cat /proc/sys/kernel/tainted`" = "0" ] || fini
+    if [ -f /proc/lockdep ]; then
+	dmesg | grep WARNING && fini || true
+    fi
 }
 
 cd ../../
