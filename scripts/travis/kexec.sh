@@ -49,6 +49,7 @@ true && {
 		sed -i "s/.*CONFIG_DEBUG_VM.*/# CONFIG_DEBUG_VM is not set/" .config
 	fi
 	docker run -v `pwd`:/mnt/kernel -v ~/.ccache:/mnt/ccache -w /mnt/kernel criu-kernel make olddefconfig || exit 1
+	cat .config
 	time docker run -v `pwd`:/mnt/kernel -v ~/.ccache:/mnt/ccache -w /mnt/kernel criu-kernel make -j 4 || exit 1
 	make kernelrelease
 	kernelrelease=$(make -s --no-print-directory kernelrelease)
