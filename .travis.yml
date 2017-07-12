@@ -16,8 +16,11 @@ env:
  global:
   - secure: "pLXteR7eodHe2qp5q1wB+W53OOd/9b5q1IHPajh5ES86Yvut5ig7pUhmLU75hDcu7TPeISYl2//Et9xxbBF0h2z1dqtTlvAnN+THBmIZ4Yv4X+LMkD532sI/AQpCJHVOXQ5r6tLgWQqL0zEC20ImC0LaJfz6qFSmdQ8uX/r61r8="
 script:
+  - sudo apt-get update
+  - sudo apt-get install -qq --no-install-recommends protobuf-c-compiler libprotobuf-c0-dev libaio-dev libprotobuf-dev protobuf-compiler python-ipaddr libcap-dev libnl-3-dev gcc-multilib libc6-dev-i386 gdb bash python-protobuf libnet-dev util-linux asciidoc xmlto libnl-route-3-dev kexec-tools libssl-dev libelf-dev strace ccache
   - sudo make -C scripts/travis $TR_ARCH
 after_success:
   - make -C scripts/travis after_success
+group: deprecated-2017Q2
 after_failure:
   - sudo make -C scripts/travis after_failure
