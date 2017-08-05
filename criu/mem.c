@@ -243,39 +243,7 @@ static struct parasite_dump_pages_args *prep_dump_pages_args(struct parasite_ctl
 	return args;
 }
 
-static int drain_pages(struct page_pipe *pp, struct parasite_ctl *ctl,
-		      struct parasite_dump_pages_args *args)
-{
-	struct page_pipe_buf *ppb;
-	int ret = 0;
-
-	debug_show_page_pipe(pp);
-
-	/* Step 2 -- grab pages into page-pipe */
-	list_for_each_entry(ppb, &pp->bufs, l) {
-		args->nr_segs = ppb->nr_segs;
-		args->nr_pages = ppb->pages_in;
-		pr_debug("PPB: %d pages %d segs %u pipe %d off\n",
-				args->nr_pages, args->nr_segs, ppb->pipe_size, args->off);
-
-		ret = compel_rpc_call(PARASITE_CMD_DUMPPAGES, ctl);
-		if (ret < 0)
-			return -1;
-		ret = compel_util_send_fd(ctl, ppb->p[1]);
-		if (ret)
-			return -1;
-
-		ret = compel_rpc_sync(PARASITE_CMD_DUMPPAGES, ctl);
-		if (ret < 0)
-			return -1;
-
-		args->off += args->nr_segs;
-	}
-
-	return 0;
-}
-
-static int xfer_pages(struct page_pipe *pp, struct page_xfer *xfer)
+static int xfer_pages(int pid, struct page_pipe *pp, struct page_xfer *xfer, size_t *off)
 {
 	int ret;
 
@@ -284,7 +252,7 @@ static int xfer_pages(struct page_pipe *pp, struct page_xfer *xfer)
 	 *           pre-dump action (see pre_dump_one_task)
 	 */
 	timing_start(TIME_MEMWRITE);
-	ret = page_xfer_dump_pages(xfer, pp);
+	ret = page_xfer_dump_pages(pid, xfer, pp, off);
 	timing_stop(TIME_MEMWRITE);
 
 	return ret;
@@ -303,6 +271,7 @@ static int __parasite_dump_pages_seized(struct pstree_item *item,
 	int ret = -1;
 	unsigned cpp_flags = 0;
 	unsigned long pmc_size;
+	size_t poff = 0;
 
 	if (opts.check_only)
 		return 0;
@@ -363,6 +332,7 @@ static int __parasite_dump_pages_seized(struct pstree_item *item,
 	/*
 	 * Step 1 -- generate the pagemap
 	 */
+	poff = 0;
 	args->off = 0;
 	list_for_each_entry(vma_area, &vma_area_list->h, list) {
 		bool has_parent = !!xfer.parent;
@@ -390,9 +360,7 @@ again:
 			if (ret == -EAGAIN) {
 				BUG_ON(!(pp->flags & PP_CHUNK_MODE));
 
-				ret = drain_pages(pp, ctl, args);
-				if (!ret)
-					ret = xfer_pages(pp, &xfer);
+				ret = xfer_pages(item->pid->real, pp, &xfer, &poff);
 				if (!ret) {
 					page_pipe_reinit(pp);
 					goto again;
@@ -406,9 +374,8 @@ again:
 	if (mdc->lazy)
 		memcpy(pargs_iovs(args), pp->iovs,
 		       sizeof(struct iovec) * pp->nr_iovs);
-	ret = drain_pages(pp, ctl, args);
-	if (!ret && !mdc->pre_dump)
-		ret = xfer_pages(pp, &xfer);
+	if (!mdc->pre_dump)
+		ret = xfer_pages(item->pid->real, pp, &xfer, &poff);
 	if (ret)
 		goto out_xfer;
 

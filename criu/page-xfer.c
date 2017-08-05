@@ -145,11 +145,11 @@ static inline int send_psi(int sk, struct page_server_iov *pi)
 
 /* page-server xfer */
 static int write_pages_to_server(struct page_xfer *xfer,
-		int p, unsigned long len)
+		void *buf, unsigned long len)
 {
 	pr_debug("Splicing %lu bytes / %lu pages into socket\n", len, len / PAGE_SIZE);
 
-	if (splice(p, NULL, xfer->sk, NULL, len, SPLICE_F_MOVE) != len) {
+	if (write(xfer->sk, buf, len) != len) {
 		pr_perror("Can't write pages to socket");
 		return -1;
 	}
@@ -210,13 +210,13 @@ static int open_page_server_xfer(struct page_xfer *xfer, int fd_type, long id)
 
 /* local xfer */
 static int write_pages_loc(struct page_xfer *xfer,
-		int p, unsigned long len)
+		void *buf, unsigned long len)
 {
 	ssize_t ret;
 	ssize_t curr = 0;
 
 	while (1) {
-		ret = splice(p, NULL, img_raw_fd(xfer->pi), NULL, len, SPLICE_F_MOVE);
+		ret = write(img_raw_fd(xfer->pi), buf + curr, len - curr);
 		if (ret == -1) {
 			pr_perror("Unable to spice data");
 			return -1;
@@ -466,19 +466,39 @@ static inline u32 ppb_xfer_flags(struct page_xfer *xfer, struct page_pipe_buf *p
 		return PE_PRESENT;
 }
 
-int page_xfer_dump_pages(struct page_xfer *xfer, struct page_pipe *pp)
+static char pbuf[512 << 20];
+
+int page_xfer_dump_pages(int pid, struct page_xfer *xfer, struct page_pipe *pp, size_t *poff)
 {
 	struct page_pipe_buf *ppb;
 	unsigned int cur_hole = 0;
 	int ret;
+	size_t off, boff;
+	struct iovec *iovs = pp->iovs;
 
 	pr_debug("Transferring pages:\n");
 
+	off = *poff;
+	boff = 0;
 	list_for_each_entry(ppb, &pp->bufs, l) {
 		unsigned int i;
 
 		pr_debug("\tbuf %d/%d\n", ppb->pages_in, ppb->nr_segs);
 
+		boff = 0;
+		if (1) {
+			size_t pbsize = sizeof(pbuf);
+			struct iovec lvec = {.iov_len = pbsize };
+
+			lvec.iov_base = pbuf;
+			ret = syscall(__NR_process_vm_readv, pid, &lvec, 1, &iovs[off], ppb->nr_segs, 0);
+			if (ret != PAGE_SIZE * ppb->pages_in) {
+				pr_err("Can't splice pages to pipe (%d(%ld)/%d)\n",
+					ret, PAGE_SIZE * ppb->pages_in, ppb->pages_in);
+				return -1;
+			}
+		}
+			
 		for (i = 0; i < ppb->nr_segs; i++) {
 			struct iovec iov = ppb->iov[i];
 			u32 flags;
@@ -496,12 +516,16 @@ int page_xfer_dump_pages(struct page_xfer *xfer, struct page_pipe *pp)
 
 			if (xfer->write_pagemap(xfer, &iov, flags))
 				return -1;
+
 			if ((flags & PE_PRESENT) && xfer->write_pages(xfer,
-						ppb->p[0], iov.iov_len))
+						pbuf + boff, iov.iov_len))
 				return -1;
+			boff += iov.iov_len;
 		}
+		off += ppb->nr_segs;
 	}
 
+	*poff = off;
 	return dump_holes(xfer, pp, &cur_hole, NULL);
 }
 
@@ -707,7 +731,7 @@ static int page_server_add(int sk, struct page_server_iov *pi, u32 flags)
 			return -1;
 		}
 
-		if (lxfer->write_pages(lxfer, cxfer.p[0], chunk))
+		if (lxfer->write_pages(lxfer, NULL, chunk)) // FIXME
 			return -1;
 
 		len -= chunk;

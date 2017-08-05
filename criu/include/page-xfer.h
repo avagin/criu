@@ -19,7 +19,7 @@ struct page_xfer {
 	/* transfers one vaddr:len entry */
 	int (*write_pagemap)(struct page_xfer *self, struct iovec *iov, u32 flags);
 	/* transfers pages related to previous pagemap */
-	int (*write_pages)(struct page_xfer *self, int pipe, unsigned long len);
+	int (*write_pages)(struct page_xfer *self, void *buf, unsigned long len);
 	void (*close)(struct page_xfer *self);
 
 	/*
@@ -47,7 +47,7 @@ struct page_xfer {
 
 extern int open_page_xfer(struct page_xfer *xfer, int fd_type, long id);
 struct page_pipe;
-extern int page_xfer_dump_pages(struct page_xfer *, struct page_pipe *);
+extern int page_xfer_dump_pages(int pid, struct page_xfer *, struct page_pipe *, size_t *off);
 extern int connect_to_page_server_to_send(void);
 extern int connect_to_page_server_to_recv(int epfd);
 extern int disconnect_from_page_server(void);

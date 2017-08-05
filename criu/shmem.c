@@ -624,10 +624,11 @@ int add_shmem_area(pid_t pid, VmaEntry *vma, u64 *map)
 	return 0;
 }
 
-static int dump_pages(struct page_pipe *pp, struct page_xfer *xfer)
+static int dump_pages(struct page_pipe *pp, struct page_xfer *xfer, size_t *off)
 {
 	struct page_pipe_buf *ppb;
 
+	if (0) {
 	list_for_each_entry(ppb, &pp->bufs, l)
 		if (vmsplice(ppb->p[1], ppb->iov, ppb->nr_segs,
 					SPLICE_F_GIFT | SPLICE_F_NONBLOCK) !=
@@ -635,8 +636,9 @@ static int dump_pages(struct page_pipe *pp, struct page_xfer *xfer)
 			pr_perror("Can't get shmem into page-pipe");
 			return -1;
 		}
+	}
 
-	return page_xfer_dump_pages(xfer, pp);
+	return page_xfer_dump_pages(getpid(), xfer, pp, off);
 }
 
 static int next_data_segment(int fd, unsigned long pfn,
@@ -672,6 +674,7 @@ static int do_dump_one_shmem(int fd, void *addr, struct shmem_info *si)
 	struct page_xfer xfer;
 	int err, ret = -1;
 	unsigned long pfn, nrpages, next_data_pnf = 0, next_hole_pfn = 0;
+	size_t off = 0;
 
 	nrpages = (si->size + PAGE_SIZE - 1) / PAGE_SIZE;
 
@@ -716,7 +719,7 @@ again:
 			ret = page_pipe_add_page(pp, pgaddr, 0);
 
 		if (ret == -EAGAIN) {
-			ret = dump_pages(pp, &xfer);
+			ret = dump_pages(pp, &xfer, &off);
 			if (ret)
 				goto err_xfer;
 			page_pipe_reinit(pp);
@@ -725,7 +728,7 @@ again:
 			goto err_xfer;
 	}
 
-	ret = dump_pages(pp, &xfer);
+	ret = dump_pages(pp, &xfer, &off);
 
 err_xfer:
 	xfer.close(&xfer);

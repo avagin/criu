@@ -1563,6 +1563,7 @@ static int cr_pre_dump_finish(int ret)
 		struct parasite_ctl *ctl = dmpi(item)->parasite_ctl;
 		struct page_pipe *mem_pp;
 		struct page_xfer xfer;
+		size_t off = 0;
 
 		if (!ctl)
 			continue;
@@ -1574,7 +1575,7 @@ static int cr_pre_dump_finish(int ret)
 			goto err;
 
 		mem_pp = dmpi(item)->mem_pp;
-		ret = page_xfer_dump_pages(&xfer, mem_pp);
+		ret = page_xfer_dump_pages(item->pid->real, &xfer, mem_pp, &off);
 
 		xfer.close(&xfer);
 
