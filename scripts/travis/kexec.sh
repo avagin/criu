@@ -44,8 +44,6 @@ kernelrelease=""
 true && {
 	old_pwd=`pwd`
 	cd $KPATH
-	sed -i "/.*CONFIG_NET_FOU.*/d" .config
-	sed -i "/.*CONFIG_NET_FOU_IP_TUNNELS.*/d" .config
 	yes "" | make localyesconfig
 	if [ "$KASAN" = "1" ]; then
         	sed -i "s/.*CONFIG_KASAN.*/CONFIG_KASAN=y\nCONFIG_KASAN_INLINE=y/" .config
