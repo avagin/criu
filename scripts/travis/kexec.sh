@@ -11,6 +11,7 @@ if [ "$1" = 'prep' ]; then
 	modprobe tun
 	modprobe macvlan
 	modprobe veth
+	modprobe sit
 
 	cp scripts/linux-next-config $KPATH/.config
 	cd $KPATH
