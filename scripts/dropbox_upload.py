@@ -8,13 +8,13 @@ if not d:
 
 access_token = os.getenv("DROPBOX_TOKEN")
 
-client = dropbox.client.DropboxClient(access_token)
+dbx = dropbox.Dropbox(access_token)
 
 f = open(sys.argv[1])
 
 fname = os.path.basename(sys.argv[1])
 
-response = client.put_file(os.path.join(d, fname), f)
+response = dbx.files_upload(f.read(), os.path.join("/", d, fname))
 print 'uploaded: ', response
 
 #print "=====================", fname, "======================"
