@@ -47,7 +47,9 @@ true && {
 	yes "" | make localyesconfig
 	if [ "$KASAN" = "1" ]; then
         	sed -i "s/.*CONFIG_KASAN.*/CONFIG_KASAN=y\nCONFIG_KASAN_INLINE=y/" .config
-		sed -i "s/.*CONFIG_DEBUG_VM.*/# CONFIG_DEBUG_VM is not set/" .config
+		for i in CONFIG_LOCKDEP CONFIG_DEBUG_VM CONFIG_DEBUG_LIST CONFIG_DEBUG_ATOMIC_SLEEP CONFIG_PROVE_LOCKING; do
+			sed -i "s/.*$i.*/# $i is not set/" .config
+		done
 	fi
 	docker run -v `pwd`:/mnt/kernel -v ~/.ccache:/mnt/ccache -w /mnt/kernel criu-kernel make olddefconfig || exit 1
 	cat .config
