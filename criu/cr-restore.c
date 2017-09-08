@@ -3645,6 +3645,8 @@ static int sigreturn_restore(pid_t pid, struct task_restore_args *task_args, uns
 		thread_args[i].futex_rla	= tcore->thread_core->futex_rla;
 		thread_args[i].futex_rla_len	= tcore->thread_core->futex_rla_len;
 		thread_args[i].pdeath_sig	= tcore->thread_core->pdeath_sig;
+               thread_args[i].check_only       = opts.check_only;
+
 		if (tcore->thread_core->pdeath_sig > _KNSIG) {
 			pr_err("Pdeath signal is too big\n");
 			goto err;
