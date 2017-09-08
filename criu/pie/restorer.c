@@ -502,6 +502,7 @@ static void noinline rst_sigreturn(unsigned long new_sp,
  */
 long __export_restore_thread(struct thread_restore_args *args)
 {
+	bool check_only = args->check_only;
 	struct rt_sigframe *rt_sigframe;
 	k_rtsigset_t to_block;
 	unsigned long new_sp;
@@ -565,7 +566,7 @@ long __export_restore_thread(struct thread_restore_args *args)
 
 	futex_dec_and_wake(&thread_inprogress);
 
-	if (args->check_only)
+	if (check_only)
 		restore_finish_stage(task_entries_local, CR_STATE_COMPLETE);
 
 	new_sp = (long)rt_sigframe + RT_SIGFRAME_OFFSET(rt_sigframe);
