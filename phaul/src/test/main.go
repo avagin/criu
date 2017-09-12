@@ -1,15 +1,16 @@
 package main
 
 import (
-	"criu"
 	"fmt"
-	"github.com/golang/protobuf/proto"
 	"os"
-	"phaul"
-	"rpc"
 	"strconv"
 	"strings"
 	"syscall"
+
+	"github.com/golang/protobuf/proto"
+	"github.com/xemul/criu/lib/go/src/criu"
+	"github.com/xemul/criu/lib/go/src/rpc"
+	"github.com/xemul/criu/phaul/src/phaul"
 )
 
 type testLocal struct {

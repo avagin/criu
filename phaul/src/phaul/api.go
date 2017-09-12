@@ -1,7 +1,7 @@
 package phaul
 
 import (
-	"criu"
+	"github.com/xemul/criu/lib/go/src/criu"
 )
 
 /*
