@@ -48,7 +48,7 @@ echo "|`pwd`/test/abrt.sh %P %p %s %e" > /proc/sys/kernel/core_pattern
 
 export GCOV
 time make CC="$CC" -j4
-time make CC="$CC" -j4 -C test/zdtm
+#time make CC="$CC" -j4 -C test/zdtm
 
 [ -f "$CCACHE_LOGFILE" ] && cat $CCACHE_LOGFILE
 
@@ -112,6 +112,11 @@ chmod 0777 test/zdtm/transition
 #./test/zdtm.py run --empty-ns -T zdtm/static/socket-tcp*-local --iter 2
 
 (
+	sudo add-apt-repository ppa:gophers/archive -y
+	sudo apt-get update
+	sudo apt-get -qq install golang-1.8
+	export PATH=/usr/lib/go-1.8/bin:$PATH
+	go version || true
 	mkdir -p src/github.com/xemul
 	ln -s ../../../ src/github.com/xemul/criu
 	export GOPATH=`pwd`
