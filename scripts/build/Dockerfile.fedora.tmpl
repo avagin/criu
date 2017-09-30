@@ -8,6 +8,8 @@ RUN dnf install -y python ccache libasan findutils tar python-yaml protobuf-pyth
 COPY . /criu
 WORKDIR /criu
 
+RUN cat /usr/include/sys/mount.h
+RUN cat /usr/include/linux/aio_abi.h
 ENV CCACHE_DIR=/tmp/.ccache CCACHE_NOCOMPRESS=1 $ENV1=yes
 RUN mv .ccache /tmp && make mrproper && ccache -s && ccache -z && \
 	date && make -j $(nproc) CC="$CC" && date && ccache -s

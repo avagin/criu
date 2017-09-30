@@ -2,6 +2,8 @@
 
 set -x
 
+cat /usr/include/linux/aio_abi.h
+
 cat /proc/self/mountinfo
 
 chmod 0777 test
