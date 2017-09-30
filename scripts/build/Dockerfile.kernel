@@ -5,4 +5,3 @@ RUN apt-get update -qq && apt-get install -qq \
 
 ENV PATH="/usr/lib/ccache:$PATH"
 ENV CCACHE_DIR=/mnt/ccache
-ENV CCACHE_NOCOMPRESS=1
