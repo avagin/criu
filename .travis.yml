@@ -5,20 +5,6 @@ cache: ccache
 env:
  matrix:
   - TTT=linux    KGIT="http://kernel.googlesource.com/pub/scm/linux/kernel/git/torvalds/linux.git"
-  - TTT=next     KGIT="http://kernel.googlesource.com/pub/scm/linux/kernel/git/next/linux-next.git" GCOV=1
-  - TTT=next-kasan     KGIT="http://kernel.googlesource.com/pub/scm/linux/kernel/git/next/linux-next.git" KASAN=1
-  - TTT=net-next KGIT="http://kernel.googlesource.com/pub/scm/linux/kernel/git/davem/net-next.git"
-  - TTT=userns-t KGIT="http://kernel.googlesource.com/pub/scm/linux/kernel/git/ebiederm/user-namespace.git -b for-testing"
-  - TTT=userns-n KGIT="http://kernel.googlesource.com/pub/scm/linux/kernel/git/ebiederm/user-namespace.git -b for-next"
-  - TTT=akpm     KGIT="http://kernel.googlesource.com/pub/scm/linux/kernel/git/next/linux-next.git -b akpm"
-  - TTT=pre-akpm KGIT="http://kernel.googlesource.com/pub/scm/linux/kernel/git/next/linux-next.git -b akpm-base"
-  - TTT=cgroup   KGIT="http://kernel.googlesource.com/pub/scm/linux/kernel/git/tj/cgroup.git -b for-next"
-  - TTT=vfs      KGIT="http://kernel.googlesource.com/pub/scm/linux/kernel/git/viro/vfs.git -b for-next"
-  - TTT=tty      KGIT="git://git.kernel.org/pub/scm/linux/kernel/git/gregkh/tty.git -b tty-next"
-  - TTT=scsi     KGIT="https://git.kernel.org/pub/scm/linux/kernel/git/jejb/scsi.git -b for-next"
-  - TTT=tip      KGIT="git://git.kernel.org/pub/scm/linux/kernel/git/tip/tip.git -b auto-latest"
-  - TTT=percpu   KGIT="git://git.kernel.org/pub/scm/linux/kernel/git/tj/percpu.git -b for-next"
-  - TTT=workqueues KGIT="git://git.kernel.org/pub/scm/linux/kernel/git/tj/wq.git -b for-next"
  global:
   - secure: "JhLO2GambY9et4nDbOAzj0y4xOx5d1AeHhik1Fodxq/uDz3EKJtwBPoK9x28/mHPluOx+BBwBhJTB8DuNXV6lSiFgAaJ9YhUim41LHB0iUs9OjnVQ9KhRyQg7i8VlyTDO2AN1RpSe+3/Il4YY1ghUDgQPKx6P12A2+IK/LXLl0o="
 script:
