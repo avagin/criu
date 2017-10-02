@@ -39,6 +39,8 @@ travis_prep () {
 	apt-get update -qq
 	apt-get install -qq --no-install-recommends $TRAVIS_PKGS
 	chmod a+x $HOME
+
+	pip install junit-xml
 }
 
 travis_prep
