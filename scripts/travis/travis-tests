@@ -24,7 +24,7 @@ check_travis_timeout()
     cur=`date +%s`
 
     echo elapsed time: $((cur - start))
-    test $((cur - start)) -lt $((40 * 60)) || fini
+#    test $((cur - start)) -lt $((40 * 60)) || fini
     [ "`cat /proc/sys/kernel/tainted`" = "0" ] || fini
     if [ -f /proc/lockdep ]; then
 	dmesg | grep WARNING && fini || true
