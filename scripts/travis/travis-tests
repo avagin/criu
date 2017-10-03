@@ -82,6 +82,7 @@ travis_prep () {
 travis_prep
 
 export GCOV
+umask 0000
 make -j4 ${MAKE_VARS}
 ccache -s
 
@@ -102,12 +103,12 @@ make -j4 ${MAKE_VARS} -C test/zdtm
 
 check_travis_timeout
 
+umask 0000
 ./criu/criu check
 ./criu/criu check --all || echo $?
 ./criu/criu cpuinfo dump
 ./criu/criu cpuinfo check
 
-umask 0000
 export SKIP_PREP=1
 
 chmod a+w -R .
