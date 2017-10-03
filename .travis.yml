@@ -4,7 +4,7 @@ dist: trusty
 cache: ccache
 env:
  matrix:
-  - TTT=linux    KGIT="http://kernel.googlesource.com/pub/scm/linux/kernel/git/torvalds/linux.git"
+  - TTT=linux    KGIT="http://kernel.googlesource.com/pub/scm/linux/kernel/git/torvalds/linux.git" GCOV=1
  global:
   - secure: "JhLO2GambY9et4nDbOAzj0y4xOx5d1AeHhik1Fodxq/uDz3EKJtwBPoK9x28/mHPluOx+BBwBhJTB8DuNXV6lSiFgAaJ9YhUim41LHB0iUs9OjnVQ9KhRyQg7i8VlyTDO2AN1RpSe+3/Il4YY1ghUDgQPKx6P12A2+IK/LXLl0o="
 script:
