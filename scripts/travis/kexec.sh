@@ -1,6 +1,8 @@
 #!/bin/bash
 set -x
 
+DROPBOX_UPLOAD=`pwd`/scripts/dropbox_upload.py
+
 docker build  -t criu-kernel -f scripts/build/Dockerfile.kernel . || exit 1
 
 if [ "$1" = 'prep' ]; then
@@ -55,7 +57,9 @@ true && {
 	cat .config
 	docker run -v `pwd`:/mnt/kernel -v ~/.ccache:/mnt/ccache -w /mnt/kernel criu-kernel ccache -s
 	docker run -v `pwd`:/mnt/kernel -v ~/.ccache:/mnt/ccache -w /mnt/kernel criu-kernel ccache -z
+	$DROPBOX_UPLOAD .config || true
 	time docker run -v `pwd`:/mnt/kernel -v ~/.ccache:/mnt/ccache -w /mnt/kernel criu-kernel make -j 4 || exit 1
+	$DROPBOX_UPLOAD arch/x86/boot/vmlinux.bin || true
 	make kernelrelease
 	kernelrelease=$(make -s --no-print-directory kernelrelease)
 	echo -- $kernelrelease
