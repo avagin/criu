@@ -50,7 +50,7 @@ iptables -L
 
 set +x
 echo $DROPBOX_TOKEN > /dropbox
-echo $TRAVIS_BUILD_ID > /travis_id
+echo $TRAVIS_BUILD_ID.$TRAVIS_BUILD_NUMBER-$TRAVIS_JOB_ID.$TRAVIS_JOB_NUMBER-$TRAVIS_COMMIT > /travis_id
 set -x
 cmdline="root=/dev/sda1 cgroup_enable=memory swapaccount=1 apparmor=0 console=ttyS0 console=ttyS0 debug raid=noautodetect"
 if [ "$KASAN" -ne "1" ]; then

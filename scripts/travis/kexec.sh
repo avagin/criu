@@ -59,7 +59,7 @@ true && {
 	docker run -v `pwd`:/mnt/kernel -v ~/.ccache:/mnt/ccache -w /mnt/kernel criu-kernel ccache -z
 	$DROPBOX_UPLOAD .config || true
 	time docker run -v `pwd`:/mnt/kernel -v ~/.ccache:/mnt/ccache -w /mnt/kernel criu-kernel make -j 4 || exit 1
-	$DROPBOX_UPLOAD arch/x86/boot/vmlinux.bin || true
+	$DROPBOX_UPLOAD vmlinux || true
 	make kernelrelease
 	kernelrelease=$(make -s --no-print-directory kernelrelease)
 	echo -- $kernelrelease
