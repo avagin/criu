@@ -8,7 +8,8 @@ fini()
 	date
 
 	if [ -f /proc/lockdep ]; then
-		dmesg | grep WARNING && exit 1 || true
+		# net-next: WARNING: CPU: 0 PID: 1544 at net/ipv4/tcp_input.c:889
+		dmesg | grep -v "can't dereference iret registers at.*entry_SYSCALL_64_fastpath" | grep WARNING && exit 1 || true
 	fi
 
 	cat /proc/sys/kernel/tainted
