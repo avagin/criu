@@ -6,7 +6,7 @@ env:
  matrix:
   - TTT=linux    KGIT="http://kernel.googlesource.com/pub/scm/linux/kernel/git/torvalds/linux.git" GCOV=1
  global:
-  - secure: "vrPWf998Fu/Kgz9EJA78kOrhu/CzAxdOIUkvg+GptrTw6NbP3uOuyxsA3o0zWZE1PjUR6V4z6g2RAvgnKnSNl/LXKHTU+UdVSpkm3BQYr3ozxNd9UdEx0dnhzHHIAHACqcvyWtXh5gWHS2KI8w6xril/Lot5amIdumgSKumKPpc="
+  - secure: "pH5j+FHqZbV6WLjRtjPVa1HuWrbJCmp0h231qdziiYl0yKL3Rr/Ueg0JHrq3OuT3VJt5tM93CcyHjW44U5T+s838w2NtfunuEAIJfSvTlxOuW++2h5EyZz1NLwocHAUlWCRt5sOCaehn2isQoegCkpYsyXyA3gxSJUAaUqYSlw0="
 script:
   - sudo apt-get update
   - sudo apt-get install -qq --no-install-recommends protobuf-c-compiler libprotobuf-c0-dev libaio-dev libprotobuf-dev protobuf-compiler python-ipaddr libcap-dev libnl-3-dev gcc-multilib libc6-dev-i386 gdb bash python-protobuf libnet-dev util-linux asciidoc xmlto libnl-route-3-dev kexec-tools libssl-dev libelf-dev strace ccache
