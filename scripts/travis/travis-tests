@@ -1,5 +1,6 @@
 #!/bin/bash
-
+set -x
+python -c "import fcntl; fcntl.fcntl(1, fcntl.F_SETFD, 0)"
 start=`date +%s`
 
 fini()
@@ -37,6 +38,8 @@ set -m
 ./scripts/travis/kexec.sh prep > kexec-prep.log 2>&1 &
 
 set -x -e
+
+python -c "import fcntl; fcntl.fcntl(1, fcntl.F_SETFD, 0)"
 
 cat /proc/cmdline
 cat /proc/self/mountinfo
