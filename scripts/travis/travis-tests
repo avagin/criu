@@ -1,7 +1,7 @@
 #!/bin/bash
 set -x
 cat /proc/self/fdinfo/1
-python -c "import fcntl; fcntl.fcntl(1, fcntl.F_SETFD, 0)"
+python -c "import fcntl; fcntl.fcntl(1, fcntl.F_SETFL, 0)"
 cat /proc/self/fdinfo/1
 start=`date +%s`
 
@@ -41,7 +41,7 @@ set -m
 
 set -x -e
 
-python -c "import fcntl; fcntl.fcntl(1, fcntl.F_SETFD, 0)"
+python -c "import fcntl; fcntl.fcntl(1, fcntl.F_SETFL, 0)"
 
 cat /proc/cmdline
 cat /proc/self/mountinfo
