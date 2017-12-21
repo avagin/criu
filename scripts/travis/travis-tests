@@ -12,7 +12,7 @@ fini()
 
 	if [ -f /proc/lockdep ]; then
 		# net-next: WARNING: CPU: 0 PID: 1544 at net/ipv4/tcp_input.c:889
-		dmesg | grep -v "can't dereference iret registers at.*entry_SYSCALL_64_fastpath" | grep WARNING && exit 1 || true
+		dmesg | grep -v "can't dereference iret registers at.*entry_SYSCALL_64_fastpath" | grep -v "WARNING: stack recursion on stack type" | grep WARNING && exit 1 || true
 	fi
 
 	cat /proc/sys/kernel/tainted
