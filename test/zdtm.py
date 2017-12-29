@@ -359,7 +359,7 @@ class test_fail_expected_exc:
 
 
 class zdtm_test:
-	def __init__(self, name, desc, flavor, freezer):
+	def __init__(self, name, desc, flavor, freezer, memcg):
 		self.__name = name
 		self.__desc = desc
 		self.__freezer = None
@@ -367,11 +367,30 @@ class zdtm_test:
 		self.__pid = 0
 		self.__flavor = flavor
 		self.__freezer = freezer
+		self.__memcg = memcg
 		self._bins = [name]
 		self._env = {}
 		self._deps = desc.get('deps', [])
 		self.auto_reap = True
 		self.__timeout = int(self.__desc.get('timeout') or 30)
+
+	def __memcg_stat(self):
+		if not self.__memcg:
+			return
+		open("/proc/sys/vm/drop_caches", "w").write("3")
+		st = {}
+		for attr in ['memory.memsw.usage_in_bytes', "memory.kmem.usage_in_bytes"]:
+			val = int(open(os.path.join(self.__memcg, attr)).read())
+			print("%s = %d" % (attr, val));
+			st[attr] = val
+		return st
+
+	def __memcg_stat_diff(self, st1, st2):
+		if not st1:
+			return
+		for k in st1:
+			print("before: %s = %20d" % (k, st1[k]))
+			print("after:  %s = %20d (%3.2f%%)" % (k, st2[k], (float(st2[k]) / st1[k] * 100)))
 
 	def __make_action(self, act, env = None, root = None):
 		sys.stdout.flush()  # Not to let make's messages appear before ours
@@ -449,6 +468,8 @@ class zdtm_test:
 			# move into some semi-random state
 			time.sleep(random.random())
 
+		self.__memcg_stat_start = self.__memcg_stat()
+
 	def kill(self, sig = signal.SIGKILL):
 		self.__freezer.thaw()
 		if self.__pid:
@@ -459,6 +480,8 @@ class zdtm_test:
 		self.__flavor.fini()
 
 	def stop(self):
+		memcg_stat = self.__memcg_stat()
+		self.__memcg_stat_diff(self.__memcg_stat_start, memcg_stat)
 		self.__freezer.thaw()
 		self.getpid()  # Read the pid from pidfile back
 		self.kill(signal.SIGTERM)
@@ -1358,6 +1381,13 @@ def get_freezer(desc):
 	fr = cg_freezer(path = fd[0], state = fd[1])
 	return fr
 
+def get_memcg(memcg):
+	if not memcg:
+		return None
+	if not os.access(memcg, os.X_OK):
+		os.makedirs(memcg)
+	open(os.path.join(memcg, "tasks"), "w").write(str(os.getpid()))
+	return memcg
 
 def cmp_ns(ns1, match, ns2, msg):
 	ns1_ino = os.stat(ns1).st_ino
@@ -1451,6 +1481,7 @@ def do_run_test(tname, tdesc, flavs, opts):
 		init_sbs()
 
 	fcg = get_freezer(opts['freezecg'])
+	memcg = get_memcg(opts['memcg'])
 
 	for f in flavs:
 		print
@@ -1458,7 +1489,7 @@ def do_run_test(tname, tdesc, flavs, opts):
 		if opts['dry_run']:
 			continue
 		flav = flavors[f](opts)
-		t = tclass(tname, tdesc, flav, fcg)
+		t = tclass(tname, tdesc, flav, fcg, memcg)
 		cr_api = criu(opts)
 
 		try:
@@ -1580,7 +1611,7 @@ class Launcher:
 		nd = ('nocr', 'norst', 'pre', 'iters', 'page_server', 'sibling', 'stop', 'empty_ns',
 				'fault', 'keep_img', 'report', 'snaps', 'sat', 'script', 'rpc', 'lazy_pages',
 				'join_ns', 'dedup', 'sbs', 'freezecg', 'user', 'dry_run', 'noauto_dedup',
-				'remote_lazy_pages', 'show_stats', 'remote', 'check_only')
+				'remote_lazy_pages', 'show_stats', 'remote', 'check_only', 'memcg')
 		arg = repr((name, desc, flavor, {d: self.__opts[d] for d in nd}))
 
 		if self.__use_log:
@@ -2136,6 +2167,7 @@ rp.add_argument("--remote-lazy-pages", help = "simulate lazy migration", action 
 rp.add_argument("--title", help = "A test suite title", default = "criu")
 rp.add_argument("--show-stats", help = "Show criu statistics", action = 'store_true')
 rp.add_argument("--check-only", help = "Additionally try to dump/restore in --check-only mode", action = 'store_true')
+rp.add_argument("--memcg", help = "A path to a memory cgroup", default = None)
 
 lp = sp.add_parser("list", help = "List tests")
 lp.set_defaults(action = list_tests)
