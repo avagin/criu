@@ -13,6 +13,7 @@ TEST_OPTION(envname, string, "environment variable name", 1);
 int main(int argc, char **argv)
 {
 	char *env;
+	int i, pid;
 
 	test_init(argc, argv);
 
@@ -20,6 +21,17 @@ int main(int argc, char **argv)
 		pr_perror("Can't set env var \"%s\" to \"%s\"", envname, test_author);
 		exit(1);
 	}
+
+       for (i = 0; i < 100; i++) {
+               pid = fork();
+               if (pid == 0) {
+                       while (1)
+                               sleep(1);
+                       return 0;
+               }
+       }
+
+       dup2(1, 1000000);
 
 	test_daemon();
 	test_waitsig();
