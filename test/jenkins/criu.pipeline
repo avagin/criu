@@ -1,0 +1,31 @@
+pipeline {
+	options {
+		buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '30'))
+		timeout(time: 60, unit: 'MINUTES')
+	}
+	agent {
+		node {
+			label 'CRIU-x86_64'
+		}
+	}
+	stages {
+		stage('Build') { 
+			steps { 
+				sh 'make' 
+			}
+		}
+		stage('Test'){
+			steps {
+				sh './test/jenkins/run_ct sh -c "mount --make-rprivate / && mount --rbind . /mnt && cd /mnt && ./test/jenkins/criu-lazy-pages.sh"'
+				junit 'test/report/criu-testreport*.xml' 
+			}
+		}
+	}
+	post {
+		failure {
+			emailext attachLog: true, body: '''$DEFAULT_CONTENT
+
+${FILE,path="test/report/output"}''', compressLog: true, subject: '$DEFAULT_SUBJECT', to: "${env.CRIU_RECIPIENTS}"
+		}
+	}
+}
