@@ -7,6 +7,8 @@ TRAVIS_PKGS="protobuf-c-compiler libprotobuf-c0-dev libaio-dev
 		libnet-dev util-linux asciidoc xmlto libnl-route-3-dev
 		kexec-tools libssl-dev libelf-dev strace"
 
+export PATH="/usr/lib/ccache:$PATH"
+
 travis_prep () {
 	[ -n "$SKIP_TRAVIS_PREP" ] && return
 
@@ -58,6 +60,9 @@ time make CC="$CC" -j4 -C test/zdtm
 python test/zdtm.py run -t zdtm/static/env00
 
 ./scripts/travis/kexec.sh
+
+cd linux
+make kselftest
 
 exit 0
 ulimit -c unlimited

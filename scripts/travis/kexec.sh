@@ -62,6 +62,3 @@ for i in `seq 10`; do
 		exit 1;
 	fi
 done
-
-cd linux
-make kselftest
