@@ -33,6 +33,7 @@ true && {
 	make olddefconfig
 	yes "" | make localmodconfig
 	make olddefconfig
+	make kselftest-merge
 	make -j 4
 	make modules_install
 	make install
@@ -61,3 +62,6 @@ for i in `seq 10`; do
 		exit 1;
 	fi
 done
+
+cd linux
+make kselftest
