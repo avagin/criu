@@ -1,6 +1,7 @@
 language: c
 sudo: required
 dist: trusty
+cache: ccache
 env:
  matrix:
   - TTT=linux    TR_ARCH=local KGIT="git://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git"
