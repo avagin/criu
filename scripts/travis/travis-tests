@@ -30,7 +30,7 @@ travis_prep () {
 		[ "$CC" = "clang" ] && export CCACHE_CPP2=yes
 		# uncomment the following to get detailed ccache logs
 		#export CCACHE_LOGFILE=$HOME/ccache.log
-		CC="ccache $CC"
+		export CC="ccache $CC"
 	fi
 
 	# The /etc/apt/sources.list in the current trusty image for ppc64le is
@@ -60,6 +60,7 @@ time make CC="$CC" -j4 -C test/zdtm
 python test/zdtm.py run -t zdtm/static/env00
 
 ./scripts/travis/kexec.sh
+ccache -s
 
 cd linux
 make kselftest
