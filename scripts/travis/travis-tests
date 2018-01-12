@@ -31,7 +31,7 @@ check_travis_timeout()
 #    test $((cur - start)) -lt $((40 * 60)) || fini
     [ "`cat /proc/sys/kernel/tainted`" = "0" ] || fini
     if [ -f /proc/lockdep ]; then
-	dmesg | grep WARNING && fini || true
+	dmesg | grep -v "can't dereference iret registers at.*entry_SYSCALL_64_fastpath" | grep -v "WARNING: stack recursion on stack type" | grep WARNING && fini || true
     fi
 }
 
@@ -189,7 +189,7 @@ check_travis_timeout
 
 check_travis_timeout
 git clean -dxf test/zdtm
-make COMPAT_TEST=y -C test/zdtm/static/ env00
+make V=1 COMPAT_TEST=y -C test/zdtm/static/ env00
 ./test/zdtm.py run -t zdtm/static/env00 -f h
 
 dmesg
