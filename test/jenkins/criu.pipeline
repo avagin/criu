@@ -1,7 +1,6 @@
 pipeline {
 	options {
 		buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '30'))
-		timeout(time: 60, unit: 'MINUTES')
 	}
 	agent {
 		node {
@@ -21,6 +20,7 @@ pipeline {
 		stage('Test'){
 			steps {
 				sh './test/jenkins/run_ct sh -c "mount --make-rprivate / && mount --rbind . /mnt && cd /mnt && ./test/jenkins/criu-lazy-pages.sh"'
+				sh './test/jenkins/run_ct sh -c "mount --make-rprivate / && mount --rbind . /mnt && cd /mnt && ./test/jenkins/criu-remote-lazy-pages.sh"'
 				junit 'test/report/criu-testreport*.xml' 
 			}
 		}
