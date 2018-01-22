@@ -8,6 +8,9 @@ pipeline {
 			label 'CRIU-x86_64'
 		}
 	}
+	triggers {
+		cron('H H/4 * * *')
+	}
 	stages {
 		stage('Build') { 
 			steps { 
