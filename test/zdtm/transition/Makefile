@@ -21,6 +21,7 @@ TST_NOFILE	=	\
 		socket-tcp6     \
 		shmem		\
 		lazy-thp	\
+		mxcsr		\
 
 
 TST_FILE	=	\
@@ -79,6 +80,7 @@ ptrace:		LDFLAGS += -pthread
 fork2:		CFLAGS += -D FORK2
 thread-bomb.o:	CFLAGS += -pthread
 thread-bomb:	LDFLAGS += -pthread
+mxcsr: 	LDFLAGS += -lm
 
 %: %.sh
 	cp $< $@
