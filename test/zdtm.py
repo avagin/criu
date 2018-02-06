@@ -495,6 +495,9 @@ class zdtm_test:
 	def getropts(self):
 		return self.__getcropts() + self.__freezer.getropts() + self.__desc.get('ropts', '').split()
 
+	def unlink_pidfile(self):
+		os.unlink(self.__pidfile())
+
 	def gone(self, force = True):
 		if self.__pid == 0:
 			self.getpid()
@@ -1205,6 +1208,8 @@ def cr(cr_api, test, opts):
 			cr_api.dump("dump")
 			if not opts['lazy_migrate']:
 				test.gone()
+			else:
+				test.unlink_pidfile()
 			sbs('pre-restore')
 			try_run_hook(test, ["--pre-restore"])
 			cr_api.restore()
