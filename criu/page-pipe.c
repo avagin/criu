@@ -136,6 +136,8 @@ static int page_pipe_grow(struct page_pipe *pp, unsigned int flags)
 	/* don't allow to reuse a pipe in the PP_CHUNK_MODE mode */
 	if (!(pp->flags & PP_CHUNK_MODE) && !list_empty(&pp->bufs))
 		prev = list_entry(pp->bufs.prev, struct page_pipe_buf, l);
+	if (prev && prev->flags != flags)
+		prev = NULL;
 	ppb = ppb_alloc(pp, prev);
 	if (!ppb)
 		return -1;
