@@ -156,8 +156,10 @@ int main(int argc, char **argv)
 		fd = tcp_accept_server(fd_s2);
 		if (fd < 0) {
 			fd = tcp_accept_server(fd_s);
+			shutdown(fd_s, SHUT_RDWR);
 			close(fd_s);
 		} else {
+			shutdown(fd_s2, SHUT_RDWR);
 			close(fd_s2);
 		}
 		if (fd < 0) {
