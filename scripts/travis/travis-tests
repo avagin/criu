@@ -1,5 +1,23 @@
 #!/bin/bash
 set -x
+
+while [ "${#}" -gt 0 ]; do
+	case "${1}" in
+		"-c"|"--compile-only")
+			export COMPILE_ONLY=1
+			shift
+			;;
+		"-n"|"--notests")
+			NOTESTS=1
+			shift
+			;;
+		*)
+			echo "Unknown option '${1}'." 1>&2
+			exit 1
+			;;
+	esac
+done
+
 cat /proc/self/fdinfo/1
 python -c "import fcntl; fcntl.fcntl(1, fcntl.F_SETFL, 0)"
 cat /proc/self/fdinfo/1
@@ -119,9 +137,17 @@ date
 wait # for kexec.sh prep to finish
 cat kexec-prep.log
 ./scripts/travis/kexec.sh
+
+if [ -n "$COMPILE_ONLY" ]; then
+	exit 0
+fi
+
 cat /proc/self/fdinfo/1
 
 dmesg
+if [ -n "$NOTESTS" ]; then
+	exit 0
+fi
 
 cat /proc/self/fdinfo/1
 ulimit -c unlimited
