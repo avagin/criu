@@ -2,6 +2,10 @@ local:
 	./travis-tests
 .PHONY: local
 
+kernel:
+	./travis-tests --compile-only
+.PHONY: kernel
+
 after_success:
 	./travis-after_success
 after_failure:

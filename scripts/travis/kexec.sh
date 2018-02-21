@@ -73,6 +73,10 @@ true && {
 	cd $old_pwd
 }
 
+if [ -n "$COMPILE_ONLY" ]; then
+	exit 0
+fi
+
 # Disable Docker daemon start after reboot; upstart way
 echo manual > /etc/init/docker.override
 
