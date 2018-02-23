@@ -17,6 +17,7 @@ const char *test_author = "Andrey Vagin <avagin@parallels.com";
 #include <stdlib.h>
 #include <signal.h>
 #include <sched.h>
+#include <poll.h>
 #include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>  /* for sockaddr_in and inet_ntoa() */
@@ -57,55 +58,66 @@ int main(int argc, char **argv)
 	struct zdtm_tcp_opts opts = { .reuseaddr = false,
 					.reuseport = true,
 					.flags = SOCK_NONBLOCK};
+	struct pollfd pfds[2];
 	unsigned char buf[BUF_SIZE];
-	int port = 8880, port2;
-	int fd, fd_s, fd_s2, clt, i;
+	int port[2] = {8880, 8880};
+	int fd = -1, fd_s[2], clt, i, j;
 	socklen_t optlen;
 	int no = 0, val;
 	uint32_t crc;
 
 	test_init(argc, argv);
 
-	if ((fd_s = tcp_init_server_with_opts(ZDTM_FAMILY, &port, &opts)) < 0) {
-		pr_err("initializing server failed\n");
-		return 1;
+	for (i = 0; i < 2; i++) {
+		if ((fd_s[i] = tcp_init_server_with_opts(ZDTM_FAMILY, &port[i], &opts)) < 0) {
+			pr_err("initializing server failed\n");
+			return 1;
+		}
 	}
 
-	port2 = port;
-	if ((fd_s2 = tcp_init_server_with_opts(ZDTM_FAMILY, &port2, &opts)) < 0) {
-		pr_err("initializing server failed\n");
-		return 1;
-	}
-	if (port != port2)
+	if (port[0] != port[1])
 		return 1;
 
-	if (setsockopt(fd_s, SOL_SOCKET, SO_REUSEPORT, &no, sizeof(int)) == -1 ) {
+	if (setsockopt(fd_s[0], SOL_SOCKET, SO_REUSEPORT, &no, sizeof(int)) == -1 ) {
 		pr_perror("Unable to set SO_REUSEPORT");
 		return -1;
 	}
 
-
-	clt = tcp_init_client(ZDTM_FAMILY, "localhost", port);
+	clt = tcp_init_client(ZDTM_FAMILY, "localhost", port[0]);
 	if (clt < 0)
 		return 1;
 
-	/*
-	 * parent is server of TCP connection
-	 */
-	fd = tcp_accept_server(fd_s);
-	if (fd < 0)
-		fd = tcp_accept_server(fd_s2);
-	if (fd < 0) {
-		pr_err("can't accept client connection\n");
+	for (i = 0; i < 2; i++) {
+		pfds[i].fd = fd_s[i];
+		pfds[i].events = POLLIN;
+		pfds[i].revents = 0;
+	}
+
+	if (poll(pfds, 2, 0) != 1) {
+		pr_perror("poll");
 		return 1;
 	}
+
+	for (i = 0; i < 2; i++) {
+		if (!(pfds[i].revents & POLLIN))
+			continue;
+
+		fd = tcp_accept_server(fd_s[i]);
+		if (fd < 0) {
+			pr_err("can't accept client connection\n");
+			return 1;
+		}
+		break;
+	}
+	if (fd < 0)
+		return 1;
 
 	test_daemon();
 	test_waitsig();
 
 
 	optlen = sizeof(val);
-	if (getsockopt(fd_s, SOL_SOCKET, SO_REUSEPORT, &val, &optlen)) {
+	if (getsockopt(fd_s[0], SOL_SOCKET, SO_REUSEPORT, &val, &optlen)) {
 		pr_perror("getsockopt");
 		return 1;
 	}
@@ -114,7 +126,7 @@ int main(int argc, char **argv)
 		return 1;
 	}
 	optlen = sizeof(val);
-	if (getsockopt(fd_s2, SOL_SOCKET, SO_REUSEPORT, &val, &optlen)) {
+	if (getsockopt(fd_s[1], SOL_SOCKET, SO_REUSEPORT, &val, &optlen)) {
 		pr_perror("getsockopt");
 		return 1;
 	}
@@ -123,7 +135,7 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	for (i = 0; ; i++) {
+	for (j = 0; j < 2; j++) {
 		crc = 0;
 		datagen(buf, BUF_SIZE, &crc);
 		if (write_data(fd, buf, BUF_SIZE)) {
@@ -146,27 +158,41 @@ int main(int argc, char **argv)
 		if (i == 2)
 			break;
 
-		clt = tcp_init_client(ZDTM_FAMILY, "localhost", port);
+		clt = tcp_init_client(ZDTM_FAMILY, "localhost", port[0]);
 		if (clt < 0)
 			return 1;
 
-		/*
-		 * parent is server of TCP connection
-		 */
-		fd = tcp_accept_server(fd_s2);
-		if (fd < 0) {
-			fd = tcp_accept_server(fd_s);
-			shutdown(fd_s, SHUT_RDWR);
-			close(fd_s);
-		} else {
-			shutdown(fd_s2, SHUT_RDWR);
-			close(fd_s2);
+		for (i = 0; i < 2 - j; i++) {
+			pfds[i].fd = fd_s[i];
+			pfds[i].events = POLLIN;
+			pfds[i].revents = 0;
 		}
-		if (fd < 0) {
-			pr_err("can't accept client connection %d\n", i);
+
+		if (poll(pfds, 2 - j, 0) != 1) {
+			pr_perror("poll");
 			return 1;
 		}
+
+		fd = -1;
+		for (i = 0; i < 2 - j; i++) {
+			if (!(pfds[i].revents & POLLIN))
+				continue;
+			fd = tcp_accept_server(fd_s[i]);
+			if (fd < 0) {
+				pr_err("can't accept client connection %d\n", i);
+				return 1;
+			}
+			shutdown(fd_s[i], SHUT_RDWR);
+			close(fd_s[i]);
+			fd_s[0] = fd_s[(i + 1) % 2];
+			break;
+		}
+		if (fd < 0)
+			return 1;
 	}
+
+	close(fd);
+	close(clt);
 
 	pass();
 	return 0;
