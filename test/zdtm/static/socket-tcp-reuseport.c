@@ -63,7 +63,7 @@ int main(int argc, char **argv)
 	int port[2] = {8880, 8880};
 	int fd = -1, fd_s[2], clt, i, j;
 	socklen_t optlen;
-	int no = 0, val;
+	int no = 0, val, ret;
 	uint32_t crc;
 
 	test_init(argc, argv);
@@ -93,9 +93,14 @@ int main(int argc, char **argv)
 		pfds[i].revents = 0;
 	}
 
-	if (poll(pfds, 2, 0) != 1) {
+	ret = poll(pfds, 2, 100 * 1000);
+	if (ret < 0) {
 		pr_perror("poll");
 		return 1;
+	}
+	pr_err("ret = %d\n", ret);
+	for (i = 0; i < 2; i++) {
+		pr_err("%d %d %d\n", pfds[i].fd, pfds[i].events, pfds[i].revents);
 	}
 
 	for (i = 0; i < 2; i++) {
@@ -168,9 +173,14 @@ int main(int argc, char **argv)
 			pfds[i].revents = 0;
 		}
 
-		if (poll(pfds, 2 - j, 0) != 1) {
+		ret = poll(pfds, 2 - j, 100 * 1000); /* 100 sec */
+		if (ret < 0) {
 			pr_perror("poll");
 			return 1;
+		}
+		pr_err("ret = %d\n", ret);
+		for (i = 0; i < 2 - j; i++) {
+			pr_err("%d %d %d\n", pfds[i].fd, pfds[i].events, pfds[i].revents);
 		}
 
 		fd = -1;
