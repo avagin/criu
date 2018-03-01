@@ -1,12 +1,6 @@
 language: c
 sudo: required
 dist: trusty
-addons:
- apt:
-  sources:
-    - ubuntu-toolchain-r-test
-  packages:
-    - g++-7
 cache: ccache
 services:
   - docker
@@ -41,3 +35,9 @@ after_success:
   - ccache -s
   - make -C scripts/travis after_success
 group: deprecated-2017Q2
+addons:
+  apt:
+    sources:
+      - ubuntu-toolchain-r-test
+    packages:
+      - g++-7
