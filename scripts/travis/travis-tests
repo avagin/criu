@@ -13,12 +13,17 @@ travis_prep () {
 
 	service apport stop
 
-	CC=gcc
+	CC=gcc-7
 	# clang support
 	if [ "$CLANG" = "1" ]; then
 		TRAVIS_PKGS="$TRAVIS_PKGS clang"
 		CC=clang
 	fi
+
+	[ -n "$GCOV" ] && {
+		add-apt-repository -y ppa:jonathonf/gcc-7.3
+		apt-get update
+	}
 
 	# ccache support, only enable for non-GCOV case
 	if [ "$CCACHE" = "1" -a -z "$GCOV" ]; then
