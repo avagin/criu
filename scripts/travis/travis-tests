@@ -13,7 +13,7 @@ travis_prep () {
 
 	service apport stop
 
-	CC=gcc-7
+	CC=gcc
 	# clang support
 	if [ "$CLANG" = "1" ]; then
 		TRAVIS_PKGS="$TRAVIS_PKGS clang"
@@ -21,8 +21,10 @@ travis_prep () {
 	fi
 
 	[ -n "$GCOV" ] && {
-		add-apt-repository -y ppa:jonathonf/gcc-7.3
-		apt-get update
+		apt-add-repository -y "ppa:ubuntu-toolchain-r/test"
+		apt-get update -yq
+		apt-get -yq --no-install-suggests --no-install-recommends --force-yes install g++-7
+		CC=gcc-7
 	}
 
 	# ccache support, only enable for non-GCOV case
