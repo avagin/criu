@@ -19,6 +19,7 @@
 #include "net.h"
 #include "namespaces.h"
 #include "xmalloc.h"
+#include "sockets.h"
 
 #include "images/tun.pb-c.h"
 
@@ -271,6 +272,7 @@ static int dump_tunfile(int lfd, u32 id, const struct fd_parms *p)
 	FileEntry fe = FILE_ENTRY__INIT;
 	TunfileEntry tfe = TUNFILE_ENTRY__INIT;
 	struct ifreq ifr;
+	struct ns_id *ns;
 
 	if (!(root_ns_mask & CLONE_NEWNET)) {
 		pr_err("Net namespace is required to dump tun link\n");
@@ -283,6 +285,13 @@ static int dump_tunfile(int lfd, u32 id, const struct fd_parms *p)
 	pr_info("Dumping tun-file %d with id %#x\n", lfd, id);
 
 	tfe.id		= id;
+
+	ns = get_socket_ns(lfd);
+	if (!ns)
+		return -1;
+	tfe.ns_id = ns->id;
+	tfe.has_ns_id = true;
+
 	ret = ioctl(lfd, TUNGETIFF, &ifr);
 	if (ret < 0) {
 		if (errno != EBADFD) {
@@ -335,6 +344,9 @@ static int tunfile_open(struct file_desc *d, int *new_fd)
 	ti = container_of(d, struct tunfile_info, d);
 	fd = open_reg_by_id(ti->tfe->id);
 	if (fd < 0)
+		return -1;
+
+	if (set_netns(ti->tfe->ns_id))
 		return -1;
 
 	if (!ti->tfe->netdev)
