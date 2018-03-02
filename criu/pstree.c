@@ -233,6 +233,7 @@ void init_pstree_helper(struct pstree_item *ret)
 {
 	ret->pid->state = TASK_HELPER;
 	rsti(ret)->clone_flags = CLONE_FILES | CLONE_FS;
+	shared_fdt_prepare(ret);
 	task_entries->nr_helpers++;
 }
 
@@ -763,7 +764,6 @@ static int prepare_pstree_ids(void)
 			continue;
 
 		helper = pid->item;
-		init_pstree_helper(helper);
 
 		helper->sid = item->sid;
 		helper->pgid = item->pgid;
@@ -772,6 +772,7 @@ static int prepare_pstree_ids(void)
 		helper->ids = item->ids;
 		list_add(&helper->sibling, &item->children);
 		rsti(item)->pgrp_leader = helper;
+		init_pstree_helper(helper);
 
 		pr_info("Add a helper %d for restoring PGID %d\n",
 				vpid(helper), helper->pgid);
