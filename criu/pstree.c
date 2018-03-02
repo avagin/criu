@@ -233,8 +233,6 @@ void init_pstree_helper(struct pstree_item *ret)
 {
 	ret->pid->state = TASK_HELPER;
 	rsti(ret)->clone_flags = CLONE_FILES | CLONE_FS;
-	if (shared_fdt_prepare(ret) < 0)
-		return -1;
 	task_entries->nr_helpers++;
 }
 

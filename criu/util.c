@@ -52,6 +52,7 @@
 #include "servicefd.h"
 #include "cr-service.h"
 #include "files.h"
+#include "pstree.h"
 
 #include "cr-errno.h"
 
