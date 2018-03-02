@@ -1277,8 +1277,8 @@ int ns_open_mountpoint(void *arg)
 	 * unmount them (see CL_UNPRIVILEGED in sys_umount(), clone_mnt() and
 	 * copy_mnt_ns() in linux kernel code).
 	 */
-	if (mi->nsid->user_ns &&
-	    switch_ns(mi->nsid->user_ns->ns_pid, &user_ns_desc, NULL) < 0)
+	if ((root_ns_mask & CLONE_NEWUSER) &&
+	    switch_ns(root_item->pid->real, &user_ns_desc, NULL) < 0)
 		goto err;
 
 	/*
