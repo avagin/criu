@@ -1327,7 +1327,7 @@ static int bind_unix_sk(int sk, struct unix_sk_info *ui)
 {
 	struct sockaddr_un addr;
 	int cwd_fd = -1, root_fd = -1, ns_fd = -1;
-	int ret = -1;
+	int ret, exit_code = -1;
 
 	if (ui->ue->name.len == 0)
 		return 0;
@@ -1340,8 +1340,7 @@ static int bind_unix_sk(int sk, struct unix_sk_info *ui)
 		 * restored we should walk those temp names and rename
 		 * some of them back to real ones.
 		 */
-		ret = 0;
-		goto done;
+		return 0;
 	}
 
 	memset(&addr, 0, sizeof(addr));
@@ -1396,10 +1395,10 @@ static int bind_unix_sk(int sk, struct unix_sk_info *ui)
 		wake_connected_sockets(ui);
 	}
 
-	ret = 0;
+	exit_code = 0;
 done:
 	revert_unix_sk_cwd(&cwd_fd, &root_fd, &ns_fd);
-	return ret;
+	return exit_code;
 }
 
 static int post_open_interconnected_master(struct unix_sk_info *ui)
