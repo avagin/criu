@@ -1141,6 +1141,10 @@ static int check_path_remap(struct fd_link *link, const struct fd_parms *parms,
 	struct stat pst;
 	const struct stat *ost = &parms->stat;
 
+	mntns_root = mntns_get_root_fd(nsid);
+	if (mntns_root < 0)
+		return -1;
+
 	if (parms->fs_type == PROC_SUPER_MAGIC) {
 		/* The file points to /proc/pid/<foo> where pid is a dead
 		 * process. We remap this file by adding this pid to be
@@ -1177,9 +1181,15 @@ static int check_path_remap(struct fd_link *link, const struct fd_parms *parms,
 			 * open on restore.
 			 */
 			if (!is_dead) {
-				*end = 0;
-				is_dead = access(rpath, F_OK);
-				*end = '/';
+				ret = fstatat(mntns_root, rpath, &pst, 0);
+				if (ret == 0)
+					is_dead = false;
+				if (errno == ENOENT)
+					is_dead = true;
+				else {
+					pr_perror("Can't stat path");
+					return -1;
+				}
 			}
 
 			if (is_dead) {
@@ -1228,10 +1238,6 @@ static int check_path_remap(struct fd_link *link, const struct fd_parms *parms,
 		pr_debug("Dump silly-rename linked remap for %x\n", id);
 		return dump_linked_remap(rpath + 1, plen - 1, ost, lfd, id, nsid);
 	}
-
-	mntns_root = mntns_get_root_fd(nsid);
-	if (mntns_root < 0)
-		return -1;
 
 	ret = fstatat(mntns_root, rpath, &pst, 0);
 	if (ret < 0) {
