@@ -1275,6 +1275,7 @@ def get_visible_state(test):
 	maps = {}
 	files = {}
 	mounts = {}
+	verbose = {}
 
 	if not getattr(test, "static", lambda: False)() or \
 	   not getattr(test, "ns", lambda: False)():
@@ -1287,7 +1288,9 @@ def get_visible_state(test):
 
 		cmaps = [[0, 0, ""]]
 		last = 0
+		cverbose = []
 		for mp in open("/proc/%s/root/proc/%s/maps" % (test.getpid(), pid)):
+			cverbose.append(mp)
 			m = map(lambda x: int('0x' + x, 0), mp.split()[0].split('-'))
 
 			m.append(mp.split()[1])
@@ -1304,6 +1307,7 @@ def get_visible_state(test):
 				last += 1
 
 		maps[pid] = set(map(lambda x: '%x-%x %s' % (x[0], x[1], x[2:]), cmaps))
+		verbose[pid] = cverbose
 
 		cmounts = []
 		try:
@@ -1314,7 +1318,7 @@ def get_visible_state(test):
 			if e.errno != errno.EINVAL:
 				raise e
 		mounts[pid] = cmounts
-	return files, maps, mounts
+	return files, maps, mounts, verbose
 
 
 def check_visible_state(test, state, opts):
@@ -1339,6 +1343,11 @@ def check_visible_state(test, state, opts):
 			print "%s: Old maps lost: %s" % (pid, old_maps - new_maps)
 			print "%s: New maps appeared: %s" % (pid, new_maps - old_maps)
 			if not opts['fault']:  # skip parasite blob
+				print "<<<<<<"
+				print "\n".join(state[-1][pid])
+				print "======"
+				print "\n".join(new[-1][pid])
+				print ">>>>>"
 				raise test_fail_exc("maps compare")
 
 		old_mounts = state[2][pid]
