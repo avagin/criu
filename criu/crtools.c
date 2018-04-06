@@ -19,8 +19,6 @@
 
 #include <dlfcn.h>
 
-#include <sys/utsname.h>
-
 #include "int.h"
 #include "page.h"
 #include "common/compiler.h"
@@ -53,8 +51,6 @@
 
 #include "setproctitle.h"
 #include "sysctl.h"
-
-#include "../soccr/soccr.h"
 
 struct cr_options opts;
 
@@ -208,42 +204,6 @@ bool deprecated_ok(char *what)
 	pr_err("Use the --deprecated option or set CRIU_DEPRECATED environment.\n");
 	pr_err("For details visit https://criu.org/Deprecation\n");
 	return false;
-}
-
-static void soccr_print_on_level(unsigned int loglevel, const char *format, ...)
-{
-	va_list args;
-	int lv;
-
-	switch (loglevel) {
-	case SOCCR_LOG_DBG:
-		lv = LOG_DEBUG;
-		break;
-	case SOCCR_LOG_ERR:
-		lv = LOG_ERROR;
-		break;
-	default:
-		lv = LOG_INFO;
-		break;
-	}
-
-	va_start(args, format);
-	vprint_on_level(lv, format, args);
-	va_end(args);
-}
-
-static void print_kernel_version(void)
-{
-	struct utsname buf;
-
-	if (uname(&buf) < 0) {
-		pr_perror("Reading kernel version failed!");
-		/* This pretty unlikely, just keep on running. */
-		return;
-	}
-
-	pr_info("Running on %s %s %s %s %s\n", buf.nodename, buf.sysname,
-		buf.release, buf.version, buf.machine);
 }
 
 int main(int argc, char *argv[], char *envp[])
@@ -726,12 +686,6 @@ int main(int argc, char *argv[], char *envp[])
 
 	if (log_init(opts.output))
 		return 1;
-	libsoccr_set_log(log_level, soccr_print_on_level);
-	compel_log_init(vprint_on_level, log_get_loglevel());
-
-	pr_info("Version: %s (gitid %s)\n", CRIU_VERSION, CRIU_GITID);
-
-	print_kernel_version();
 
 	if (opts.deprecated_ok)
 		pr_debug("DEPRECATED ON\n");

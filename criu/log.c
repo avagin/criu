@@ -9,6 +9,7 @@
 #include <sys/types.h>
 #include <sys/time.h>
 #include <sys/resource.h>
+#include <sys/utsname.h>
 
 #include <fcntl.h>
 
@@ -20,6 +21,10 @@
 #include "rst-malloc.h"
 #include "common/lock.h"
 #include "string.h"
+#include "version.h"
+#include "../soccr/soccr.h"
+#include "compel/log.h"
+
 
 #define DEFAULT_LOGFD		STDERR_FILENO
 /* Enable timestamps if verbosity is increased from default */
@@ -132,6 +137,20 @@ char *log_first_err(void)
 	return first_err->s;
 }
 
+static void print_kernel_version(void)
+{
+	struct utsname buf;
+
+	if (uname(&buf) < 0) {
+		pr_perror("Reading kernel version failed!");
+		/* This pretty unlikely, just keep on running. */
+		return;
+	}
+
+	pr_info("Running on %s %s %s %s %s\n", buf.nodename, buf.sysname,
+		buf.release, buf.version, buf.machine);
+}
+
 int log_init(const char *output)
 {
 	int new_logfd, fd;
@@ -163,6 +182,10 @@ int log_init(const char *output)
 	close(new_logfd);
 	if (fd < 0)
 		goto err;
+
+	pr_info("Version: %s (gitid %s)\n", CRIU_VERSION, CRIU_GITID);
+
+	print_kernel_version();
 
 	return 0;
 
@@ -199,9 +222,34 @@ void log_fini(void)
 	close_service_fd(LOG_FD_OFF);
 }
 
+static void soccr_print_on_level(unsigned int loglevel, const char *format, ...)
+{
+	va_list args;
+	int lv;
+
+	switch (loglevel) {
+	case SOCCR_LOG_DBG:
+		lv = LOG_DEBUG;
+		break;
+	case SOCCR_LOG_ERR:
+		lv = LOG_ERROR;
+		break;
+	default:
+		lv = LOG_INFO;
+		break;
+	}
+
+	va_start(args, format);
+	vprint_on_level(lv, format, args);
+	va_end(args);
+}
+
 void log_set_loglevel(unsigned int level)
 {
 	current_loglevel = level;
+
+	libsoccr_set_log(level, soccr_print_on_level);
+	compel_log_init(vprint_on_level, level);
 }
 
 unsigned int log_get_loglevel(void)
