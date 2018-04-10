@@ -2369,6 +2369,14 @@ static int __prepare_net_namespaces(void *unused)
 	if (restore_links())
 		goto err;
 
+#define CLONE_XXX (CLONE_NEWNET | CLONE_NEWUSER | CLONE_NEWNS)
+	if ((root_ns_mask & CLONE_XXX) == CLONE_XXX) {
+		if (mount("criu_run", "/run", "tmpfs", 0, NULL)) {
+			pr_perror("Unable to mount /run");
+			goto err;
+		}
+	}
+
 	for (nsid = ns_ids; nsid != NULL; nsid = nsid->next) {
 		if (nsid->nd != &net_ns_desc)
 			continue;
