@@ -34,7 +34,6 @@ enum {
 	PARASITE_CMD_DUMP_TTY,
 	PARASITE_CMD_CHECK_VDSO_MARK,
 	PARASITE_CMD_CHECK_AIOS,
-	PARASITE_CMD_DUMP_CGROUP,
 
 	PARASITE_CMD_MAX,
 };
@@ -223,15 +222,6 @@ struct parasite_tty_args {
 	int	st_pckt;
 	int	st_lock;
 	int	st_excl;
-};
-
-struct parasite_dump_cgroup_args {
-	/*
-	 * 4K should be enough for most cases.
-	 *
-	 * The string is null terminated.
-	 */
-	char contents[1 << 12];
 };
 
 #endif /* !__ASSEMBLY__ */

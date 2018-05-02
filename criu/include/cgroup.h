@@ -1,13 +1,14 @@
 #ifndef __CR_CGROUP_H__
 #define __CR_CGROUP_H__
 
+#include <stdbool.h>
+
 #include "int.h"
 #include "images/core.pb-c.h"
 
 struct pstree_item;
-struct parasite_dump_cgroup_args;
 extern u32 root_cg_set;
-int dump_task_cgroup(struct pstree_item *, u32 *, struct parasite_dump_cgroup_args *args);
+int dump_task_cgroup(const struct pstree_item *, u32 *);
 int dump_cgroups(void);
 int prepare_task_cgroup(struct pstree_item *);
 int prepare_cgroup(void);
@@ -86,8 +87,7 @@ struct cg_ctl {
  * Returns the list of cg_ctl-s sorted by name
  */
 struct list_head;
-struct parasite_dump_cgroup_args;
-extern int parse_task_cgroup(int pid, struct parasite_dump_cgroup_args *args, struct list_head *l, unsigned int *n);
+extern int parse_task_cgroup(int pid, bool dump_cgns, struct list_head *l, unsigned int *n);
 extern void put_ctls(struct list_head *);
 
 int collect_controllers(struct list_head *cgroups, unsigned int *n_cgroups);

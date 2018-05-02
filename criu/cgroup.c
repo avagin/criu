@@ -633,12 +633,19 @@ static int collect_cgroups(struct list_head *ctls)
 	return 0;
 }
 
-int dump_task_cgroup(struct pstree_item *item, u32 *cg_id, struct parasite_dump_cgroup_args *args)
+int dump_task_cgroup(const struct pstree_item *item, u32 *cg_id)
 {
 	int pid;
 	LIST_HEAD(ctls);
 	unsigned int n_ctls = 0;
 	struct cg_set *cs;
+	bool dump_cgns;
+
+	/* For now, we only need to dump the root task's cgroup ns, because we
+	 * know all the tasks are in the same cgroup namespace because we don't
+	 * allow nesting.
+	 */
+	dump_cgns = item && item->ids->has_cgroup_ns_id && !item->parent;
 
 	if (item)
 		pid = item->pid->real;
@@ -646,7 +653,7 @@ int dump_task_cgroup(struct pstree_item *item, u32 *cg_id, struct parasite_dump_
 		pid = getpid();
 
 	pr_info("Dumping cgroups for %d\n", pid);
-	if (parse_task_cgroup(pid, args, &ctls, &n_ctls))
+	if (parse_task_cgroup(pid, dump_cgns, &ctls, &n_ctls))
 		return -1;
 
 	cs = get_cg_set(&ctls, n_ctls, item);

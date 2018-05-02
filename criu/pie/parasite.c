@@ -605,41 +605,6 @@ static inline int parasite_check_vdso_mark(struct parasite_vdso_vma_entry *args)
 }
 #endif
 
-static int parasite_dump_cgroup(struct parasite_dump_cgroup_args *args)
-{
-	int proc, cgroup, len;
-
-	proc = get_proc_fd();
-	if (proc < 0) {
-		pr_err("can't get /proc fd\n");
-		return -1;
-	}
-
-	cgroup = sys_openat(proc, "self/cgroup", O_RDONLY, 0);
-	sys_close(proc);
-	if (cgroup < 0) {
-		pr_err("can't get /proc/self/cgroup fd\n");
-		sys_close(cgroup);
-		return -1;
-	}
-
-	len = sys_read(cgroup, args->contents, sizeof(args->contents));
-	sys_close(cgroup);
-	if (len < 0) {
-		pr_err("can't read /proc/self/cgroup %d\n", len);
-		return -1;
-	}
-
-	if (len == sizeof(args->contents)) {
-		pr_warn("/proc/self/cgroup was bigger than the page size\n");
-		return -1;
-	}
-
-	/* null terminate */
-	args->contents[len] = 0;
-	return 0;
-}
-
 void parasite_cleanup(void)
 {
 	if (mprotect_args) {
@@ -688,9 +653,6 @@ int parasite_daemon_cmd(int cmd, void *args)
 		break;
 	case PARASITE_CMD_CHECK_VDSO_MARK:
 		ret = parasite_check_vdso_mark(args);
-		break;
-	case PARASITE_CMD_DUMP_CGROUP:
-		ret = parasite_dump_cgroup(args);
 		break;
 	default:
 		pr_err("Unknown command in parasite daemon thread leader: %d\n", cmd);

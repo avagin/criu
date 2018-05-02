@@ -843,8 +843,10 @@ int parse_pid_stat(pid_t pid, struct proc_pid_stat *s)
 	int n;
 
 	fd = open_proc(pid, "stat");
-	if (fd < 0)
+	if (fd < 0) {
+		sleep(1000);
 		return -1;
+	}
 
 	n = read(fd, buf, BUF_SIZE);
 	close(fd);
@@ -2362,13 +2364,14 @@ err:
 	return -1;
 }
 
-int parse_task_cgroup(int pid, struct parasite_dump_cgroup_args *args, struct list_head *retl, unsigned int *n)
+int parse_task_cgroup(int pid, bool dump_cgns, struct list_head *retl, unsigned int *n)
 {
 	FILE *f;
 	int ret;
 	LIST_HEAD(internal);
 	unsigned int n_internal = 0;
 	struct cg_ctl *intern, *ext;
+	int rst = -1;
 
 	f = fopen_proc(pid, "cgroup");
 	if (!f)
@@ -2383,17 +2386,23 @@ int parse_task_cgroup(int pid, struct parasite_dump_cgroup_args *args, struct li
 	 * try and parse the "internal" cgroup set to find namespace
 	 * boundaries.
 	 */
-	if (!args)
+	if (!dump_cgns)
 		return 0;
 
-	f = fmemopen(args->contents, strlen(args->contents), "r");
-	if (!f) {
-		pr_perror("couldn't fmemopen cgroup buffer %s", args->contents);
+	f = fopen_proc(pid, "cgroup");
+	if (!f)
+		return -1;
+
+	if (switch_ns(pid, &cgroup_ns_desc, &rst)) {
+		fclose(f);
 		return -1;
 	}
 
 	ret = parse_cgroup_file(f, &internal, &n_internal);
 	fclose(f);
+	if (restore_ns(rst, &cgroup_ns_desc))
+		return -1;;
+
 	if (ret < 0) {
 		pr_err("couldn't parse internal cgroup file\n");
 		return -1;

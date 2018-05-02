@@ -16,6 +16,7 @@
 #include <sys/time.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
+#include <sys/mount.h>
 
 #include <sys/sendfile.h>
 
@@ -729,9 +730,6 @@ static int dump_task_core_all(struct parasite_ctl *ctl,
 	pid_t pid = item->pid->real;
 	int ret = -1;
 	struct proc_status_creds *creds;
-	struct parasite_dump_cgroup_args cgroup_args, *info = NULL;
-
-	BUILD_BUG_ON(sizeof(cgroup_args) < PARASITE_ARG_SIZE_MIN);
 
 	pr_info("\n");
 	pr_info("Dumping core (pid: %d)\n", pid);
@@ -770,19 +768,8 @@ static int dump_task_core_all(struct parasite_ctl *ctl,
 	if (ret)
 		goto err;
 
-	/* For now, we only need to dump the root task's cgroup ns, because we
-	 * know all the tasks are in the same cgroup namespace because we don't
-	 * allow nesting.
-	 */
-	if (item->ids->has_cgroup_ns_id && !item->parent) {
-		info = &cgroup_args;
-		ret = parasite_dump_cgroup(ctl, &cgroup_args);
-		if (ret)
-			goto err;
-	}
-
 	core->tc->has_cg_set = true;
-	ret = dump_task_cgroup(item, &core->tc->cg_set, info);
+	ret = dump_task_cgroup(item, &core->tc->cg_set);
 	if (ret)
 		goto err;
 
@@ -1214,6 +1201,72 @@ err_cure:
 	goto err_free;
 }
 
+static int __mount_pidns_proc(void *args)
+{
+	char *tmp_proc = args;
+
+	if (mount("proc", tmp_proc, "proc", 0, NULL)) {
+		pr_perror("mount");
+		return 1;
+	}
+
+	return 0;
+}
+
+static int get_task_proc(int pid)
+{
+	int pfd = -1, rst = -1;
+	char *tmp_proc = NULL, tmp_proc_tmpl[] = "/tmp/criu-proc.XXXXXX";
+
+	tmp_proc = mkdtemp(tmp_proc_tmpl);
+	if (tmp_proc == NULL) {
+		pr_perror("Unable to create a temporary directory");
+		goto err;
+	}
+
+	if (switch_ns(pid, &pid_ns_desc, &rst))
+		goto err;
+
+	if (call_in_child_process(__mount_pidns_proc, tmp_proc))
+		goto err;
+
+	if (restore_ns(rst, &pid_ns_desc))
+		goto err;
+	rst = -1;
+
+	pfd = open(tmp_proc, O_RDONLY | O_DIRECTORY);
+	if (pfd < 0) {
+		pr_perror("open");
+		goto err;
+	}
+
+	if (umount2(tmp_proc, MNT_DETACH)) {
+		pr_perror("Unable to umount %s", tmp_proc);
+		goto err;
+	}
+	if (rmdir(tmp_proc)) {
+		pr_perror("Unable to remove %s", tmp_proc);
+		goto err;
+	}
+	tmp_proc = NULL;
+
+	if (install_service_fd(CR_PROC_FD_OFF, pfd) < 0)
+		goto err;
+
+	close(pfd);
+
+	return 0;
+err:
+	if (tmp_proc) {
+		umount2(tmp_proc, MNT_DETACH);
+		rmdir(tmp_proc);
+	}
+	if (rst >= 0)
+		restore_ns(rst, &pid_ns_desc);
+	close_safe(&pfd);
+	return -1;
+}
+
 static int dump_one_task(struct pstree_item *item)
 {
 	pid_t pid = item->pid->real;
@@ -1289,20 +1342,8 @@ static int dump_one_task(struct pstree_item *item)
 		kill(getpid(), SIGKILL);
 	}
 
-	if (root_ns_mask & CLONE_NEWPID && root_item == item) {
-		int pfd;
-
-		pfd = parasite_get_proc_fd_seized(parasite_ctl);
-		if (pfd < 0) {
-			pr_err("Can't get proc fd (pid: %d)\n", pid);
-			goto err_cure_imgset;
-		}
-
-		if (install_service_fd(CR_PROC_FD_OFF, pfd) < 0)
-			goto err_cure_imgset;
-
-		close(pfd);
-	}
+	if (root_ns_mask & CLONE_NEWPID && root_item == item && get_task_proc(pid))
+		goto err_cure_imgset;
 
 	ret = parasite_fixup_vdso(parasite_ctl, pid, &vmas);
 	if (ret) {

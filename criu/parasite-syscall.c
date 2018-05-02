@@ -438,24 +438,6 @@ int parasite_get_proc_fd_seized(struct parasite_ctl *ctl)
 	return fd;
 }
 
-/* This is officially the 50000'th line in the CRIU source code */
-
-int parasite_dump_cgroup(struct parasite_ctl *ctl, struct parasite_dump_cgroup_args *cgroup)
-{
-	int ret;
-	struct parasite_dump_cgroup_args *ca;
-
-	ca = compel_parasite_args(ctl, struct parasite_dump_cgroup_args);
-	ret = compel_rpc_call_sync(PARASITE_CMD_DUMP_CGROUP, ctl);
-	if (ret) {
-		pr_err("Parasite failed to dump /proc/self/cgroup\n");
-		return ret;
-	}
-
-	*cgroup = *ca;
-	return 0;
-}
-
 static unsigned long parasite_args_size = PARASITE_ARG_SIZE_MIN;
 void parasite_ensure_args_size(unsigned long sz)
 {
