@@ -1969,9 +1969,11 @@ static int replace_xtable_lock()
 {
 	static bool done;
 	int fd;
-	char fname[] = "/tmp/criu-xtable.lock.XXXXXX";
 
 	if (!(root_ns_mask & CLONE_NEWUSER))
+		return 0;
+
+	if (!(root_ns_mask & CLONE_NEWNS))
 		return 0;
 
 	if (done)
@@ -1984,23 +1986,11 @@ static int replace_xtable_lock()
 		return 0;
 	}
 
-	fd = mkstemp(fname);;
-	if (fd < 0) {
-		pr_perror("Unable to create %s", fname);
+	if (mount("criu-xtable-lock", "/run", "tmpfs", 0, NULL)) {
+		pr_perror("Unable to mount tmpfs into /run");
 		return -1;
 	}
-	close(fd);
 
-	if (mount(fname, "/run/xtables.lock", NULL, MS_BIND, NULL)) {
-		pr_perror("Unable to mount %s to /run/xtables.lock", fname);
-		if (unlink(fname))
-			pr_perror("Unable to delete %s", fname);
-		return -1;
-	}
-	if (unlink(fname)) {
-		pr_perror("Unable to delete %s", fname);
-		return -1;
-	}
 	done = true;
 
 	return 0;
