@@ -1965,10 +1965,54 @@ out:
 	return ret;
 }
 
+static int replace_xtable_lock()
+{
+	static bool done;
+	int fd;
+	char fname[] = "/tmp/criu-xtable.lock.XXXXXX";
+
+	if (!(root_ns_mask & CLONE_NEWUSER))
+		return 0;
+
+	if (done)
+		return 0;
+
+	fd = open("/run/xtables.lock", O_RDONLY);
+	if (fd >= 0) {
+		close(fd);
+		done = true;
+		return 0;
+	}
+
+	fd = mkstemp(fname);;
+	if (fd < 0) {
+		pr_perror("Unable to create %s", fname);
+		return -1;
+	}
+	close(fd);
+
+	if (mount(fname, "/run/xtables.lock", NULL, MS_BIND, NULL)) {
+		pr_perror("Unable to mount %s to /run/xtables.lock", fname);
+		if (unlink(fname))
+			pr_perror("Unable to delete %s", fname);
+		return -1;
+	}
+	if (unlink(fname)) {
+		pr_perror("Unable to delete %s", fname);
+		return -1;
+	}
+	done = true;
+
+	return 0;
+}
+
 static inline int restore_iptables(int pid)
 {
 	int ret = -1;
 	struct cr_img *img;
+
+	if (replace_xtable_lock())
+		return -1;
 
 	img = open_image(CR_FD_IPTABLES, O_RSTR, pid);
 	if (img == NULL)
