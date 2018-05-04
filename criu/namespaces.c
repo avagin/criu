@@ -1978,6 +1978,17 @@ static int dump_ns_with_hookups(int for_dump)
 		if (ns->nd == &user_ns_desc) {
 			e.user_ext = ns->user.e;
 		}
+		if (ns->nd == &net_ns_desc) {
+			char id[64], *val;
+
+			snprintf(id, sizeof(id), "net[%u]", ns->kid);
+			val = external_lookup_by_key(id);
+			if (!IS_ERR_OR_NULL(val)) {
+				pr_debug("The %s netns is external\n", id);
+				ns->ext_key = val;
+			}
+		}
+		e.ext_key = ns->ext_key;
 
 		ret = pb_write_one(img, &e, PB_NS);
 		if (ret < 0) {
@@ -2027,6 +2038,9 @@ int read_ns_with_hookups(void)
 			pr_err("Can't find ns %d\n", e->id);
 			goto close;
 		}
+
+		if (e->ext_key)
+			ns->ext_key = xstrdup(e->ext_key);
 
 		if (e->user_ext && e->ns_cflag == CLONE_NEWUSER) {
 			ns->user.e = dup_userns_entry(e->user_ext);

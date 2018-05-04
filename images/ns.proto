@@ -26,4 +26,5 @@ message ns_entry {
 	optional uint32		parent_id	= 3;
 	optional uint32		userns_id	= 4;
 	optional userns_entry	user_ext	= 5;
+	optional string		ext_key		= 6;
 }

@@ -2126,6 +2126,22 @@ static int dump_netns_ids(int rtsk, struct ns_id *ns)
 			(void *)&arg);
 }
 
+int net_set_ext(struct ns_id *ns)
+{
+	int fd, ret;
+
+	fd = inherit_fd_lookup_id(ns->ext_key);
+	if (fd < 0) {
+		pr_err("Unable to find an external netns: %s\n", ns->ext_key);
+		return -1;
+	}
+
+	ret = switch_ns_by_fd(fd, &net_ns_desc, NULL);
+	close(fd);
+
+	return ret;
+}
+
 int dump_net_ns(struct ns_id *ns)
 {
 	struct cr_imgset *fds;
@@ -2136,7 +2152,8 @@ int dump_net_ns(struct ns_id *ns)
 		return -1;
 
 	ret = mount_ns_sysfs();
-	if (!(opts.empty_ns & CLONE_NEWNET)) {
+	if (ns->ext_key) {
+	} else if (!(opts.empty_ns & CLONE_NEWNET)) {
 		int sk;
 
 		sk = socket(PF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
@@ -2233,7 +2250,7 @@ static int prepare_net_ns_first_stage(struct ns_id *ns)
 {
 	int ret = 0;
 
-	if (opts.empty_ns & CLONE_NEWNET)
+	if (ns->ext_key || (opts.empty_ns & CLONE_NEWNET))
 		return 0;
 
 	ret = restore_netns_conf(ns);
@@ -2249,7 +2266,7 @@ static int prepare_net_ns_second_stage(struct ns_id *ns)
 {
 	int ret = 0, nsid = ns->id;
 
-	if (!(opts.empty_ns & CLONE_NEWNET)) {
+	if (!(opts.empty_ns & CLONE_NEWNET) && !ns->ext_key) {
 		if (ns->net.netns)
 			netns_entry__free_unpacked(ns->net.netns, NULL);
 
@@ -2297,7 +2314,12 @@ static int open_net_ns(struct ns_id *nsid)
 
 static int do_create_net_ns(struct ns_id *ns)
 {
-	if (unshare(CLONE_NEWNET)) {
+	int ret;
+	if (ns->ext_key)
+		ret = net_set_ext(ns);
+	else
+		ret = unshare(CLONE_NEWNET);
+	if (ret) {
 		pr_perror("Unable to create a new netns");
 		return -1;
 	}
@@ -2671,7 +2693,7 @@ int collect_net_namespaces(bool for_dump)
 
 struct ns_desc net_ns_desc = NS_DESC_ENTRY(CLONE_NEWNET, "net", NULL);
 
-static struct ns_id *get_root_netns()
+struct ns_id *get_root_netns()
 {
 	static struct ns_id *root_netns = NULL;
 

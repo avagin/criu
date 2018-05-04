@@ -110,6 +110,7 @@ struct ns_id {
 	struct ns_id *user_ns;
 	struct ns_id *next;
 	enum ns_type type;
+	char *ext_key;
 
 	/*
 	 * For mount namespaces on restore -- indicates that
