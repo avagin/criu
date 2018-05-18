@@ -13,7 +13,7 @@ jobs:
     - stage: kernel
       script: sudo make -C scripts/travis kernel
       env:
-        - TTT=linux    KGIT="http://kernel.googlesource.com/pub/scm/linux/kernel/git/torvalds/linux.git" GCOV=1
+        - TTT=linux    KGIT="http://kernel.googlesource.com/pub/scm/linux/kernel/git/torvalds/linux.git"
     - stage: kernel
       script: sudo make -C scripts/travis kernel
       env:
@@ -21,7 +21,7 @@ jobs:
     - stage: zdtm
       script: sudo make -C scripts/travis local
       env:
-        - TTT=linux    KGIT="http://kernel.googlesource.com/pub/scm/linux/kernel/git/torvalds/linux.git" GCOV=1
+        - TTT=linux    KGIT="http://kernel.googlesource.com/pub/scm/linux/kernel/git/torvalds/linux.git"
     - stage: zdtm
       script: sudo make -C scripts/travis local
       env:
