@@ -25,7 +25,7 @@ RUN yum install -y \
 	python-ipaddress \
 	python2-future \
 	python2-junit_xml \
-	python2-flake8 \
+	python-flake8 \
 	python-yaml \
 	python-six \
 	tar \
