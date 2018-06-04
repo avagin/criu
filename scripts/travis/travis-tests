@@ -47,7 +47,7 @@ travis_prep () {
 	apt-get install -qq --no-install-recommends $TRAVIS_PKGS
 	# travis is based on 14.04 and that does not have python
 	# packages for future and ipaddress (16.04 has those packages)
-	pip install junit-xml future ipaddress
+	pip install junit-xml future ipaddress flake8
 	chmod a+x $HOME
 }
 
