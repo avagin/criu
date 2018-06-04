@@ -21,7 +21,10 @@ RUN apt-get update && apt-get install -y \
 	protobuf-compiler \
 	python-minimal \
 	python-future \
-	python-flake8
+	python-flake8 \
+	python-ipaddress \
+	python-yaml \
+	python-junitxml
 
 COPY . /criu
 WORKDIR /criu
