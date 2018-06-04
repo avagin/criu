@@ -37,5 +37,5 @@ RUN apk add \
 	e2fsprogs \
 	asciidoc xmlto
 
-RUN pip install protobuf ipaddress junit_xml
+RUN pip install protobuf ipaddress junit_xml flake8
 RUN make -C test/zdtm

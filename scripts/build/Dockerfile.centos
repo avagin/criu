@@ -25,12 +25,12 @@ RUN yum install -y \
 	python-ipaddress \
 	python2-future \
 	python2-junit_xml \
+	python2-flake8 \
 	python-yaml \
 	python-six \
 	tar \
 	which \
 	e2fsprogs \
-	python2-pip \
 	asciidoc xmlto
 
 COPY . /criu
