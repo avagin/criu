@@ -282,7 +282,7 @@ int ns_init(int argc, char **argv)
 	if (pipe(p))
 		return 1;
 
-	pid = sys_clone_unified(SIGCHLD | CLONE_NEWUSER, 0, NULL, NULL, 0);
+	pid = sys_clone_unified(SIGCHLD | CLONE_NEWUSER | CLONE_NEWPID, 0, NULL, NULL, 0);
 	if (pid < 0) {
 		fprintf(stderr, "fork() failed: %m\n");
 		exit(1);
@@ -290,11 +290,43 @@ int ns_init(int argc, char **argv)
 		close(p[1]);
 		if (read(p[0], &c, 1) != 1)
 			return 1;
-		close(status_pipe);
 		if (setuid(0) || setgid(0) || setgroups(0, NULL)) {
 			fprintf(stderr, "set*id failed: %m\n");
 			return -1;
 		}
+		pid = fork();
+		if (pid < 0)
+			return -1;
+		if (pid) {
+			ret = -1;
+			if (waitpid(pid, &ret, 0) < 0)
+				fprintf(stderr, "waitpid() failed: %m\n");
+			else if (ret)
+				fprintf(stderr, "The test returned non-zero code %d\n", ret);
+			/* Daemonize */
+			write(status_pipe, &ret, sizeof(ret));
+			close(status_pipe);
+			if (ret)
+				exit(ret);
+			while (true) {
+				pid_t child;
+				ret = -1;
+
+				child = waitpid(-1, &ret, 0);
+				if (child < 0) {
+					fprintf(stderr, "Unable to wait a test process: %m");
+					exit(1);
+				}
+				if (child == pid) {
+					fprintf(stderr, "The test returned 0x%x", ret);
+					//exit(!(ret == 0));
+				}
+				if (ret)
+					fprintf(stderr, "The %d process exited with 0x%x", child, ret);
+			}
+			exit(0);
+		}
+		close(status_pipe);
 		unsetenv("ZDTM_NEWNS");
 		return 0; /* Continue normal test startup */
 	}
@@ -331,12 +363,13 @@ int ns_init(int argc, char **argv)
 		return -1;
 	close(p[1]);
 
+/*
 	ret = -1;
 	if (waitpid(pid, &ret, 0) < 0)
 		fprintf(stderr, "waitpid() failed: %m\n");
 	else if (ret)
 		fprintf(stderr, "The test returned non-zero code %d\n", ret);
-
+*/
 	if (reap && sigaction(SIGCHLD, &sa, NULL)) {
 		fprintf(stderr, "Can't set SIGCHLD handler: %m\n");
 		exit(1);
@@ -356,11 +389,11 @@ int ns_init(int argc, char **argv)
 			fprintf(stderr, "%d return %d\n", pid, status);
 	}
 
-	/* Daemonize */
-	write(status_pipe, &ret, sizeof(ret));
+//	/* Daemonize */
+//	write(status_pipe, &ret, sizeof(ret));
 	close(status_pipe);
-	if (ret)
-		exit(ret);
+//	if (ret)
+//		exit(ret);
 
 	/* suspend/resume */
 	test_waitsig();
