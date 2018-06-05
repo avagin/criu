@@ -308,6 +308,38 @@ int ns_init(int argc, char **argv)
 			close(status_pipe);
 			if (ret)
 				exit(ret);
+			while (1) {
+				int status;
+
+				pid = waitpid(-1, &status, WNOHANG);
+				if (pid == 0)
+					break;
+				if (pid < 0) {
+					fprintf(stderr, "waitpid() failed: %m\n");
+					exit (1);
+				}
+				if (status)
+					fprintf(stderr, "%d return %d\n", pid, status);
+			}
+			/* suspend/resume */
+			test_waitsig();
+
+			fd = open(pidfile, O_RDONLY);
+			if (fd == -1) {
+				fprintf(stderr, "open(%s) failed: %m\n", pidfile);
+				exit(1);
+			}
+			ret = read(fd, buf, sizeof(buf) - 1);
+			buf[ret] = '\0';
+			if (ret == -1) {
+				fprintf(stderr, "read() failed: %m\n");
+				exit(1);
+			}
+
+			pid = atoi(buf);
+			fprintf(stderr, "kill(%d, SIGTERM)\n", pid);
+			if (pid > 0)
+				kill(pid, SIGTERM);
 			while (true) {
 				pid_t child;
 				ret = -1;
@@ -398,22 +430,7 @@ int ns_init(int argc, char **argv)
 	/* suspend/resume */
 	test_waitsig();
 
-	fd = open(pidfile, O_RDONLY);
-	if (fd == -1) {
-		fprintf(stderr, "open(%s) failed: %m\n", pidfile);
-		exit(1);
-	}
-	ret = read(fd, buf, sizeof(buf) - 1);
-	buf[ret] = '\0';
-	if (ret == -1) {
-		fprintf(stderr, "read() failed: %m\n");
-		exit(1);
-	}
-
-	pid = atoi(buf);
-	fprintf(stderr, "kill(%d, SIGTERM)\n", pid);
-	if (pid > 0)
-		kill(pid, SIGTERM);
+	kill(pid, SIGTERM);
 
 	ret = 0;
 	if (reap) {
