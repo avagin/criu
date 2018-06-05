@@ -236,6 +236,8 @@ static int ns_exec(void *_arg)
 	return -1;
 }
 
+#define UID_MAP1 "0 0 100000\n100000 100000 50000"
+#define GID_MAP1 "0 0 50000\n50000 50000 100000"
 int ns_init(int argc, char **argv)
 {
 	struct sigaction sa = {
@@ -275,15 +277,59 @@ int ns_init(int argc, char **argv)
 	pidfile = x;
 
 	/* Start test */
-	pid = fork();
+	int p[2];
+	char c;
+	if (pipe(p))
+		return 1;
+
+	pid = sys_clone_unified(SIGCHLD | CLONE_NEWUSER, 0, NULL, NULL, 0);
 	if (pid < 0) {
 		fprintf(stderr, "fork() failed: %m\n");
 		exit(1);
 	} else if (pid == 0) {
+		close(p[1]);
+		if (read(p[0], &c, 1) != 1)
+			return 1;
 		close(status_pipe);
+		if (setuid(0) || setgid(0) || setgroups(0, NULL)) {
+			fprintf(stderr, "set*id failed: %m\n");
+			return -1;
+		}
 		unsetenv("ZDTM_NEWNS");
 		return 0; /* Continue normal test startup */
 	}
+	close(p[0]);
+	{
+		char pname[PATH_MAX];
+		int fd;
+
+		snprintf(pname, sizeof(pname), "/proc/%d/uid_map", pid);
+		fd = open(pname, O_WRONLY);
+		if (fd < 0) {
+			fprintf(stderr, "open(%s): %m\n", pname);
+			exit(1);
+		}
+		if (write(fd, UID_MAP1, sizeof(UID_MAP1)) < 0) {
+			fprintf(stderr, "write(" UID_MAP1 "): %m\n");
+			exit(1);
+		}
+		close(fd);
+
+		snprintf(pname, sizeof(pname), "/proc/%d/gid_map", pid);
+		fd = open(pname, O_WRONLY);
+		if (fd < 0) {
+			fprintf(stderr, "open(%s): %m\n", pname);
+			exit(1);
+		}
+		if (write(fd, GID_MAP1, sizeof(GID_MAP1)) < 0) {
+			fprintf(stderr, "write(" GID_MAP1 "): %m\n");
+			exit(1);
+		}
+		close(fd);
+	}
+	if (write(p[1], &c, 1) != 1)
+		return -1;
+	close(p[1]);
 
 	ret = -1;
 	if (waitpid(pid, &ret, 0) < 0)
