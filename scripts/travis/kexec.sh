@@ -64,7 +64,10 @@ true && {
 	docker run -v `pwd`:/mnt/kernel -v ~/.ccache:/mnt/ccache -w /mnt/kernel criu-kernel ccache -s
 	docker run -v `pwd`:/mnt/kernel -v ~/.ccache:/mnt/ccache -w /mnt/kernel criu-kernel ccache -z
 	$DROPBOX_UPLOAD .config || true
+	while :; do sleep 60; ps axf --width 256; done &
+	ps_pid=$1
 	time docker run -v `pwd`:/mnt/kernel -v ~/.ccache:/mnt/ccache -w /mnt/kernel criu-kernel make -j 4 || exit 1
+	kill $ps_pid
 #	$DROPBOX_UPLOAD vmlinux || true
 	make kernelrelease
 	kernelrelease=$(make -s --no-print-directory kernelrelease)
