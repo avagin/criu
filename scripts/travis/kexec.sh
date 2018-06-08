@@ -17,7 +17,7 @@ if [ "$1" = 'prep' ]; then
 
 	cp scripts/linux-next-config $KPATH/.config
 	cd $KPATH
-	make olddefconfig
+	make olddefconfig || exit 1
 	exit 0
 fi
 
@@ -46,7 +46,7 @@ kernelrelease=""
 true && {
 	old_pwd=`pwd`
 	cd $KPATH
-	yes "" | make localyesconfig
+	yes "" | make localyesconfig || exit 1
 
 	# zdtm/static/socket-tcp-reseted	
 	sed -i "s/.*CONFIG_NF_REJECT_IPV4.*/CONFIG_NF_REJECT_IPV4=y/" .config
