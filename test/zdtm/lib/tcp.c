@@ -12,7 +12,7 @@ union sockaddr_inet {
 int tcp_init_server(int family, int *port)
 {
 	struct zdtm_tcp_opts opts = {
-		.reuseaddr = true,
+		.reuseaddr = false,
 		.reuseport = false,
 	};
 
@@ -28,7 +28,7 @@ int tcp_init_server_with_opts(int family, int *port, struct zdtm_tcp_opts *opts)
 	memset(&addr,0,sizeof(addr));
 	if (family == AF_INET) {
 		addr.v4.sin_family = family;
-		inet_pton(family, "0.0.0.0", &(addr.v4.sin_addr));
+		inet_pton(family, "127.0.0.1", &(addr.v4.sin_addr));
 	} else if (family == AF_INET6){
 		addr.v6.sin6_family = family;
 		inet_pton(family, "::0", &(addr.v6.sin6_addr));
@@ -104,15 +104,29 @@ int tcp_accept_server(int sock)
 	return sock2;
 }
 
-int tcp_init_client(int family, char *servIP, unsigned short servPort)
+int tcp_init_client_with_opts(int family, char *servIP, unsigned short servPort,
+				struct zdtm_tcp_opts *opts)
 {
-	int sock;
+	int sock, yes = 1;
 	union sockaddr_inet servAddr;
 
 	if ((sock = socket(family, SOCK_STREAM, IPPROTO_TCP)) < 0) {
 		pr_perror("can't create socket");
 		return -1;
 	}
+
+	if (opts->reuseport &&
+	    setsockopt(sock, SOL_SOCKET, SO_REUSEPORT, &yes, sizeof(int)) == -1) {
+		pr_perror("");
+		return -1;
+	}
+
+	if (opts->reuseaddr &&
+	    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) == -1 ) {
+		pr_perror("setsockopt() error");
+		return -1;
+	}
+
 	/* Construct the server address structure */
 	memset(&servAddr, 0, sizeof(servAddr));
 	if (family == AF_INET) {
@@ -129,4 +143,13 @@ int tcp_init_client(int family, char *servIP, unsigned short servPort)
 		return -1;
 	}
 	return sock;
+}
+
+int tcp_init_client(int family, char *servIP, unsigned short servPort)
+{
+	struct zdtm_tcp_opts opts = {
+		.reuseaddr = false,
+		.reuseport = false,
+	};
+	return tcp_init_client_with_opts(family, servIP, servPort, &opts);
 }
