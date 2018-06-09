@@ -480,8 +480,6 @@ int restore_socket_opts(int sk, SkOptsEntry *soe)
 	ret |= restore_bound_dev(sk, soe);
 	ret |= restore_socket_filter(sk, soe);
 
-	/* The restore of SO_REUSEADDR depends on type of socket */
-
 	return ret;
 }
 

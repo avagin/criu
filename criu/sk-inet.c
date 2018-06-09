@@ -38,6 +38,7 @@ struct inet_port {
 	int type;
 	struct list_head type_list;
 	atomic_t users;
+	atomic_t listeners;
 	mutex_t reuseaddr_lock;
 	struct list_head list;
 };
@@ -49,6 +50,8 @@ static struct inet_port *port_add(struct inet_sk_info *ii, int port)
 
 	list_for_each_entry(e, &inet_ports, list)
 		if (e->type == type && e->port == port) {
+			if (ii->ie->state == TCP_LISTEN)
+				atomic_inc(&e->listeners);
 			atomic_inc(&e->users);
 			goto out_link;
 		}
@@ -62,6 +65,9 @@ static struct inet_port *port_add(struct inet_sk_info *ii, int port)
 	e->port = port;
 	e->type = type;
 	atomic_set(&e->users, 1);
+	atomic_set(&e->listeners, 0);
+	if (ii->ie->state == TCP_LISTEN)
+		atomic_inc(&e->listeners);
 	mutex_init(&e->reuseaddr_lock);
 	INIT_LIST_HEAD(&e->type_list);
 
@@ -612,6 +618,19 @@ static void dec_users_and_wake(struct inet_port *port)
 	}
 }
 
+static void dec_listeners_and_wake(struct inet_port *port)
+{
+	struct fdinfo_list_entry *fle;
+	struct inet_sk_info *ii;
+
+	if (atomic_dec_return(&port->listeners))
+		return;
+	list_for_each_entry(ii, &port->type_list, port_list) {
+		fle = file_master(&ii->d);
+		set_fds_event(fle->pid);
+	}
+}
+
 static int post_open_inet_sk(struct file_desc *d, int sk)
 {
 	struct inet_sk_info *ii;
@@ -634,8 +653,8 @@ static int post_open_inet_sk(struct file_desc *d, int sk)
 	if (ii->ie->opts->reuseaddr && ii->ie->opts->so_reuseport)
 		return 0;
 
-	if (atomic_read(&ii->port->users))
-		return 1;
+//	if (atomic_read(&ii->port->users))
+//		return 1;
 
 	val = ii->ie->opts->reuseaddr;
 	if (!val && restore_opt(sk, SOL_SOCKET, SO_REUSEADDR, &val))
@@ -670,6 +689,10 @@ static int open_inet_sk(struct file_desc *d, int *new_fd)
 	ii = container_of(d, struct inet_sk_info, d);
 	ie = ii->ie;
 
+	/* listen socket on this port are not created yet */
+	if (ie->state != TCP_LISTEN && atomic_read(&ii->port->listeners))
+		return 1;
+
 	show_one_inet_img("Restore", ie);
 
 	if (ie->family != AF_INET && ie->family != AF_INET6) {
@@ -694,19 +717,19 @@ static int open_inet_sk(struct file_desc *d, int *new_fd)
 		return -1;
 	}
 
+	int val;
+	val = ii->ie->opts->reuseaddr;
+	if (val && restore_opt(sk, SOL_SOCKET, SO_REUSEADDR, &val))
+		return -1;
+
+	val = ii->ie->opts->so_reuseport;
+	if (val && restore_opt(sk, SOL_SOCKET, SO_REUSEPORT, &val))
+		return -1;
+
 	if (ie->v6only) {
 		if (restore_opt(sk, SOL_IPV6, IPV6_V6ONLY, &yes) == -1)
 			goto err;
 	}
-
-	/*
-	 * Set SO_REUSEADDR, because some sockets can be bound to one addr.
-	 * The origin value of SO_REUSEADDR will be restored in post_open.
-	 */
-	if (restore_opt(sk, SOL_SOCKET, SO_REUSEADDR, &yes))
-		goto err;
-	if (restore_opt(sk, SOL_SOCKET, SO_REUSEPORT, &yes))
-		goto err;
 
 	if (tcp_connection(ie)) {
 		if (!opts.tcp_established_ok && !opts.tcp_close) {
@@ -753,6 +776,8 @@ static int open_inet_sk(struct file_desc *d, int *new_fd)
 		goto err;
 done:
 	dec_users_and_wake(ii->port);
+	if (ie->state == TCP_LISTEN)
+		dec_listeners_and_wake(ii->port);
 
 	if (rst_file_params(sk, ie->fown, ie->flags))
 		goto err;

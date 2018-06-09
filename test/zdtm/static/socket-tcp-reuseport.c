@@ -21,7 +21,7 @@ const char *test_author = "Andrey Vagin <avagin@parallels.com";
 #include <sys/socket.h>
 #include <arpa/inet.h>  /* for sockaddr_in and inet_ntoa() */
 
-#define BUF_SIZE 4096
+#define BUF_SIZE 40
 
 int read_data(int fd, unsigned char *buf, int size)
 {
@@ -61,7 +61,7 @@ int main(int argc, char **argv)
 	int port = 8880, port2;
 	int fd, fd_s, fd_s2, clt, i;
 	socklen_t optlen;
-	int no = 0, val;
+	int val;
 	uint32_t crc;
 
 	test_init(argc, argv);
@@ -78,11 +78,6 @@ int main(int argc, char **argv)
 	}
 	if (port != port2)
 		return 1;
-
-	if (setsockopt(fd_s, SOL_SOCKET, SO_REUSEPORT, &no, sizeof(int)) == -1 ) {
-		pr_perror("Unable to set SO_REUSEPORT");
-		return -1;
-	}
 
 
 	clt = tcp_init_client(ZDTM_FAMILY, "localhost", port);
@@ -109,7 +104,7 @@ int main(int argc, char **argv)
 		pr_perror("getsockopt");
 		return 1;
 	}
-	if (val == 1) {
+	if (val != 1) {
 		fail("SO_REUSEPORT is set for %d\n", fd);
 		return 1;
 	}

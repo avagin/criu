@@ -1,3 +1,6 @@
+#include <sys/types.h>
+#include <sys/wait.h>
+
 #include "zdtmtst.h"
 
 #ifdef ZDTM_IPV4V6
@@ -64,7 +67,7 @@ int main(int argc, char **argv)
 	pid_t extpid;
 	uint32_t crc;
 	int pfd[2];
-	int val;
+	int val, i;
 	socklen_t optlen;
 
 #ifdef ZDTM_CONNTRACK
@@ -90,6 +93,7 @@ int main(int argc, char **argv)
 		pr_perror("fork() failed");
 		return 1;
 	} else if (extpid == 0) {
+		struct zdtm_tcp_opts opts = { .reuseaddr = true };
 #ifndef ZDTM_TCP_LOCAL
 		test_ext_init(argc, argv);
 #endif
@@ -100,9 +104,11 @@ int main(int argc, char **argv)
 			return 1;
 		}
 
-		fd = tcp_init_client(ZDTM_FAMILY, "localhost", port);
-		if (fd < 0)
-			return 1;
+		for (i = 0; i < 10; i++) {
+			fd = tcp_init_client_with_opts(ZDTM_FAMILY, "localhost", port, &opts);
+			if (fd < 0)
+				return 1;
+		}
 
 #ifdef STREAM
 		while (1) {
@@ -133,6 +139,15 @@ int main(int argc, char **argv)
 			return 1;
 		}
 #endif
+		optlen = sizeof(val);
+		if (getsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &val, &optlen)) {
+			pr_perror("getsockopt");
+			return 1;
+		}
+		if (val != 1) {
+			fail("SO_REUSEADDR are not set for %d\n", fd);
+			return 1;
+		}
 		return 0;
 	}
 
@@ -155,16 +170,12 @@ int main(int argc, char **argv)
 	/*
 	 * parent is server of TCP connection
 	 */
-	fd = tcp_accept_server(fd_s);
-	if (fd < 0) {
-		pr_err("can't accept client connection\n");
-		return 1;
-	}
-
-	val = 1;
-	if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val))) {
-		pr_perror("setsockopt");
-		return 1;
+	for (i = 0; i < 10; i++) {
+		fd = tcp_accept_server(fd_s);
+		if (fd < 0) {
+			pr_err("can't accept client connection\n");
+			return 1;
+		}
 	}
 
 	test_daemon();
@@ -199,13 +210,30 @@ int main(int argc, char **argv)
 	}
 	if (datachk(buf, BUF_SIZE, &crc))
 		return 2;
-#endif
+
+#ifdef ZDTM_TCP_LOCAL
+{
+	int status = -1;
+
+	if (waitpid(extpid, &status, 0) < 0) {
+		pr_perror("Unable to wait a child process");
+		return 1;
+	}
+
+	if (status) {
+		pr_err("The child process returned %d", status);
+		return 1;
+	}
+}
+#endif /* ZDTM_TCP_LOCAL */
+#endif /* STREAM */
+
 	optlen = sizeof(val);
 	if (getsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &val, &optlen)) {
 		pr_perror("getsockopt");
 		return 1;
 	}
-	if (val != 1) {
+	if (val != 0) {
 		fail("SO_REUSEADDR are not set for %d\n", fd);
 		return 1;
 	}
