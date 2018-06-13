@@ -87,6 +87,12 @@ static void tcp_unlock_one(struct inet_sk_desc *sk)
 	libsoccr_resume(sk->priv);
 	sk->priv = NULL;
 
+	/*
+	 * tcp_repair_off modifies SO_REUSEADDR so
+	 * don't forget to restore original value.
+	 */
+	restore_opt(sk->rfd, SOL_SOCKET, SO_REUSEADDR, &sk->cpt_reuseaddr);
+
 	close(sk->rfd);
 }
 
