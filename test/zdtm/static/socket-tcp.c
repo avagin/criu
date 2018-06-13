@@ -67,7 +67,7 @@ int main(int argc, char **argv)
 	pid_t extpid;
 	uint32_t crc;
 	int pfd[2];
-	int val, i;
+	int val;
 	socklen_t optlen;
 
 #ifdef ZDTM_CONNTRACK
@@ -108,11 +108,9 @@ int main(int argc, char **argv)
 			return 1;
 		}
 
-		for (i = 0; i < 10; i++) {
-			fd = tcp_init_client_with_opts(ZDTM_FAMILY, "localhost", port, &opts);
-			if (fd < 0)
-				return 1;
-		}
+		fd = tcp_init_client_with_opts(ZDTM_FAMILY, "localhost", port, &opts);
+		if (fd < 0)
+			return 1;
 
 #ifdef STREAM
 		while (1) {
@@ -174,12 +172,10 @@ int main(int argc, char **argv)
 	/*
 	 * parent is server of TCP connection
 	 */
-	for (i = 0; i < 10; i++) {
-		fd = tcp_accept_server(fd_s);
-		if (fd < 0) {
-			pr_err("can't accept client connection\n");
-			return 1;
-		}
+	fd = tcp_accept_server(fd_s);
+	if (fd < 0) {
+		pr_err("can't accept client connection\n");
+		return 1;
 	}
 
 	test_daemon();
