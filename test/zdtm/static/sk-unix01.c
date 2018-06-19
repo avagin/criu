@@ -91,8 +91,9 @@ int main(int argc, char **argv)
 	int sk_dgram_pair[2];
 	int sk_dgram[9];
 	socklen_t len;
-	int sk_st[5];
+	int sk_st[5], i;
 	DIR *dir;
+	pid_t pid;
 
 	test_init(argc, argv);
 
@@ -159,6 +160,16 @@ int main(int argc, char **argv)
 		return 1;
 	unlink(addr.sun_path);
 	test_msg("sk-dt: alloc/connect/unlink %d %s\n", sk_dgram[1], addr.sun_path);
+	sk_dgram[0] = sk_alloc_bind(SOCK_DGRAM, &addr);
+	if (sk_dgram[0] < 0)
+		return 1;
+	test_msg("sk-dt: alloc/bind %d %s\n", sk_dgram[0], addr.sun_path);
+
+	sk_dgram[1] = sk_alloc_connect(SOCK_DGRAM, &addr);
+	if (sk_dgram[1] < 0)
+		return 1;
+	unlink(addr.sun_path);
+	test_msg("sk-dt: alloc/connect/unlink %d %s\n", sk_dgram[1], addr.sun_path);
 
 	sk_dgram[2] = sk_alloc_bind(SOCK_DGRAM, &addr);
 	if (sk_dgram[2] < 0)
@@ -178,28 +189,41 @@ int main(int argc, char **argv)
 	}
 	unlink(addr.sun_path);
 
-	sk_dgram[4] = sk_alloc_bind(SOCK_DGRAM, &addr);
-	if (sk_dgram[4] < 0)
+	pid = fork();
+	if (pid < 0)
 		return 1;
-	test_msg("sk-dt: alloc/bind %d %s\n", sk_dgram[4], addr.sun_path);
+	if (pid == 0)
+		sleep(1);
+	for (i = 0; i < 200; i++) {
+		sk_dgram[4] = sk_alloc_bind(SOCK_STREAM, &addr);
+		if (sk_dgram[4] < 0)
+			return 1;
+		test_msg("sk-dt: alloc/bind %d %s\n", sk_dgram[4], addr.sun_path);
 
-	sk_dgram[5] = sk_alloc_connect(SOCK_DGRAM, &addr);
-	if (sk_dgram[5] < 0)
-		return 1;
-	unlink(addr.sun_path);
-	test_msg("sk-dt: alloc/connect/unlink %d %s\n", sk_dgram[5], addr.sun_path);
+		listen(sk_dgram[4], 1);
 
-	sk_dgram[6] = sk_alloc_bind(SOCK_DGRAM, &addr);
-	if (sk_dgram[6] < 0)
-		return 1;
-	test_msg("sk-dt: alloc/bind %d %s\n", sk_dgram[6], addr.sun_path);
+		sk_dgram[5] = sk_alloc_connect(SOCK_STREAM, &addr);
+		if (sk_dgram[5] < 0)
+			return 1;
+		accept(sk_dgram[4], NULL, 0);
+		unlink(addr.sun_path);
+		test_msg("sk-dt: alloc/connect/unlink %d %s\n", sk_dgram[5], addr.sun_path);
 
-	sk_dgram[7] = sk_alloc_connect(SOCK_DGRAM, &addr);
-	if (sk_dgram[7] < 0)
-		return 1;
-	unlink(addr.sun_path);
-	test_msg("sk-dt: alloc/connect/unlink %d %s\n", sk_dgram[7], addr.sun_path);
+		sk_dgram[6] = sk_alloc_bind(SOCK_DGRAM, &addr);
+		if (sk_dgram[6] < 0)
+			return 1;
+		test_msg("sk-dt: alloc/bind %d %s\n", sk_dgram[6], addr.sun_path);
 
+		sk_dgram[7] = sk_alloc_connect(SOCK_DGRAM, &addr);
+		if (sk_dgram[7] < 0)
+			return 1;
+		unlink(addr.sun_path);
+		test_msg("sk-dt: alloc/connect/unlink %d %s\n", sk_dgram[7], addr.sun_path);
+	}
+	if (pid == 0) {
+		test_waitsig();
+		return 0;
+	}
 	sk_dgram[8] = sk_alloc_bind(SOCK_DGRAM, &addr);
 	if (sk_dgram[8] < 0)
 		return 1;
