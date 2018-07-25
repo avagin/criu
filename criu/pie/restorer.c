@@ -1372,11 +1372,6 @@ long __export_restore_task(struct task_restore_args *args)
 		struct iovec *iovs = rio->iovs;
 		int nr = rio->nr_iovs;
 		ssize_t r;
-		int file_flags = sys_fcntl(args->vma_ios_fd, F_GETFL, 0);
-		if (file_flags < 0) {
-			pr_err("Can't check file flags\n");
-			file_flags = 0;
-		}
 
 		while (nr) {
 			pr_debug("Preadv %lx:%d... (%d iovs)\n",
@@ -1391,7 +1386,7 @@ long __export_restore_task(struct task_restore_args *args)
 			pr_debug("`- returned %ld\n", (long)r);
 			/* If the file is open for writing, then it means we should punch holes
 			 * in it. */
-			if (r > 0 && (file_flags & O_RDWR)) {
+			if (r > 0 && args->auto_dedup) {
 				int fr = sys_fallocate(args->vma_ios_fd, FALLOC_FL_KEEP_SIZE|FALLOC_FL_PUNCH_HOLE,
 					rio->off, r);
 				if (fr < 0) {
