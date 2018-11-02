@@ -13,11 +13,9 @@ add-apt-repository \
    "deb [arch=amd64] https://download.docker.com/linux/ubuntu \
    $(lsb_release -cs) \
    stable test"
-add-apt-repository 'deb http://archive.ubuntu.com/ubuntu trusty-backports main restricted universe multiverse'
 
 apt-get update -y
 
-apt-get install -y libseccomp2/trusty-backports
 apt-get install -y docker-ce
 
 cat > /etc/docker/daemon.json <<EOF
