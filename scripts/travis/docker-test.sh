@@ -12,7 +12,7 @@ curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
 add-apt-repository \
    "deb [arch=amd64] https://download.docker.com/linux/ubuntu \
    $(lsb_release -cs) \
-   stable"
+   stable test"
 
 
 apt-get update -qq
@@ -49,8 +49,13 @@ for i in `seq 50`; do
 	# avoid races with docker start.
 	docker exec cr ps axf &&
 	docker checkpoint create cr checkpoint$i &&
+	docker ps &&
+	! docker exec cr ps axf &&
 	sleep 1 &&
-	docker start --checkpoint checkpoint$i cr 2>&1 | tee log || {
+	docker start --checkpoint checkpoint$i cr 2>&1 | tee log &&
+	docker ps &&
+	docker exec cr ps axf &&
+	true || {
 		cat "`cat log | grep 'log file:' | sed 's/log file:\s*//'`" || true
 		docker logs cr || true
 		cat /tmp/zdtm-core-* || true
@@ -58,7 +63,6 @@ for i in `seq 50`; do
 		docker ps
 		exit 1
 	}
-	docker ps
 	sleep 1
 done
 
