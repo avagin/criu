@@ -31,7 +31,7 @@ fedora-asan:
 docker-test:
 	echo 'DOCKER_OPTS="--storage-driver=devicemapper"' > /etc/default/docker
 	restart docker
-	$(MAKE) -C ../build $@$(target-suffix)
+	$(MAKE) -C ../build x86_64
 	docker run --rm -it --privileged -v /lib/modules:/lib/modules --tmpfs /run criu-x86_64 /docker-test.sh
 
 %:
