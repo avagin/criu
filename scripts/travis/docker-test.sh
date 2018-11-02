@@ -17,7 +17,7 @@ add-apt-repository 'deb http://archive.ubuntu.com/ubuntu trusty-backports main r
 
 apt-get update -y
 
-apt-get install --only-upgrade -y libseccomp2/trusty-backports
+apt-get install -y libseccomp2/trusty-backports
 apt-get install -y docker-ce
 
 cat > /etc/docker/daemon.json <<EOF
