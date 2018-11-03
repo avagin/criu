@@ -1,0 +1,14 @@
+set -e
+gcloud auth activate-service-account --key-file docker-key.json
+
+gcloud compute instances create criu-docker --machine-type=n1-standard-2 --boot-disk-auto-delete --boot-disk-size=10G --image-family projects/ubuntu-os-cloud/global/images/family/ubuntu-1804-lts --zone us-central1-c
+
+SSH='gcloud compute ssh --zone "us-central1-c" "criu-docker" --'
+
+eval $SSH apt-get update -y &&
+eval $SSH apt-get install -y git make gcc &&
+eval $SSH git clone https://github.com/avagin/criu -b docker-test &&
+eval $SSH make -C criu/travis docker-test || ret = $?
+gcloud compute instances delete criu-docker --zone us-central1-c 
+exit $ret
+

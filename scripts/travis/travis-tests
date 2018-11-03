@@ -4,7 +4,8 @@ set -x -e
 TRAVIS_PKGS="protobuf-c-compiler libprotobuf-c0-dev libaio-dev
 		libprotobuf-dev protobuf-compiler libcap-dev
 		libnl-3-dev gcc-multilib gdb bash python-protobuf
-		libnet-dev util-linux asciidoc xmlto libnl-route-3-dev"
+		libnet-dev util-linux asciidoc xmlto libnl-route-3-dev
+		python-pip"
 
 travis_prep () {
 	[ -n "$SKIP_TRAVIS_PREP" ] && return
@@ -45,10 +46,6 @@ travis_prep () {
 
 	apt-get update -qq
 	apt-get install -qq --no-install-recommends $TRAVIS_PKGS
-	# travis is based on 14.04 and that does not have python
-	# packages for future and ipaddress (16.04 has those packages)
-	pip install junit-xml future ipaddress
-	chmod a+x $HOME
 }
 
 travis_prep
@@ -60,6 +57,11 @@ export GCOV
 time make CC="$CC" -j4
 
 [ -n "$SKIP_TRAVIS_TEST" ] && return
+
+# travis is based on 14.04 and that does not have python
+# packages for future and ipaddress (16.04 has those packages)
+pip install junit-xml future ipaddress
+chmod a+x $HOME
 
 time make CC="$CC" -j4 -C test/zdtm
 
