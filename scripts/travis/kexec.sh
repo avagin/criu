@@ -70,7 +70,7 @@ true && {
 	kill $ps_pid
 #	$DROPBOX_UPLOAD vmlinux || true
 	make kernelrelease
-	kernelrelease=$(make -s --no-print-directory kernelrelease)
+	kernelrelease=$(docker run -v `pwd`:/mnt/kernel -v ~/.ccache:/mnt/ccache -w /mnt/kernel criu-kernel make -s --no-print-directory kernelrelease)
 	echo -- $kernelrelease
 	docker run -v `pwd`:/mnt/kernel -v ~/.ccache:/mnt/ccache -w /mnt/kernel criu-kernel ccache -s
 	cd $old_pwd
