@@ -526,7 +526,6 @@ static int parasite_trap(struct parasite_ctl *ctl, pid_t pid,
 			 siginfo.si_signo, siginfo.si_code);
 
 		pr_err("Unexpected %d task interruption, aborting\n", pid);
-		sleep(10000);
 		goto err;
 	}
 
@@ -941,16 +940,8 @@ struct parasite_thread_ctl *compel_prepare_thread(struct parasite_ctl *ctl, int 
 
 static int prepare_thread(int pid, struct thread_ctx *ctx)
 {
-	k_rtsigset_t block;
-
 	if (ptrace(PTRACE_GETSIGMASK, pid, sizeof(k_rtsigset_t), &ctx->sigmask)) {
 		pr_perror("can't get signal blocking mask for %d", pid);
-		return -1;
-	}
-
-	ksigfillset(&block);
-	if (ptrace(PTRACE_SETSIGMASK, pid, sizeof(k_rtsigset_t), &block)) {
-		pr_perror("Can't block signals for %d", pid);
 		return -1;
 	}
 
