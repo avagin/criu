@@ -138,6 +138,7 @@ TST_NOFILE	:=				\
 		tty02				\
 		tty03				\
 		poll				\
+		ppoll				\
 		mountpoints			\
 		netns				\
 		netns-dev			\
@@ -449,6 +450,7 @@ $(TST):	| $(LIB)
 aio00:			LDLIBS += -laio
 different_creds:	LDLIBS += -lcap
 file_locks06 file_locks07 file_locks08:	ofd_file_locks.o
+ppoll:			LDFLAGS += -pthread
 futex:			CFLAGS += -pthread
 futex:			LDFLAGS += -pthread
 futex-rl:		CFLAGS += -pthread
