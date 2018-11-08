@@ -1653,12 +1653,6 @@ class Launcher:
 			print(u"# Timestamp: " + now.strftime("%Y-%m-%d %H:%M") + " (GMT+1)", file=self.__file_report)
 			print(u"# ", file=self.__file_report)
 			print(u"1.." + str(nr_tests), file=self.__file_report)
-		with open("/proc/sys/kernel/tainted") as taintfd:
-			self.__taint = taintfd.read()
-		if int(self.__taint, 0) != 0:
-			print("The kernel is tainted: %r" % self.__taint)
-			if not opts["ignore_taint"]:
-				raise Exception("The kernel is tainted: %r" % self.__taint)
 
 	def __show_progress(self, msg):
 		perc = int(self.__nr * 16 / self.__total)
@@ -1683,10 +1677,6 @@ class Launcher:
 		if len(self.__subs) >= self.__max:
 			self.wait()
 
-		with open("/proc/sys/kernel/tainted") as taintfd:
-			taint = taintfd.read()
-		if self.__taint != taint:
-			raise Exception("The kernel is tainted: %r (%r)" % (taint, self.__taint))
 
 		if test_flag(desc, 'excl'):
 			self.wait_all()

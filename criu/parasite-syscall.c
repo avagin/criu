@@ -188,6 +188,7 @@ int parasite_dump_thread_seized(struct parasite_thread_ctl *tctl,
 		goto err_rth;
 	}
 
+	//sleep(30);
 	ret = compel_run_in_thread(tctl, PARASITE_CMD_DUMP_THREAD);
 	if (ret) {
 		pr_err("Can't init thread in parasite %d\n", pid);
