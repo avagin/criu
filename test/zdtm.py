@@ -1579,11 +1579,11 @@ def do_run_test(tname, tdesc, flavs, opts):
 
 		try:
 			t.start()
-			print "start time for %s: %.2f" % (tname, time.time() - start)
+			print("start time for %s: %.2f" % (tname, time.time() - start))
 			s = get_visible_state(t)
 			try:
 				cr(cr_api, t, opts)
-				print "C/R time for %s: %.2f" % (tname, time.time() - start)
+				print("C/R time for %s: %.2f" % (tname, time.time() - start))
 			except test_fail_expected_exc as e:
 				if e.cr_action == "dump":
 					t.stop()
@@ -1763,7 +1763,7 @@ class Launcher:
 				if sub['log']:
 					add_to_output(sub['log'])
 			else:
-				print "%.2f - %s" % (time.time() - sub['start'], sub['name'])
+				print("%.2f - %s" % (time.time() - sub['start'], sub['name']))
 				if self.__file_report:
 					testline = u"ok %d - %s" % (self.__runtest, sub['name'])
 					print(testline, file=self.__file_report)
