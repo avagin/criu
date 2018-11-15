@@ -49,6 +49,9 @@ function test_restore_loop {
 	P=${!}
 	echo "pid ${P}"
 
+	# wait when loop.sh will redirect stdin, stdout. stderr
+	sleep 1
+
 	title_print "Dump loop.sh"
 	# So theoretically '-j' (--shell-job) should not be necessary, but on alpine
 	# this test fails without it.
