@@ -192,7 +192,8 @@ make -C test/others/mnt-ext-dev/ run
 #make -C test/others/exec/ run
 make -C test/others/make/ run CC="$CC"
 make -C test/others/shell-job/ run
-make -C test/others/rpc/ run
+make -C test/others/rpc/ run ||
+( for i in `find test/others/rpc/ -name '*.log'`; do echo; echo "======"; echo $i; echo "======"; cat $i; done; exit 1)
 
 check_travis_timeout
 ./test/zdtm.py run -t zdtm/static/env00 --sibling
