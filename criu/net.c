@@ -863,7 +863,6 @@ unk:
 static int dump_one_nf(struct nlmsghdr *hdr, struct ns_id *ns, void *arg)
 {
 	struct cr_img *img = arg;
-
 	if (lazy_image(img) && open_image_lazy(img))
 		return -1;
 
@@ -871,6 +870,31 @@ static int dump_one_nf(struct nlmsghdr *hdr, struct ns_id *ns, void *arg)
 		return -1;
 
 	return 0;
+}
+
+static int dump_one_ct(struct nlmsghdr *hdr, struct ns_id *ns, void *arg)
+{
+	struct nlattr *tb[CTA_MAX + 1];
+	struct nfgenmsg *nf;
+
+	nf = NLMSG_DATA(hdr);
+	nlmsg_parse(hdr, sizeof(struct nfgenmsg), tb, CTA_MAX, NULL);
+
+	pr_err("ct family = %d\n", nf->nfgen_family);
+	if (tb[CTA_STATUS])
+		pr_err("\tstatus = %08x\n", nla_get_u32(tb[CTA_STATUS]));
+	if (tb[CTA_TIMEOUT])
+		pr_err("\ttimeout = %u\n", nla_get_u32(tb[CTA_TIMEOUT]));
+	if (tb[CTA_MARK])
+		pr_err("\tmark = %u\n", nla_get_u32(tb[CTA_MARK]));
+	if (tb[CTA_USE])
+		pr_err("\tuse = %u\n", nla_get_u32(tb[CTA_USE]));
+	if (tb[CTA_ID])
+		pr_err("\tid = %u\n", nla_get_u32(tb[CTA_ID]));
+	if (tb[CTA_ZONE])
+		pr_err("\tzone = %u\n", nla_get_u32(tb[CTA_ZONE]));
+
+	return dump_one_nf(hdr, ns, arg);
 }
 
 static int ct_restore_callback(struct nlmsghdr *nlh)
@@ -996,7 +1020,7 @@ static int dump_nf_ct(struct cr_imgset *fds, int type)
 	} req;
 	int sk, ret;
 
-	pr_info("Dumping netns links\n");
+	pr_info("Dumping netns conntracks\n");
 
 	ret = sk = socket(AF_NETLINK, SOCK_RAW, NETLINK_NETFILTER);
 	if (sk < 0) {
@@ -1022,7 +1046,10 @@ static int dump_nf_ct(struct cr_imgset *fds, int type)
 
 	img = img_from_set(fds, type);
 
-	ret = do_rtnl_req(sk, &req, sizeof(req), dump_one_nf, NULL, NULL, img);
+	if (type == CR_FD_NETNF_CT)
+		ret = do_rtnl_req(sk, &req, sizeof(req), dump_one_ct, NULL, NULL, img);
+	else
+		ret = do_rtnl_req(sk, &req, sizeof(req), dump_one_nf, NULL, NULL, img);
 	close(sk);
 out:
 	return ret;
