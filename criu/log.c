@@ -162,8 +162,6 @@ int log_init(const char *output)
 	gettimeofday(&start, NULL);
 	reset_buf_off();
 
-	output = "/tmp/criu.log";
-
 	if (output && !strncmp(output, "-", 2)) {
 		new_logfd = dup(STDOUT_FILENO);
 		if (new_logfd < 0) {
