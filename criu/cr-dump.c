@@ -1901,6 +1901,9 @@ int cr_dump_tasks(pid_t pid)
 	ret = write_img_inventory(&he);
 	if (ret)
 		goto err;
+
+	ret = -1;
+	goto err;
 err:
 	if (parent_ie)
 		inventory_entry__free_unpacked(parent_ie, NULL);
