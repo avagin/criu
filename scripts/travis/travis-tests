@@ -158,6 +158,8 @@ ip net add test
 ./test/zdtm.py run --empty-ns -T zdtm/static/socket-tcp*-local --iter 2
 
 ./test/zdtm.py run -t zdtm/static/env00 -k always
+./test/zdtm.py run -t zdtm/static/socket-tcp -k always
+./test/zdtm.py run -t zdtm/static/sigpending -k always
 ./test/crit-recode.py
 
 make -C test/others/shell-job
