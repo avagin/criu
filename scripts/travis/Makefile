@@ -11,7 +11,7 @@ ifdef CLANG
 	target-suffix = -clang
 endif
 
-TARGETS := alpine fedora-rawhide centos
+TARGETS := alpine fedora-rawhide centos x86_64
 ZDTM_OPTIONS :=
 
 alpine: ZDTM_OPTIONS=-x zdtm/static/binfmt_misc -x zdtm/static/netns-nf -x zdtm/static/sched_policy00 -x zdtm/static/seccomp_strict -x zdtm/static/sigaltstack -x zdtm/static/signalfd00 -x zdtm/static/config_inotify_irmap
