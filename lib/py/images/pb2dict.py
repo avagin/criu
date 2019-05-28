@@ -219,7 +219,7 @@ def is_string(value):
 	# Python 3 compatibility
 	if not hasattr(__builtins__, "basestring"):
 		basestring = (str, bytes)
-	return isinstance(value, basestring)
+	return isinstance(value, basestring) or isinstance(value, unicode)
 
 def _pb2dict_cast(field, value, pretty = False, is_hex = False):
 	if not is_hex:
