@@ -14,6 +14,8 @@ echo $f
 }
 ./scripts/dropbox_upload.py /imgs/dump.log || true
 
+tar -czf /imgs/travis.tar.gz -C /tmp travis
+
 ./crit/crit show /imgs/tty-info.img  | sed 's/"index": \([0-9]*\)/"index": 1\1/' | ./crit/crit encode > /imgs/tty-info.img.new
 ./crit/crit show /imgs/files.img  | sed 's|/dev/pts/\([0-9]*\)|/dev/pts/1\1|' | ./crit/crit encode > /imgs/files.img.new
 mv /imgs/tty-info.img.new /imgs/tty-info.img

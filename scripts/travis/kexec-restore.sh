@@ -29,6 +29,7 @@ dmesg > /dmesg.log
 mkfifo $2
 chmod 0600 $2
 make -C test pidns
+tar -xzf /imgs/travis.tar.gz -C /tmp
 ./test/pidns ./criu/criu restore -D /imgs -o restore.log -j --tcp-established --ext-unix-sk -v4 -l &
 pid=$!
 touch /rebooted
