@@ -4,7 +4,7 @@ dist: trusty
 cache: ccache
 env:
  global:
-  - secure: "pH5j+FHqZbV6WLjRtjPVa1HuWrbJCmp0h231qdziiYl0yKL3Rr/Ueg0JHrq3OuT3VJt5tM93CcyHjW44U5T+s838w2NtfunuEAIJfSvTlxOuW++2h5EyZz1NLwocHAUlWCRt5sOCaehn2isQoegCkpYsyXyA3gxSJUAaUqYSlw0="
+  - secure: "InD7XNBbe0ro8h7DnzpPz7xpp4DxK6LoFoLgKFxMYuKcx/3+ITPHNTN9AjzsymR6/b6s26QbhcFadhaCXzdJQ40OChKluO11D4D4s/6bqCksKM+N7BKgiC02sn0t/uJA5tbWOoPox08TU5H3whz4yxLuqg1rs5oJz43357p0j/Y="
 install:
   - sudo apt-get update
   - sudo apt-get install -qq --no-install-recommends protobuf-c-compiler libprotobuf-c0-dev libaio-dev libprotobuf-dev protobuf-compiler python-ipaddr libcap-dev libnl-3-dev gcc-multilib libc6-dev-i386 gdb bash python-protobuf libnet-dev util-linux asciidoc xmlto libnl-route-3-dev kexec-tools libssl-dev libelf-dev strace ccache
