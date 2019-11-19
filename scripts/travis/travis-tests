@@ -231,9 +231,9 @@ check_travis_timeout
 make -C test/others/shell-job
 
 check_travis_timeout
-./test/zdtm.py run -p 2 -T zdtm/static/maps* --lazy-pages
-./test/zdtm.py run -t zdtm/static/env00 --lazy-pages --pre 2
-./test/zdtm.py run -t zdtm/static/env00 --remote-lazy-pages
+./test/zdtm.py run -p 2 -T zdtm/static/maps* --lazy-pages -f "h,ns"
+./test/zdtm.py run -t zdtm/static/env00 --lazy-pages --pre 2 -f "h,ns"
+./test/zdtm.py run -t zdtm/static/env00 --remote-lazy-pages -f "h,ns"
 
 check_travis_timeout
 git clean -dxf test/zdtm
