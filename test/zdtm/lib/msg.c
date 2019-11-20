@@ -23,6 +23,11 @@ int test_log_init(const char *fname, const char *suffix)
 		return -1;
 	}
 
+	if (fallocate(logfd, FALLOC_FL_KEEP_SIZE, 0, PAGE_SIZE)) {
+		pr_perror("fallocate");
+		return -1;
+	}
+
 	dup2(logfd, STDERR_FILENO);
 	dup2(logfd, STDOUT_FILENO);
 
