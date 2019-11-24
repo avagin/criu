@@ -136,6 +136,7 @@ cat /proc/self/fdinfo/1
 travis_prep
 cat /proc/self/fdinfo/1
 
+export NO_GNUTLS=yes
 export GCOV
 umask 0000
 make -j4 ${MAKE_VARS}
