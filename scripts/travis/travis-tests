@@ -55,7 +55,7 @@ check_travis_timeout()
 
 cd ../../
 set -m
-./scripts/travis/kexec.sh prep > kexec-prep.log 2>&1 
+./scripts/travis/kexec.sh prep > kexec-prep.log 2>&1 &
 
 set -x -e
 
@@ -122,7 +122,7 @@ travis_prep () {
 	fi
 
 	apt-get update -qq
-	apt-get install -qq --no-install-recommends $TRAVIS_PKGS
+	apt-get install -qq --no-install-recommends $TRAVIS_PKGS || {echo fail; exit 1}
 	# travis is based on 14.04 and that does not have python
 	# packages for future and ipaddress (16.04 has those packages)
 	pip install junit-xml future ipaddress
@@ -151,7 +151,7 @@ python test/zdtm.py run -t zdtm/static/env00
 cat /proc/self/fdinfo/1
 
 date
-#wait # for kexec.sh prep to finish
+wait # for kexec.sh prep to finish
 cat kexec-prep.log
 ./scripts/travis/kexec.sh
 
