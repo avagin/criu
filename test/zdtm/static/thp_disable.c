@@ -12,6 +12,10 @@ const char *test_author	= "Mike Rapoport <rppt@linux.ibm.com>";
 
 #define MEM_SIZE (2 << 20)
 
+#ifndef PR_SET_THP_DISABLE
+# define PR_SET_THP_DISABLE	41
+#endif
+
 int main(int argc, char **argv)
 {
 	unsigned long orig_flags = 0, new_flags = 0;
