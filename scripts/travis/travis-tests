@@ -53,7 +53,6 @@ check_travis_timeout()
     fi
 }
 
-cd ../../
 set -m
 ./scripts/travis/kexec.sh prep > kexec-prep.log 2>&1 &
 
