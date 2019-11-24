@@ -67,9 +67,8 @@ cat /proc/self/mountinfo
 TRAVIS_PKGS="protobuf-c-compiler libprotobuf-c0-dev libaio-dev
 		libprotobuf-dev protobuf-compiler
 		libcap-dev libnl-3-dev gdb bash python-protobuf python-yaml
-		libnet-dev util-linux asciidoctor libnl-route-3-dev
+		libnet-dev util-linux libnl-route-3-dev
 		time ccache
-		libbsd-dev
 		kexec-tools libssl-dev libelf-dev strace"
 
 X86_64_PKGS="gcc-multilib"
