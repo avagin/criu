@@ -53,6 +53,7 @@ check_travis_timeout()
     fi
 }
 
+cd ../../
 set -m
 ./scripts/travis/kexec.sh prep > kexec-prep.log 2>&1 &
 
@@ -83,8 +84,6 @@ fi
 
 travis_prep () {
 	[ -n "$SKIP_TRAVIS_PREP" ] && return
-
-	cd ../../
 
 	# This can fail on aarch64 travis
 	service apport stop || :
