@@ -64,7 +64,7 @@ python -c "import fcntl; fcntl.fcntl(1, fcntl.F_SETFL, 0)"
 cat /proc/cmdline
 cat /proc/self/mountinfo
 
-TRAVIS_PKGS="protobuf-c-compiler libprotobuf-c0-dev libaio-dev python-future
+TRAVIS_PKGS="protobuf-c-compiler libprotobuf-c0-dev libaio-dev
 		libprotobuf-dev protobuf-compiler
 		libcap-dev libnl-3-dev gdb bash python-protobuf python-yaml
 		libnet-dev util-linux asciidoctor libnl-route-3-dev
