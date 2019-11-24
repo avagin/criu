@@ -64,11 +64,11 @@ python -c "import fcntl; fcntl.fcntl(1, fcntl.F_SETFL, 0)"
 cat /proc/cmdline
 cat /proc/self/mountinfo
 
-TRAVIS_PKGS="protobuf-c-compiler libprotobuf-c-dev libaio-dev python-future
-		libgnutls28-dev libgnutls30 libprotobuf-dev protobuf-compiler
+TRAVIS_PKGS="protobuf-c-compiler libprotobuf-c0-dev libaio-dev python-future
+		libprotobuf-dev protobuf-compiler
 		libcap-dev libnl-3-dev gdb bash python-protobuf python-yaml
 		libnet-dev util-linux asciidoctor libnl-route-3-dev
-		python-junit.xml python-ipaddress time ccache flake8
+		time ccache
 		libbsd-dev
 		kexec-tools libssl-dev libelf-dev strace"
 
@@ -123,6 +123,9 @@ travis_prep () {
 
 	apt-get update -qq
 	apt-get install -qq --no-install-recommends $TRAVIS_PKGS
+	# travis is based on 14.04 and that does not have python
+	# packages for future and ipaddress (16.04 has those packages)
+	pip install junit-xml future ipaddress
 	chmod a+x $HOME
 	pip install dropbox
 	export CCACHE_DIR="/home/travis/.ccache"
