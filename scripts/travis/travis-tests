@@ -59,8 +59,6 @@ set -m
 
 set -x -e
 
-python -c "import fcntl; fcntl.fcntl(1, fcntl.F_SETFL, 0)"
-
 cat /proc/cmdline
 cat /proc/self/mountinfo
 
@@ -119,7 +117,7 @@ travis_prep () {
 	fi
 
 	apt-get update -y
-	apt-get install -y --no-install-recommends $TRAVIS_PKGS || { echo $?; exit 1; }
+	apt-get install -y --no-install-recommends $TRAVIS_PKGS
 	# travis is based on 14.04 and that does not have python
 	# packages for future and ipaddress (16.04 has those packages)
 	pip install junit-xml future ipaddress
@@ -131,9 +129,7 @@ travis_prep () {
 	export PATH="/usr/lib/ccache:$PATH"
 }
 
-cat /proc/self/fdinfo/1
 travis_prep
-cat /proc/self/fdinfo/1
 
 export NO_GNUTLS=yes
 export GCOV
@@ -157,22 +153,19 @@ if [ -n "$COMPILE_ONLY" ]; then
 	exit 0
 fi
 
-cat /proc/self/fdinfo/1
-
 dmesg
 if [ -n "$NOTESTS" ]; then
 	exit 0
 fi
 
-cat /proc/self/fdinfo/1
 ulimit -c unlimited
+
 echo "|`pwd`/test/abrt.sh %P %p %s %e" > /proc/sys/kernel/core_pattern
 make -j4 ${MAKE_VARS} -C test/zdtm
 cat /proc/self/fdinfo/1
 
 check_travis_timeout
 
-cat /proc/self/fdinfo/1
 umask 0000
 ./criu/criu check
 ./criu/criu check --all || echo $?
@@ -180,17 +173,14 @@ umask 0000
 ./criu/criu cpuinfo check
 
 export SKIP_PREP=1
-cat /proc/self/fdinfo/1
 
 chmod a+w -R .
 chmod 0777 test/
 chmod 0777 test/zdtm/static
 chmod 0777 test/zdtm/transition
-cat /proc/self/fdinfo/1
 
 check_travis_timeout
 ./test/zdtm.py run -a -p 4 --keep-going
-cat /proc/self/fdinfo/1
 
 check_travis_timeout
 bash ./test/jenkins/criu-fault.sh
