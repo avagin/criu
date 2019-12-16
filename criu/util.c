@@ -1320,7 +1320,7 @@ int call_in_child_process(int (*fn)(void *), void *arg)
 	 * No SIGCHLD flag, so it's not need to block signal.
 	 */
 	pid = clone_noasan(fn, CLONE_VFORK | CLONE_VM | CLONE_FILES |
-			   CLONE_IO | CLONE_SIGHAND | CLONE_SYSVSEM, arg);
+			   CLONE_IO | CLONE_SIGHAND | CLONE_SYSVSEM, arg, 0);
 	if (pid == -1) {
 		pr_perror("Can't clone");
 		return -1;

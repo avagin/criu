@@ -1327,6 +1327,7 @@ static inline int fork_with_pid(struct pstree_item *item)
 	struct cr_clone_arg ca;
 	int ret = -1;
 	pid_t pid = vpid(item);
+	pid_t fork_pid = 0;
 
 	if (item->pid->state != TASK_HELPER) {
 		if (open_core(pid, &ca.core))
@@ -1372,28 +1373,33 @@ static inline int fork_with_pid(struct pstree_item *item)
 
 	pr_info("Forking task with %d pid (flags 0x%lx)\n", pid, ca.clone_flags);
 
-	if (!(ca.clone_flags & CLONE_NEWPID)) {
-		char buf[32];
-		int len;
-		int fd;
+	if (!kdat.has_clone3_set_tid) {
+		if (!(ca.clone_flags & CLONE_NEWPID)) {
+			char buf[32];
+			int len;
+			int fd;
 
-		fd = open_proc_rw(PROC_GEN, LAST_PID_PATH);
-		if (fd < 0)
-			goto err;
+			fd = open_proc_rw(PROC_GEN, LAST_PID_PATH);
+			if (fd < 0)
+				goto err;
 
-		lock_last_pid();
+			lock_last_pid();
 
-		len = snprintf(buf, sizeof(buf), "%d", pid - 1);
-		if (write(fd, buf, len) != len) {
-			pr_perror("%d: Write %s to %s", pid, buf, LAST_PID_PATH);
+			len = snprintf(buf, sizeof(buf), "%d", pid - 1);
+			if (write(fd, buf, len) != len) {
+				pr_perror("%d: Write %s to %s", pid, buf,
+					LAST_PID_PATH);
+				close(fd);
+				goto err_unlock;
+			}
 			close(fd);
-			goto err_unlock;
+		} else {
+			BUG_ON(pid != INIT_PID);
 		}
-		close(fd);
+		close_pid_proc();
 	} else {
-		BUG_ON(pid != INIT_PID);
+		fork_pid = pid;
 	}
-
 	/*
 	 * Some kernel modules, such as network packet generator
 	 * run kernel thread upon net-namespace creattion taking
@@ -1406,9 +1412,9 @@ static inline int fork_with_pid(struct pstree_item *item)
 	 * The cgroup namespace is also unshared explicitly in the
 	 * move_in_cgroup(), so drop this flag here as well.
 	 */
-	close_pid_proc();
 	ret = clone_noasan(restore_task_with_children,
-			(ca.clone_flags & ~(CLONE_NEWNET | CLONE_NEWCGROUP)) | SIGCHLD, &ca);
+			(ca.clone_flags & ~(CLONE_NEWNET | CLONE_NEWCGROUP)) | SIGCHLD,
+			&ca, fork_pid);
 	if (ret < 0) {
 		pr_perror("Can't fork for %d", pid);
 		goto err_unlock;
@@ -1422,8 +1428,10 @@ static inline int fork_with_pid(struct pstree_item *item)
 	}
 
 err_unlock:
-	if (!(ca.clone_flags & CLONE_NEWPID))
-		unlock_last_pid();
+	if (!kdat.has_clone3_set_tid) {
+		if (!(ca.clone_flags & CLONE_NEWPID))
+			unlock_last_pid();
+	}
 err:
 	if (ca.core)
 		core_entry__free_unpacked(ca.core, NULL);
@@ -3594,6 +3602,7 @@ static int sigreturn_restore(pid_t pid, struct task_restore_args *task_args, uns
 	task_args->vdso_maps_rt = vdso_maps_rt;
 	task_args->vdso_rt_size = vdso_rt_size;
 	task_args->can_map_vdso = kdat.can_map_vdso;
+	task_args->has_clone3_set_tid = kdat.has_clone3_set_tid;
 
 	new_sp = restorer_stack(task_args->t->mz);
 

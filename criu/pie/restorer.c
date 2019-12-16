@@ -35,6 +35,7 @@
 #include "sk-inet.h"
 #include "vma.h"
 #include "uffd.h"
+#include "sched.h"
 
 #include "common/lock.h"
 #include "common/page.h"
@@ -1771,17 +1772,20 @@ long __export_restore_task(struct task_restore_args *args)
 		long clone_flags = CLONE_VM | CLONE_FILES | CLONE_SIGHAND	|
 				   CLONE_THREAD | CLONE_SYSVSEM | CLONE_FS;
 		long last_pid_len;
+		pid_t thread_pid;
 		long parent_tid;
 		int i, fd = -1;
 
-		/* One level pid ns hierarhy */
-		fd = sys_openat(args->proc_fd, LAST_PID_PATH, O_RDWR, 0);
-		if (fd < 0) {
-			pr_err("can't open last pid fd %d\n", fd);
-			goto core_restore_end;
-		}
+		if (!args->has_clone3_set_tid) {
+			/* One level pid ns hierarhy */
+			fd = sys_openat(args->proc_fd, LAST_PID_PATH, O_RDWR, 0);
+			if (fd < 0) {
+				pr_err("can't open last pid fd %d\n", fd);
+				goto core_restore_end;
+			}
 
-		mutex_lock(&task_entries_local->last_pid_mutex);
+			mutex_lock(&task_entries_local->last_pid_mutex);
+		}
 
 		for (i = 0; i < args->nr_threads; i++) {
 			char last_pid_buf[16], *s;
@@ -1791,32 +1795,54 @@ long __export_restore_task(struct task_restore_args *args)
 				continue;
 
 			new_sp = restorer_stack(thread_args[i].mz);
-			last_pid_len = std_vprint_num(last_pid_buf, sizeof(last_pid_buf), thread_args[i].pid - 1, &s);
-			sys_lseek(fd, 0, SEEK_SET);
-			ret = sys_write(fd, s, last_pid_len);
-			if (ret < 0) {
-				pr_err("Can't set last_pid %ld/%s\n", ret, last_pid_buf);
-				sys_close(fd);
-				mutex_unlock(&task_entries_local->last_pid_mutex);
-				goto core_restore_end;
+			if (args->has_clone3_set_tid) {
+				struct _clone_args c_args = {};
+				thread_pid = thread_args[i].pid;
+				c_args.set_tid = ptr_to_u64(&thread_pid);
+				c_args.flags = clone_flags;
+				c_args.set_tid_size = 1;
+				c_args.stack = new_sp;
+				/* This stack size seems to work. */
+				c_args.stack_size = 0x20;
+				c_args.child_tid = ptr_to_u64(&thread_args[i].pid);
+				c_args.parent_tid = parent_tid;
+				pr_debug("Using clone3 to restore the process\n");
+#ifdef CONFIG_X86_64
+				RUN_CLONE3_RESTORE_FN(ret, c_args, sizeof(c_args), &thread_args[i], args->clone_restore_fn);
+#else
+				/* Hack to avoid "error: variable ‘c_args’ set but not used" */
+				ret = -c_args.set_tid_size;
+				pr_err("This architecture does not support clone3() with set_tid, yet!\n");
+#endif
+			} else {
+				last_pid_len = std_vprint_num(last_pid_buf, sizeof(last_pid_buf), thread_args[i].pid - 1, &s);
+				sys_lseek(fd, 0, SEEK_SET);
+				ret = sys_write(fd, s, last_pid_len);
+				if (ret < 0) {
+					pr_err("Can't set last_pid %ld/%s\n", ret, last_pid_buf);
+					sys_close(fd);
+					mutex_unlock(&task_entries_local->last_pid_mutex);
+					goto core_restore_end;
+				}
+
+				/*
+				 * To achieve functionality like libc's clone()
+				 * we need a pure assembly here, because clone()'ed
+				 * thread will run with own stack and we must not
+				 * have any additional instructions... oh, dear...
+				 */
+				RUN_CLONE_RESTORE_FN(ret, clone_flags, new_sp, parent_tid, thread_args, args->clone_restore_fn);
 			}
-
-			/*
-			 * To achieve functionality like libc's clone()
-			 * we need a pure assembly here, because clone()'ed
-			 * thread will run with own stack and we must not
-			 * have any additional instructions... oh, dear...
-			 */
-
-			RUN_CLONE_RESTORE_FN(ret, clone_flags, new_sp, parent_tid, thread_args, args->clone_restore_fn);
 			if (ret != thread_args[i].pid) {
 				pr_err("Unable to create a thread: %ld\n", ret);
-				mutex_unlock(&task_entries_local->last_pid_mutex);
+				if (!args->has_clone3_set_tid)
+					mutex_unlock(&task_entries_local->last_pid_mutex);
 				goto core_restore_end;
 			}
 		}
 
-		mutex_unlock(&task_entries_local->last_pid_mutex);
+		if (!args->has_clone3_set_tid)
+			mutex_unlock(&task_entries_local->last_pid_mutex);
 		if (fd >= 0)
 			sys_close(fd);
 	}

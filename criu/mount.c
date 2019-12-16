@@ -1411,7 +1411,7 @@ int open_mountpoint(struct mount_info *pm)
 		 */
 		pid = clone_noasan(ns_open_mountpoint, CLONE_VFORK | CLONE_VM
 				| CLONE_FILES | CLONE_IO | CLONE_SIGHAND
-				| CLONE_SYSVSEM, &ca);
+				| CLONE_SYSVSEM, &ca, 0);
 		if (pid == -1) {
 			pr_perror("Can't clone helper process");
 			goto err;
@@ -3749,7 +3749,7 @@ static int call_helper_process(int (*call)(void *), void *arg)
 	lock_last_pid();
 
 	pid = clone_noasan(call, CLONE_VFORK | CLONE_VM | CLONE_FILES |
-			   CLONE_IO | CLONE_SIGHAND | CLONE_SYSVSEM, arg);
+			   CLONE_IO | CLONE_SIGHAND | CLONE_SYSVSEM, arg, 0);
 	if (pid == -1) {
 		pr_perror("Can't clone helper process");
 		goto out;

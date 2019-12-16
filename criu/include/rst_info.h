@@ -4,6 +4,7 @@
 #include "common/lock.h"
 #include "common/list.h"
 #include "vma.h"
+#include "kerndat.h"
 
 struct task_entries {
 	int nr_threads, nr_tasks, nr_helpers;
@@ -76,11 +77,16 @@ extern struct task_entries *task_entries;
 
 static inline void lock_last_pid(void)
 {
+	/* No locking required if clone3() is available */
+	if (kdat.has_clone3_set_tid)
+		return;
 	mutex_lock(&task_entries->last_pid_mutex);
 }
 
 static inline void unlock_last_pid(void)
 {
+	if (kdat.has_clone3_set_tid)
+		return;
 	mutex_unlock(&task_entries->last_pid_mutex);
 }
 
