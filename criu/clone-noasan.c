@@ -66,14 +66,6 @@ int clone_noasan(int (*fn)(void *), int flags, void *arg, pid_t pid)
 	 * is not understood.
 	 */
 
-#define STACK_SIZE 1024 * 1024 * 32
-
-	stack_ptr = mmap(NULL, STACK_SIZE * 2, PROT_READ | PROT_WRITE,
-			 MAP_PRIVATE | MAP_ANONYMOUS | MAP_STACK, -1, 0);
-
-	if (stack_ptr == MAP_FAILED)
-               return -1;
-
 	/*
 	 * clone() used to encode the information about child signals
 	 * in the clone flags. With clone3() these values are now part
@@ -87,22 +79,9 @@ int clone_noasan(int (*fn)(void *), int flags, void *arg, pid_t pid)
 	/* Set PID for only one PID namespace */
 	c_args.set_tid = ptr_to_u64(&pid);
 	c_args.set_tid_size = 1;
-	c_args.stack_size = STACK_SIZE;
-	c_args.stack = ptr_to_u64(stack_ptr);
-	/*
-	 * As there is no clone3() based glibc wrapper (yet), this calls
-	 * directly CRIU's own clone3() assembler wrapper.
-	 */
-#ifdef CONFIG_X86_64
-	/* The initial clone3() based implementation is only done for x86_64. */
-	RUN_CLONE3_RESTORE_FN(ret, c_args, sizeof(c_args), ptr_to_u64(arg), fn);
-#else
-	/*
-	 * Should never be reached as clone3() detection in kerndat should
-	 * only enable clone3() for x86_64 right now.
-	 */
-	/* Hack to avoid "error: variable ‘c_args’ set but not used" */
-	ret = -c_args.set_tid_size;
-#endif
+	ret = syscall(__NR_clone3, &c_args, sizeof(c_args));
+	if (ret == 0) {
+		exit(fn(arg));
+	}
 	return ret;
 }

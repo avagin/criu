@@ -1772,7 +1772,6 @@ long __export_restore_task(struct task_restore_args *args)
 		long clone_flags = CLONE_VM | CLONE_FILES | CLONE_SIGHAND	|
 				   CLONE_THREAD | CLONE_SYSVSEM | CLONE_FS;
 		long last_pid_len;
-		pid_t thread_pid;
 		long parent_tid;
 		int i, fd = -1;
 
@@ -1796,19 +1795,18 @@ long __export_restore_task(struct task_restore_args *args)
 
 			new_sp = restorer_stack(thread_args[i].mz);
 			if (args->has_clone3_set_tid) {
+				pid_t thread_pid;
 				struct _clone_args c_args = {};
 				thread_pid = thread_args[i].pid;
 				c_args.set_tid = ptr_to_u64(&thread_pid);
 				c_args.flags = clone_flags;
 				c_args.set_tid_size = 1;
 				c_args.stack = new_sp;
-				/* This stack size seems to work. */
-				c_args.stack_size = 0x20;
 				c_args.child_tid = ptr_to_u64(&thread_args[i].pid);
-				c_args.parent_tid = parent_tid;
+				c_args.parent_tid = ptr_to_u64(&parent_tid);
 				pr_debug("Using clone3 to restore the process\n");
 #ifdef CONFIG_X86_64
-				RUN_CLONE3_RESTORE_FN(ret, c_args, sizeof(c_args), &thread_args[i], args->clone_restore_fn);
+				RUN_CLONE3_RESTORE_FN(ret, c_args, new_sp, sizeof(c_args), thread_args, args->clone_restore_fn);
 #else
 				/* Hack to avoid "error: variable ‘c_args’ set but not used" */
 				ret = -c_args.set_tid_size;
