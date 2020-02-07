@@ -15,10 +15,8 @@ int main(int argc, char **argv)
 
 	test_init(argc, argv);
 
-	if (io_setup(1, &ctx) < 0) {
-		pr_perror("Can't setup io ctx");
-		return 1;
-	}
+	if (io_setup(1, &ctx) < 0)
+		return pr_perror("Can't setup io ctx");
 
 	test_daemon();
 	test_waitsig();

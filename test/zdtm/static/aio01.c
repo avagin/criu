@@ -41,16 +41,12 @@ int main(int argc, char **argv)
 
 	memset(&iocb, 0, sizeof(iocb));
 
-	if (syscall(__NR_io_setup, 64, &ctx) < 0) {
-		pr_perror("Can't setup io ctx");
-		return 1;
-	}
+	if (syscall(__NR_io_setup, 64, &ctx) < 0)
+		return pr_perror("Can't setup io ctx");
 
 	fd = open("/dev/null", O_WRONLY);
-	if (fd < 0) {
-		pr_perror("Can't open /dev/null");
-		return 1;
-	}
+	if (fd < 0)
+		return pr_perror("Can't open /dev/null");
 
 	iocb.aio_fildes = fd;
 	iocb.aio_buf = (unsigned long)buf;

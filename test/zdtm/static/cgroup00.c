@@ -27,18 +27,14 @@ static int cg_move(char *name)
 	sprintf(paux, "%s/%s/tasks", dirname, name);
 
 	cgfd = open(paux, O_WRONLY);
-	if (cgfd < 0) {
-		pr_perror("Can't open tasks");
-		return -1;
-	}
+	if (cgfd < 0)
+		return pr_perror("Can't open tasks");
 
 	l = write(cgfd, "0", 2);
 	close(cgfd);
 
-	if (l < 0) {
-		pr_perror("Can't move self to subcg");
-		return -1;
-	}
+	if (l < 0)
+		return pr_perror("Can't move self to subcg");
 
 	return 0;
 }

@@ -32,30 +32,22 @@ int main(int argc, char **argv)
 	mkdir(test_dir, 0700);
 	mkdir(test_bind, 0700);
 
-	if (mount(test_dir, test_bind, NULL, MS_BIND, NULL)) {
-		pr_perror("Unable to mount %s to %s", test_dir, test_bind);
-		return 1;
-	}
+	if (mount(test_dir, test_bind, NULL, MS_BIND, NULL))
+		return pr_perror("Unable to mount %s to %s", test_dir, test_bind);
 
 	test_daemon();
 	test_waitsig();
 
 	fd = open(test_file, O_CREAT | O_WRONLY | O_EXCL, 0600);
-	if (fd < 0) {
-		pr_perror("Unable to open %s", test_file);
-		return 1;
-	}
+	if (fd < 0)
+		return pr_perror("Unable to open %s", test_file);
 	close(fd);
 
-	if (access(test_bind_file, F_OK)) {
-		pr_perror("%s doesn't exist", test_bind_file);
-		return 1;
-	}
+	if (access(test_bind_file, F_OK))
+		return pr_perror("%s doesn't exist", test_bind_file);
 
-	if (umount(test_bind)) {
-		pr_perror("Unable to umount %s", test_bind);
-		return 1;
-	}
+	if (umount(test_bind))
+		return pr_perror("Unable to umount %s", test_bind);
 
 	pass();
 	return 0;

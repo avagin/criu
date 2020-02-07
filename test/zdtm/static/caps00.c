@@ -54,10 +54,8 @@ int main(int argc, char **argv)
 	} else
 		test_msg("/proc/sys/kernel/cap_last_cap is not available\n");
 
-	if (pipe(result_pipe)) {
-		pr_perror("Can't create pipe");
-		return 1;
-	}
+	if (pipe(result_pipe))
+		return pr_perror("Can't create pipe");
 
 	pid = test_fork();
 	if (pid == 0) {
@@ -71,10 +69,8 @@ int main(int argc, char **argv)
 		hdr.version = _LINUX_CAPABILITY_VERSION_3;
 		hdr.pid = 0;
 
-		if (capget(&hdr, data) < 0) {
-			pr_perror("capget");
-			return -1;
-		}
+		if (capget(&hdr, data) < 0)
+			return pr_perror("capget");
 
 		hdr.version = _LINUX_CAPABILITY_VERSION_3;
 		hdr.pid = 0;
@@ -82,10 +78,8 @@ int main(int argc, char **argv)
 		data[0].eff &= ~((1 << CAP_CHOWN) | (1 << CAP_DAC_OVERRIDE));
 		data[0].prm &= ~(1 << CAP_DAC_OVERRIDE);
 
-		if (capset(&hdr, data) < 0) {
-			pr_perror("capset");
-			return -1;
-		}
+		if (capset(&hdr, data) < 0)
+			return pr_perror("capset");
 
 		task_waiter_complete_current(&t);
 		task_waiter_wait4(&t, getppid());
@@ -93,10 +87,8 @@ int main(int argc, char **argv)
 		hdr.version = _LINUX_CAPABILITY_VERSION_3;
 		hdr.pid = 0;
 
-		if (capget(&hdr, data_2) < 0) {
-			pr_perror("second capget");
-			return -1;
-		}
+		if (capget(&hdr, data_2) < 0)
+			return pr_perror("second capget");
 
 		NORM_CAPS(data, eff);
 		NORM_CAPS(data, prm);
