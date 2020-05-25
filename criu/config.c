@@ -20,6 +20,7 @@
 #include "file-lock.h"
 #include "irmap.h"
 #include "mount.h"
+#include "mount-v2.h"
 #include "namespaces.h"
 #include "net.h"
 #include "sk-inet.h"
@@ -697,6 +698,7 @@ int parse_options(int argc, char **argv, bool *usage_error, bool *has_exec_cmd, 
 		{ "file-validation", required_argument, 0, 1098 },
 		{ "lsm-mount-context", required_argument, 0, 1099 },
 		{ "network-lock", required_argument, 0, 1100 },
+		BOOL_OPT("mounts-v2", &opts.mounts_v2),
 		{},
 	};
 
@@ -1102,6 +1104,15 @@ int check_options(void)
 		return 1;
 	}
 #endif
+
+	if (opts.mounts_v2) {
+		if (opts.mode != CR_RESTORE) {
+			pr_err("Option --mounts-v2 is only valid on restore\n");
+			return 1;
+		}
+		if (check_mount_v2())
+			return 1;
+	}
 
 	if (check_namespace_opts()) {
 		pr_err("Error: namespace flags conflict\n");

@@ -408,6 +408,8 @@ usage:
 	       "                        in lazy-pages mode: 'criu lazy-pages -D DIR'\n"
 	       "                        --lazy-pages and lazy-pages mode require userfaultfd\n"
 	       "  --stream              dump/restore images using criu-image-streamer\n"
+	       "  --mounts-v2           use v2 mount engine with more reliable algorithm\n"
+	       "                        based on MOVE_MOUNT_SET_GROUP feature\n"
 	       "  --network-lock METHOD\n"
 	       "                      network locking/unlocking method; argument\n"
 	       "                      can be 'nftables' or 'iptables' (default).\n"
