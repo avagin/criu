@@ -1339,6 +1339,14 @@ static bool should_check_size(int flags)
 	return true;
 }
 
+/* Stores the size of a file so that it can be validated while restoring. */
+static inline void store_validation_data_file_size(RegFileEntry *rfe, const struct fd_parms *p)
+{
+	rfe->has_size = true;
+	rfe->size = p->stat.st_size;
+	return;
+}
+
 int dump_one_reg_file(int lfd, u32 id, const struct fd_parms *p)
 {
 	struct fd_link _link, *link;
@@ -1406,8 +1414,7 @@ ext:
 	rfe.mode	= p->stat.st_mode;
 
 	if (S_ISREG(p->stat.st_mode) && should_check_size(rfe.flags)) {
-		rfe.has_size = true;
-		rfe.size = p->stat.st_size;
+		store_validation_data_file_size(&rfe, p);
 	}
 
 	fe.type = FD_TYPES__REG;
@@ -1685,6 +1692,18 @@ out_root:
 	return 0;
 }
 
+/* Compares the file's size with the stored value. */
+static inline bool validate_with_file_size(const struct stat *fd_status,
+					const struct reg_file_info *rfi)
+{
+	if (rfi->rfe->has_size && (fd_status->st_size != rfi->rfe->size)) {
+		pr_err("File %s has bad size %"PRIu64" (expect %"PRIu64")\n",
+				rfi->path, fd_status->st_size, rfi->rfe->size);
+		return false;
+	}
+	return true;
+}
+
 int open_path(struct file_desc *d,
 		int(*open_cb)(int mntns_root, struct reg_file_info *, void *), void *arg)
 {
@@ -1779,10 +1798,7 @@ ext:
 			return -1;
 		}
 
-		if (rfi->rfe->has_size && (st.st_size != rfi->rfe->size)) {
-			pr_err("File %s has bad size %"PRIu64" (expect %"PRIu64")\n",
-					rfi->path, st.st_size,
-					rfi->rfe->size);
+		if (!validate_with_file_size(&st, rfi)) {
 			return -1;
 		}
 
