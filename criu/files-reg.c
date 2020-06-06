@@ -1434,12 +1434,12 @@ static bool store_validation_data_build_id(RegFileEntry *rfe, int lfd)
 	snprintf(buf, sizeof(buf), "/proc/self/fd/%d", lfd);
 	fd = open(buf, O_RDONLY);
 	if (fd < 0) {
-		pr_warn("Build-ID (For validation) could not be obtained for file %s because can't open the file\n",
+		pr_info("Build-ID (For validation) could not be obtained for file %s because can't open the file\n",
 				rfe->name);
 		return false;
 	}
 	if (fstat(fd, &st) < 0) {
-		pr_warn("Build-ID (For validation) could not be obtained for file %s because can't fstat the file\n",
+		pr_info("Build-ID (For validation) could not be obtained for file %s because can't fstat the file\n",
 				rfe->name);
 		close(fd);
     		return false;
@@ -1448,14 +1448,14 @@ static bool store_validation_data_build_id(RegFileEntry *rfe, int lfd)
 	build_id_size = get_build_id(fd, &st, &build_id);
 	close(fd);
 	if (!build_id || build_id_size == -1) {
-		pr_warn("Build-ID (For validation) could not be obtained for file %s\n",
+		pr_info("Build-ID (For validation) could not be obtained for file %s\n",
 				rfe->name);
 		return false;
 	}
 
 	rfe->build_id = xmalloc(sizeof(int) * build_id_size);
 	if (!rfe->build_id) {
-		pr_warn("Build-ID (For validation) could not be set for file %s\n",
+		pr_info("Build-ID (For validation) could not be set for file %s\n",
 				rfe->name);
 		return false;
 	}
@@ -1474,7 +1474,7 @@ static bool store_validation_data_build_id(RegFileEntry *rfe, int lfd)
  * so that validation can be done while restoring to make sure that the right file is
  * being restored.
  */
-static void store_validation_data_for_restore(RegFileEntry *rfe,
+static void store_validation_data(RegFileEntry *rfe,
 					const struct fd_parms *p, int lfd)
 {
 	bool result = true;
@@ -1559,7 +1559,7 @@ ext:
 	rfe.mode	= p->stat.st_mode;
 
 	if (S_ISREG(p->stat.st_mode) && should_check_size(rfe.flags)) {
-		store_validation_data_for_restore(&rfe, p, lfd);
+		store_validation_data(&rfe, p, lfd);
 	}
 
 	fe.type = FD_TYPES__REG;
@@ -1858,7 +1858,7 @@ static int validate_with_build_id(const int fd, const struct stat *fd_status,
 	}
 
 	if (!rfi->rfe->n_build_id) {
-		pr_warn("Build-ID (For validation) has not been stored for file %s\n",
+		pr_info("Build-ID (For validation) has not been stored for file %s\n",
 				rfi->path);
 		return -1;
 	}
@@ -1866,15 +1866,14 @@ static int validate_with_build_id(const int fd, const struct stat *fd_status,
 	build_id = NULL;
 	build_id_size = get_build_id(fd, fd_status, &build_id);
 	if (!build_id || build_id_size == -1) {
-		pr_warn("Build-ID (For validation) could not be obtained for file %s\n",
+		pr_info("Build-ID (For validation) could not be obtained for file %s\n",
 				rfi->path);
 		return -1;
 	}
 
 	if (build_id_size != rfi->rfe->n_build_id)
 	{
-		pr_err("File %s has bad build-ID length %d (expect %ld)\n",
-				rfi->path, build_id_size, rfi->rfe->n_build_id);
+		pr_err("File %s has bad build-ID length %d\n", rfi->path, build_id_size);
 		xfree(build_id);
 		return 0;
 	}
@@ -1899,7 +1898,7 @@ static int validate_with_build_id(const int fd, const struct stat *fd_status,
  * that was stored before dumping.
  * Checksum is calculated with CRC32C.
  */
-static bool validate_file_for_restore(const int fd, const struct stat *fd_status,
+static bool validate_file(const int fd, const struct stat *fd_status,
 					const struct reg_file_info *rfi)
 {
 	int result = 1;
@@ -2016,7 +2015,7 @@ ext:
 			return -1;
 		}
 
-		if (!validate_file_for_restore(tmp, &st, rfi)) {
+		if (!validate_file(tmp, &st, rfi)) {
 			return -1;
 		}
 
