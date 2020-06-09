@@ -1353,7 +1353,7 @@ static bool should_check_size(int flags)
 static int get_build_id(const int fd, const struct stat *fd_status,
 				unsigned char **build_id)
 {
-	int size;
+	int size, num_iterations;
 	size_t file_header_end;
 	Elf_ptr(Ehdr) *file_header;
 	Elf_ptr(Phdr) *program_header, *program_header_end;
@@ -1362,7 +1362,6 @@ static int get_build_id(const int fd, const struct stat *fd_status,
 	file_header = (Elf_ptr(Ehdr) *) mmap(0, fd_status->st_size,
 						PROT_READ, MAP_PRIVATE, fd, 0);
 	if (file_header == MAP_FAILED) {
-		pr_warn("HERE!\n");
 		return -1;
 	}
 
@@ -1378,28 +1377,37 @@ static int get_build_id(const int fd, const struct stat *fd_status,
 
 	program_header = (Elf_ptr(Phdr) *) (file_header->e_phoff + (size_t) file_header);
 	program_header_end = (Elf_ptr(Phdr) *) file_header_end;
+	num_iterations = 15;
+
 	/* 
 	 * If the file has a build-id, it will be in the PT_NOTE program header 
 	 * entry AKA the note sections.
 	 */
-	while (program_header < program_header_end && program_header->p_type != PT_NOTE) {
+	while (num_iterations-- &&  program_header < program_header_end &&
+			program_header->p_type != PT_NOTE) {
 		program_header++;
 	}
-	if (program_header >= program_header_end)
-	{
+	if (!num_iterations || program_header >= program_header_end) {
 		munmap(file_header, fd_status->st_size);
 		return -1;
 	}
 
 	note_header = (Elf_ptr(Nhdr) *) (program_header->p_offset + (size_t) file_header);
 	note_header_end = (Elf_ptr(Nhdr) *) file_header_end;
+	num_iterations = 50;
+
 	/* The note type for the build-id is NT_GNU_BUILD_ID. */
-	while (note_header < note_header_end && note_header->n_type != NT_GNU_BUILD_ID) {
+	while (num_iterations-- && note_header < note_header_end &&
+			note_header->n_type != NT_GNU_BUILD_ID) {
 		note_header = (Elf_ptr(Nhdr) *) ((size_t) note_header + sizeof(Elf_ptr(Nhdr)) +
 						note_header->n_namesz + note_header->n_descsz);
 	}
-	if (note_header >= note_header_end)
-	{
+	if (!num_iterations || note_header >= note_header_end) {
+		munmap(file_header, fd_status->st_size);
+		return -1;
+	}
+
+	if (!note_header->n_descsz) {
 		munmap(file_header, fd_status->st_size);
 		return -1;
 	}
@@ -1434,13 +1442,9 @@ static bool store_validation_data_build_id(RegFileEntry *rfe, int lfd)
 	snprintf(buf, sizeof(buf), "/proc/self/fd/%d", lfd);
 	fd = open(buf, O_RDONLY);
 	if (fd < 0) {
-		pr_info("Build-ID (For validation) could not be obtained for file %s because can't open the file\n",
-				rfe->name);
 		return false;
 	}
 	if (fstat(fd, &st) < 0) {
-		pr_info("Build-ID (For validation) could not be obtained for file %s because can't fstat the file\n",
-				rfe->name);
 		close(fd);
     		return false;
   	}
@@ -1448,15 +1452,11 @@ static bool store_validation_data_build_id(RegFileEntry *rfe, int lfd)
 	build_id_size = get_build_id(fd, &st, &build_id);
 	close(fd);
 	if (!build_id || build_id_size == -1) {
-		pr_info("Build-ID (For validation) could not be obtained for file %s\n",
-				rfe->name);
 		return false;
 	}
 
 	rfe->build_id = xmalloc(sizeof(int) * build_id_size);
 	if (!rfe->build_id) {
-		pr_info("Build-ID (For validation) could not be set for file %s\n",
-				rfe->name);
 		return false;
 	}
 
@@ -1485,7 +1485,7 @@ static void store_validation_data(RegFileEntry *rfe,
 	result = store_validation_data_build_id(rfe, lfd);
 
 	if (!result) {
-		pr_warn("Only file size could be stored for validation for file %s\n",
+		pr_info("Only file size could be stored for validation for file %s\n",
 				rfe->name);
 	}
 	return;
@@ -1858,22 +1858,19 @@ static int validate_with_build_id(const int fd, const struct stat *fd_status,
 	}
 
 	if (!rfi->rfe->n_build_id) {
-		pr_info("Build-ID (For validation) has not been stored for file %s\n",
-				rfi->path);
 		return -1;
 	}
 
 	build_id = NULL;
 	build_id_size = get_build_id(fd, fd_status, &build_id);
 	if (!build_id || build_id_size == -1) {
-		pr_info("Build-ID (For validation) could not be obtained for file %s\n",
-				rfi->path);
 		return -1;
 	}
 
 	if (build_id_size != rfi->rfe->n_build_id)
 	{
-		pr_err("File %s has bad build-ID length %d\n", rfi->path, build_id_size);
+		pr_err("File %s has bad build-ID length %d (expect %d)\n", rfi->path,
+				build_id_size, (int) rfi->rfe->n_build_id);
 		xfree(build_id);
 		return 0;
 	}
@@ -1912,7 +1909,7 @@ static bool validate_file(const int fd, const struct stat *fd_status,
 	result = validate_with_build_id(fd, fd_status, rfi);
 
 	if (result == -1) {
-		pr_warn("File %s could only be validated with file size\n",
+		pr_info("File %s could only be validated with file size\n",
 				rfi->path);
 	}
 	if (result) {
