@@ -1376,87 +1376,6 @@ static int get_build_id(const int fd, const struct stat *fd_status,
 	file_header_end = (size_t) fd_status->st_size + (size_t) file_header;
 
 	program_header = (Elf_ptr(Phdr) *) (file_header->e_phoff + (size_t) file_header);
-	program_header_end = (Elf_ptr(Phdr) *) file_header_end;
-	num_iterations = 15;
-
-	/* 
-	 * If the file has a build-id, it will be in the PT_NOTE program header 
-	 * entry AKA the note sections.
-	 */
-	while (num_iterations-- &&  program_header < program_header_end &&
-			program_header->p_type != PT_NOTE) {
-		program_header++;
-	}
-	if (!num_iterations || program_header >= program_header_end) {
-		munmap(file_header, fd_status->st_size);
-		return -1;
-	}
-
-	note_header = (Elf_ptr(Nhdr) *) (program_header->p_offset + (size_t) file_header);
-	note_header_end = (Elf_ptr(Nhdr) *) file_header_end;
-	num_iterations = 50;
-
-	/* The note type for the build-id is NT_GNU_BUILD_ID. */
-	while (num_iterations-- && note_header < note_header_end &&
-			note_header->n_type != NT_GNU_BUILD_ID) {
-		note_header = (Elf_ptr(Nhdr) *) ((size_t) note_header + sizeof(Elf_ptr(Nhdr)) +
-						note_header->n_namesz + note_header->n_descsz);
-	}
-	if (!num_iterations || note_header >= note_header_end) {
-		munmap(file_header, fd_status->st_size);
-		return -1;
-	}
-
-	if (!note_header->n_descsz) {
-		munmap(file_header, fd_status->st_size);
-		return -1;
-	}
-
-	*build_id = (unsigned char *) xmalloc(note_header->n_descsz);
-	if (!*build_id) {
-		munmap(file_header, fd_status->st_size);
-		return -1;
-	}
-
-	memcpy(*build_id,
-		(void *) ((size_t) note_header + sizeof(Elf_ptr(Nhdr)) + note_header->n_namesz),
-		note_header->n_descsz);
-
-	size = note_header->n_descsz;
-	munmap(file_header, fd_status->st_size);
-	return size;
-}
-
-/*
- * Finds and stores the build-id of a file, if it exists, so that it can be validated
- * while restoring.
- */
-static int get_build_id(const int fd, const struct stat *fd_status,
-				unsigned char **build_id)
-{
-	int size, num_iterations;
-	size_t file_header_end;
-	Elf_ptr(Ehdr) *file_header;
-	Elf_ptr(Phdr) *program_header, *program_header_end;
-	Elf_ptr(Nhdr) *note_header, *note_header_end;
-
-	file_header = (Elf_ptr(Ehdr) *) mmap(0, fd_status->st_size,
-						PROT_READ, MAP_PRIVATE, fd, 0);
-	if (file_header == MAP_FAILED) {
-		return -1;
-	}
-
-	/* 
-	 * If the file doesn't have atleast 1 program header entry, it definitely can't
-	 * have a build-id.
-	 */
-	if (!file_header->e_phnum) {
-		munmap(file_header, fd_status->st_size);
-		return -1;
-	}
-	file_header_end = (size_t) fd_status->st_size + (size_t) file_header;
-
-	program_header = (Elf_ptr(Phdr) *) (file_header->e_phoff + (size_t) file_header);
 	if (program_header <= (Elf_ptr(Phdr) *) file_header) {
 		munmap(file_header, fd_status->st_size);
 		return -1;
@@ -1516,6 +1435,48 @@ static int get_build_id(const int fd, const struct stat *fd_status,
 	size = note_header->n_descsz;
 	munmap(file_header, fd_status->st_size);
 	return size;
+}
+
+/*
+ * Finds and stores the build-id of a file, if it exists, so that it can be validated
+ * while restoring.
+ */
+static bool store_validation_data_build_id(RegFileEntry *rfe, int lfd)
+{
+	unsigned char *build_id = NULL;
+	int build_id_size, i;
+	char buf[32];
+	int fd;
+	struct stat st;
+
+	snprintf(buf, sizeof(buf), "/proc/self/fd/%d", lfd);
+	fd = open(buf, O_RDONLY);
+	if (fd < 0) {
+		return false;
+	}
+	if (fstat(fd, &st) < 0) {
+		close(fd);
+    		return false;
+  	}
+
+	build_id_size = get_build_id(fd, &st, &build_id);
+	close(fd);
+	if (!build_id || build_id_size == -1) {
+		return false;
+	}
+
+	rfe->build_id = xmalloc(sizeof(int) * build_id_size);
+	if (!rfe->build_id) {
+		return false;
+	}
+
+	rfe->n_build_id = build_id_size;
+	for (i = 0; i < build_id_size; i++) {
+		rfe->build_id[i] = build_id[i];
+	}
+
+	xfree(build_id);
+	return true;
 }
 
 /*
