@@ -1346,23 +1346,13 @@ static bool should_check_size(int flags)
 	return true;
 }
 
-/*
- * Does the actual work of finding the build-id of the file, if it exists.
- * http://ftp.openwatcom.org/devel/docs/elf-64-gen.pdf
- */
-static int get_build_id(const int fd, const struct stat *fd_status,
+static int get_build_id_32(Elf32_Ehdr *file_header, const struct stat *fd_status,
 				unsigned char **build_id)
 {
 	int size, num_iterations;
 	size_t file_header_end;
-	Elf_ptr(Ehdr) *file_header;
-	Elf_ptr(Phdr) *program_header, *program_header_end;
-	Elf_ptr(Nhdr) *note_header, *note_header_end;
-
-	file_header = (Elf_ptr(Ehdr) *) mmap(0, fd_status->st_size,
-						PROT_READ, MAP_PRIVATE, fd, 0);
-	if (file_header == MAP_FAILED)
-		return -1;
+	Elf32_Phdr *program_header, *program_header_end;
+	Elf32_Nhdr *note_header, *note_header_end;
 
 	/* 
 	 * If the file doesn't have atleast 1 program header entry, it definitely can't
@@ -1374,20 +1364,20 @@ static int get_build_id(const int fd, const struct stat *fd_status,
 	}
 	file_header_end = (size_t) fd_status->st_size + (size_t) file_header;
 
-	program_header = (Elf_ptr(Phdr) *) (file_header->e_phoff + (size_t) file_header);
-	if (program_header <= (Elf_ptr(Phdr) *) file_header) {
+	program_header = (Elf32_Phdr *) (file_header->e_phoff + (size_t) file_header);
+	if (program_header <= (Elf32_Phdr *) file_header) {
 		munmap(file_header, fd_status->st_size);
 		return -1;
 	}
 
-	program_header_end = (Elf_ptr(Phdr) *) (file_header_end - sizeof(Elf_ptr(Phdr)));
+	program_header_end = (Elf32_Phdr *) (file_header_end - sizeof(Elf32_Phdr));
 	num_iterations = file_header->e_phnum + 1;
 
 	/* 
 	 * If the file has a build-id, it will be in the PT_NOTE program header 
 	 * entry AKA the note sections.
 	 */
-	while (num_iterations-- &&  program_header <= program_header_end &&
+	while (num_iterations-- && program_header <= program_header_end &&
 			program_header->p_type != PT_NOTE)
 		program_header++;
 
@@ -1396,25 +1386,19 @@ static int get_build_id(const int fd, const struct stat *fd_status,
 		return -1;
 	}
 
-	note_header = (Elf_ptr(Nhdr) *) (program_header->p_offset + (size_t) file_header);
-	if (note_header <= (Elf_ptr(Nhdr) *) file_header) {
+	note_header = (Elf32_Nhdr *) (program_header->p_offset + (size_t) file_header);
+	if (note_header <= (Elf32_Nhdr *) file_header) {
 		munmap(file_header, fd_status->st_size);
 		return -1;
 	}
 
-	if ((program_header->p_filesz - sizeof(Elf_ptr(Nhdr))) <= 0)
-	{
-		munmap(file_header, fd_status->st_size);
-		return -1;
-	}
-
-	note_header_end = (Elf_ptr(Nhdr) *) (file_header_end - sizeof(Elf_ptr(Nhdr)));
+	note_header_end = (Elf32_Nhdr *) (file_header_end - sizeof(Elf32_Nhdr));
 	num_iterations = 500;
 
 	/* The note type for the build-id is NT_GNU_BUILD_ID. */
 	while (num_iterations-- && note_header <= note_header_end &&
 			note_header->n_type != NT_GNU_BUILD_ID) {
-		note_header = (Elf_ptr(Nhdr) *) ((size_t) note_header + sizeof(Elf_ptr(Nhdr)) +
+		note_header = (Elf32_Nhdr *) ((size_t) note_header + sizeof(Elf32_Nhdr) +
 						note_header->n_namesz + note_header->n_descsz);
 	}
 	if (!num_iterations || note_header >= note_header_end) {
@@ -1428,9 +1412,9 @@ static int get_build_id(const int fd, const struct stat *fd_status,
 	}
 
 	size = note_header->n_descsz;
-	note_header = (Elf_ptr(Nhdr) *) ((size_t) note_header + sizeof(Elf_ptr(Nhdr)) + note_header->n_namesz);
-	note_header_end = (Elf_ptr(Nhdr) *) (file_header_end - size);
-	if (note_header <= (Elf_ptr(Nhdr) *) file_header || note_header > note_header_end) {
+	note_header = (Elf32_Nhdr *) ((size_t) note_header + sizeof(Elf32_Nhdr) + note_header->n_namesz);
+	note_header_end = (Elf32_Nhdr *) (file_header_end - size);
+	if (note_header <= (Elf32_Nhdr *) file_header || note_header > note_header_end) {
 		munmap(file_header, fd_status->st_size);
 		return -1;
 	}
@@ -1445,6 +1429,117 @@ static int get_build_id(const int fd, const struct stat *fd_status,
 
 	munmap(file_header, fd_status->st_size);
 	return size;
+}
+
+static int get_build_id_64(Elf64_Ehdr *file_header, const struct stat *fd_status,
+				unsigned char **build_id)
+{
+	int size, num_iterations;
+	size_t file_header_end;
+	Elf64_Phdr *program_header, *program_header_end;
+	Elf64_Nhdr *note_header, *note_header_end;
+
+	/* 
+	 * If the file doesn't have atleast 1 program header entry, it definitely can't
+	 * have a build-id.
+	 */
+	if (!file_header->e_phnum) {
+		munmap(file_header, fd_status->st_size);
+		return -1;
+	}
+	file_header_end = (size_t) fd_status->st_size + (size_t) file_header;
+
+	program_header = (Elf64_Phdr *) (file_header->e_phoff + (size_t) file_header);
+	if (program_header <= (Elf64_Phdr *) file_header) {
+		munmap(file_header, fd_status->st_size);
+		return -1;
+	}
+
+	program_header_end = (Elf64_Phdr *) (file_header_end - sizeof(Elf64_Phdr));
+	num_iterations = file_header->e_phnum + 1;
+
+	/* 
+	 * If the file has a build-id, it will be in the PT_NOTE program header 
+	 * entry AKA the note sections.
+	 */
+	while (num_iterations-- && program_header <= program_header_end &&
+			program_header->p_type != PT_NOTE)
+		program_header++;
+
+	if (!num_iterations || program_header >= program_header_end) {
+		munmap(file_header, fd_status->st_size);
+		return -1;
+	}
+
+	note_header = (Elf64_Nhdr *) (program_header->p_offset + (size_t) file_header);
+	if (note_header <= (Elf64_Nhdr *) file_header) {
+		munmap(file_header, fd_status->st_size);
+		return -1;
+	}
+
+	note_header_end = (Elf64_Nhdr *) (file_header_end - sizeof(Elf64_Nhdr));
+	num_iterations = 500;
+
+	/* The note type for the build-id is NT_GNU_BUILD_ID. */
+	while (num_iterations-- && note_header <= note_header_end &&
+			note_header->n_type != NT_GNU_BUILD_ID) {
+		note_header = (Elf64_Nhdr *) ((size_t) note_header + sizeof(Elf64_Nhdr) +
+						note_header->n_namesz + note_header->n_descsz);
+	}
+	if (!num_iterations || note_header >= note_header_end) {
+		munmap(file_header, fd_status->st_size);
+		return -1;
+	}
+
+	if (note_header->n_descsz <= 0 || note_header->n_descsz > 512) {
+		munmap(file_header, fd_status->st_size);
+		return -1;
+	}
+
+	size = note_header->n_descsz;
+	note_header = (Elf64_Nhdr *) ((size_t) note_header + sizeof(Elf64_Nhdr) + note_header->n_namesz);
+	note_header_end = (Elf64_Nhdr *) (file_header_end - size);
+	if (note_header <= (Elf64_Nhdr *) file_header || note_header > note_header_end) {
+		munmap(file_header, fd_status->st_size);
+		return -1;
+	}
+
+	*build_id = (unsigned char *) xmalloc(size);
+	if (!*build_id) {
+		munmap(file_header, fd_status->st_size);
+		return -1;
+	}
+
+	memcpy(*build_id, (void *) note_header, size);
+
+	munmap(file_header, fd_status->st_size);
+	return size;
+}
+
+static int get_build_id(const int fd, const struct stat *fd_status,
+				unsigned char **build_id)
+{
+	char *start_addr;
+
+	if (fd_status->st_size < 5)
+	{
+		return -1;
+	}
+	start_addr = (char *) mmap(0, fd_status->st_size,
+					PROT_READ, MAP_PRIVATE, fd, 0);
+
+	if (start_addr[0] != 0x7f || start_addr[1] != 0x45 ||
+		start_addr[2] != 0x4c || start_addr[3] != 0x46) {
+		munmap(start_addr, fd_status->st_size);
+		return -1;
+	}
+
+	if (start_addr[4] == ELFCLASS64)
+		return get_build_id_64((Elf64_Ehdr *) start_addr, fd_status, build_id);
+	else if (start_addr[4] == ELFCLASS32)
+		return get_build_id_32((Elf32_Ehdr *) start_addr, fd_status, build_id);
+	else
+		return -1;
 }
 
 /*
