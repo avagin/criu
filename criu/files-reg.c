@@ -1422,6 +1422,7 @@ static int get_build_id(const int fd, const struct stat *fd_status,
 	}
 
 	size = note_header->n_descsz;
+	note_header = (Elf_ptr(Nhdr) *) ((size_t) note_header + sizeof(Elf_ptr(Nhdr)) + note_header->n_namesz);
 
 	*build_id = (unsigned char *) xmalloc(size);
 	if (!*build_id) {
@@ -1429,8 +1430,7 @@ static int get_build_id(const int fd, const struct stat *fd_status,
 		return -1;
 	}
 
-	memcpy(*build_id,
-		(void *) ((size_t) note_header + sizeof(Elf_ptr(Nhdr)) + note_header->n_namesz), size);
+	memcpy(*build_id, (void *) note_header, size);
 
 	munmap(file_header, fd_status->st_size);
 	return size;
