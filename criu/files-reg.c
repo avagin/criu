@@ -1381,7 +1381,7 @@ static int get_build_id(const int fd, const struct stat *fd_status,
 	}
 
 	program_header_end = (Elf_ptr(Phdr) *) (file_header_end - sizeof(Elf_ptr(Phdr)));
-	num_iterations = 15;
+	num_iterations = file_header->e_phnum + 1;
 
 	/* 
 	 * If the file has a build-id, it will be in the PT_NOTE program header 
