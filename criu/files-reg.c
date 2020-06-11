@@ -1423,6 +1423,11 @@ static int get_build_id(const int fd, const struct stat *fd_status,
 
 	size = note_header->n_descsz;
 	note_header = (Elf_ptr(Nhdr) *) ((size_t) note_header + sizeof(Elf_ptr(Nhdr)) + note_header->n_namesz);
+	note_header_end = (Elf_ptr(Nhdr) *) (file_header_end - size);
+	if (note_header <= (Elf_ptr(Nhdr) *) file_header) || note_header > note_header_end) {
+		munmap(file_header, fd_status->st_size);
+		return -1;
+	}
 
 	*build_id = (unsigned char *) xmalloc(size);
 	if (!*build_id) {
