@@ -1407,15 +1407,17 @@ static int get_build_id(const int fd, const struct stat *fd_status,
 		munmap(file_header, fd_status->st_size);
 		return -1;
 	}
-	note_header_end = (Elf_ptr(Nhdr) *) ((size_t) note_header + program_header->p_filesz - sizeof(Elf_ptr(Nhdr)));
+
+	note_header_end = (Elf_ptr(Nhdr) *) (file_header_end - sizeof(Elf_ptr(Nhdr)));
+	num_iterations = 500;
 
 	/* The note type for the build-id is NT_GNU_BUILD_ID. */
-	while (note_header <= note_header_end &&
+	while (num_iterations-- && note_header <= note_header_end &&
 			note_header->n_type != NT_GNU_BUILD_ID) {
 		note_header = (Elf_ptr(Nhdr) *) ((size_t) note_header + sizeof(Elf_ptr(Nhdr)) +
 						note_header->n_namesz + note_header->n_descsz);
 	}
-	if (note_header >= note_header_end) {
+	if (!num_iterations || note_header >= note_header_end) {
 		munmap(file_header, fd_status->st_size);
 		return -1;
 	}
