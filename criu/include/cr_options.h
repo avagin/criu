@@ -68,8 +68,14 @@ struct cg_root_opt {
  */
 #define FILE_VALIDATION_FILE_SIZE		1
 #define FILE_VALIDATION_BUILD_ID		2
+#define FILE_VALIDATION_CHKSM			3
+#define FILE_VALIDATION_CHKSM_EVERY		4
+#define FILE_VALIDATION_CHKSM_FIRST		5
+#define FILE_VALIDATION_CHKSM_PERIOD		6
 
 #define FILE_VALIDATION_DEFAULT			FILE_VALIDATION_BUILD_ID
+#define FILE_VALIDATION_CHKSM_CONFIG_DEFAULT	FILE_VALIDATION_CHKSM_FIRST
+#define FILE_VALIDATION_CHKSM_PARAM_DEFAULT	1024
 
 struct irmap;
 
@@ -164,6 +170,8 @@ struct cr_options {
 	
 	/* Options for file validation */
 	int 			file_validation_method;
+	int 			file_validation_chksm_config;
+	int 			file_validation_chksm_parameter;
 };
 
 extern struct cr_options opts;
