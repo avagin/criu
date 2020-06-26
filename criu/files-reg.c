@@ -1627,17 +1627,18 @@ static int store_validation_data_build_id(RegFileEntry *rfe, int lfd,
 static bool store_validation_data(RegFileEntry *rfe,
 					const struct fd_parms *p, int lfd)
 {
-	int result;
+	int ret = 0;
 
 	rfe->has_size = true;
 	rfe->size = p->stat.st_size;
 
-	result = store_validation_data_build_id(rfe, lfd, p);
+	if (opts.file_validation_method == FILE_VALIDATION_BUILD_ID)
+		ret = store_validation_data_build_id(rfe, lfd, p);
 
-	if (result == -1)
+	if (ret == -1)
 		return false;
 
-	if (!result)
+	if (!ret)
 		pr_info("Only file size could be stored for validation for file %s\n",
 				rfe->name);
 	return true;
@@ -2045,7 +2046,7 @@ static int validate_with_build_id(const int fd, const struct stat *fd_status,
 static bool validate_file(const int fd, const struct stat *fd_status,
 					const struct reg_file_info *rfi)
 {
-	int result;
+	int result = 0;
 
 	if (rfi->rfe->has_size && (fd_status->st_size != rfi->rfe->size)) {
 		pr_err("File %s has bad size %"PRIu64" (expect %"PRIu64")\n",
@@ -2053,7 +2054,8 @@ static bool validate_file(const int fd, const struct stat *fd_status,
 		return false;
 	}
 
-	result = validate_with_build_id(fd, fd_status, rfi);
+	if (opts.file_validation_method == FILE_VALIDATION_BUILD_ID)
+		result = validate_with_build_id(fd, fd_status, rfi);
 
 	if (result == -1)
 		return false;
