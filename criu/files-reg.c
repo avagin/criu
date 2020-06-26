@@ -1652,7 +1652,7 @@ static int store_validation_data_build_id(RegFileEntry *rfe, int lfd,
 		return -1;
 	}
 
-	build_id_size = get_build_id(fd, p, &build_id);
+	build_id_size = get_build_id(fd, p.stat, &build_id);
 	close(fd);
 	if (!build_id || build_id_size == -1)
 		return -1;
@@ -1690,7 +1690,7 @@ static int store_validation_data_checksum(RegFileEntry *rfe, int lfd,
 		return -1;
 	}
 
-	if (!calculate_checksum(fd, p, &checksum)) {
+	if (!calculate_checksum(fd, p.stat, &checksum)) {
 		close(fd);
 		return -1;
 	}
