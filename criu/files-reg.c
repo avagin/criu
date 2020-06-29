@@ -1527,10 +1527,21 @@ static int get_build_id_64(Elf64_Ehdr *file_header, const struct stat *fd_status
 static int get_build_id(const int fd, const struct stat *fd_status,
 				unsigned char **build_id)
 {
-	char *start_addr;
+	char *start_addr, buf[5];
 
 	if (fd_status->st_size < 5)
 		return -1;
+	if (read(fd, buf, 5) != 5)
+		return -1;
+
+	/* 
+	 * The first 4 bytes contain a magic number identifying the file as an
+	 * ELF file. They contain the characters ‘\x7f’, ‘E’, ‘L’, and
+	 * ‘F’, respectively.
+	 */
+	if (buf[0] != 0x7f || buf[1] != 0x45 || buf[2] != 0x4c || buf[3] != 0x46)
+		return -1;
+
 	start_addr = (char *) mmap(0, fd_status->st_size,
 					PROT_READ, MAP_PRIVATE | MAP_FILE, fd, 0);
 	if (start_addr == MAP_FAILED) {
@@ -1538,18 +1549,13 @@ static int get_build_id(const int fd, const struct stat *fd_status,
 		return -1;
 	}
 
-	if (start_addr[0] != 0x7f || start_addr[1] != 0x45 ||
-		start_addr[2] != 0x4c || start_addr[3] != 0x46) {
-		munmap(start_addr, fd_status->st_size);
-		return -1;
-	}
-
-	if (start_addr[4] == ELFCLASS64)
-		return get_build_id_64((Elf64_Ehdr *) start_addr, fd_status, build_id);
-	else if (start_addr[4] == ELFCLASS32)
+	if (buf[4] == ELFCLASS32)
 		return get_build_id_32((Elf32_Ehdr *) start_addr, fd_status, build_id);
-	else
-		return -1;
+	if (buf[4] == ELFCLASS64)
+		return get_build_id_64((Elf64_Ehdr *) start_addr, fd_status, build_id);
+	
+	munmap(start_addr, fd_status->st_size);
+	return -1;
 }
 
 static inline void calculate_checksum_iterator_init(int *iter)
