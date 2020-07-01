@@ -1654,9 +1654,9 @@ static int store_validation_data_build_id(RegFileEntry *rfe, int lfd,
 
 	fd = open_proc(PROC_SELF, "fd/%d", lfd);
 	if (fd < 0) {
-		pr_warn("Build-ID (For validation) could not be obtained for file %s because can't open the file\n",
+		pr_err("Build-ID (For validation) could not be obtained for file %s because can't open the file\n",
 				rfe->name);
-		return -1;
+		return 0;
 	}
 
 	build_id_size = get_build_id(fd, &(p->stat), &build_id);
@@ -1695,9 +1695,9 @@ static int store_validation_data_checksum(RegFileEntry *rfe, int lfd,
 	
 	fd = open_proc(PROC_SELF, "fd/%d", lfd);
 	if (fd < 0) {
-		pr_warn("Checksum (For validation) could not be obtained for file %s because can't open the file\n",
+		pr_err("Checksum (For validation) could not be obtained for file %s because can't open the file\n",
 				rfe->name);
-		return -1;
+		return 0;
 	}
 
 	if (!calculate_checksum(fd, &(p->stat), &checksum)) {
