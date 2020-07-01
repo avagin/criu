@@ -1649,7 +1649,7 @@ static int store_validation_data_build_id(RegFileEntry *rfe, int lfd,
 	int build_id_size, i;
 	int fd;
 	
-	if (p->stat->st_size < 5)
+	if (p->stat.st_size < 5)
 		return -1;
 
 	fd = open_proc(PROC_SELF, "fd/%d", lfd);
@@ -1690,7 +1690,7 @@ static int store_validation_data_checksum(RegFileEntry *rfe, int lfd,
 	u32 checksum;
 	int fd;
 	
-	if (!p->stat->st_size)
+	if (!p->stat.st_size)
 		return -1;
 	
 	fd = open_proc(PROC_SELF, "fd/%d", lfd);
