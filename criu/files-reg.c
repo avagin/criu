@@ -1529,8 +1529,6 @@ static int get_build_id(const int fd, const struct stat *fd_status,
 {
 	char *start_addr, buf[5];
 
-	if (fd_status->st_size < 5)
-		return -1;
 	if (read(fd, buf, 5) != 5)
 		return -1;
 
@@ -1650,6 +1648,9 @@ static int store_validation_data_build_id(RegFileEntry *rfe, int lfd,
 	unsigned char *build_id = NULL;
 	int build_id_size, i;
 	int fd;
+	
+	if (p->stat->st_size < 5)
+		return -1;
 
 	fd = open_proc(PROC_SELF, "fd/%d", lfd);
 	if (fd < 0) {
@@ -1688,7 +1689,10 @@ static int store_validation_data_checksum(RegFileEntry *rfe, int lfd,
 {
 	u32 checksum;
 	int fd;
-
+	
+	if (!p->stat->st_size)
+		return -1;
+	
 	fd = open_proc(PROC_SELF, "fd/%d", lfd);
 	if (fd < 0) {
 		pr_warn("Checksum (For validation) could not be obtained for file %s because can't open the file\n",
