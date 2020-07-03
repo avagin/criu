@@ -1566,14 +1566,25 @@ static inline void calculate_checksum_iterator_init(int *iter)
 		*iter = 0;
 }
 
-static inline void calculate_checksum_iterator_next(int *iter)
+static inline void calculate_checksum_iterator_next(int *iter, int *low_bound,
+							int *up_bound, size_t file_size,
+							unsigned char **file_header,
+							const int fd)
 {
-	if (opts.file_validation_chksm_config == FILE_VALIDATION_CHKSM_EVERY)
+	if (opts.file_validation_chksm_config == FILE_VALIDATION_CHKSM_EVERY) {
 		*iter += 1;
-	else if (opts.file_validation_chksm_config == FILE_VALIDATION_CHKSM_FIRST)
+	} else if (opts.file_validation_chksm_config == FILE_VALIDATION_CHKSM_FIRST) {
 		*iter += 1;
-	else if (opts.file_validation_chksm_config == FILE_VALIDATION_CHKSM_PERIOD)
+	} else if (opts.file_validation_chksm_config == FILE_VALIDATION_CHKSM_PERIOD) {
 		*iter += opts.file_validation_chksm_parameter;
+		if (*iter >= *up_bound && *up_bound != file_size) {
+			munmap(*file_header, *up_bound - *low_bound);
+			*low_bound = *up_bound;
+			*up_bound = min_t(size_t, file_size, *up_bound + 10485760);
+			*file_header = (unsigned char *) mmap(0, *up_bound - *low_bound,
+						PROT_READ, MAP_PRIVATE | MAP_FILE, fd, *low_bound);
+		}
+	}
 }
 
 static inline bool calculate_checksum_iterator_stop_condition(int iter)
@@ -1601,11 +1612,13 @@ static inline bool calculate_checksum_iterator_stop_condition(int iter)
 static bool calculate_checksum(const int fd, const struct stat *fd_status,
 				u32 *checksum)
 {
-	int bit_count, i = 0;
+	int bit_count, up_bound, low_bound = 0, i = 0, num_iter = 0;
 	u32 byte, mask;
 	unsigned char *file_header;
 
-	file_header = (unsigned char *) mmap(0, fd_status->st_size,
+	/* */
+	up_bound = min_t(size_t, fd_status->st_size, 10485760);
+	file_header = (unsigned char *) mmap(0, up_bound,
 						PROT_READ, MAP_PRIVATE | MAP_FILE, fd, 0);
 	if (file_header == MAP_FAILED) {
 		pr_warn("Couldn't mmap file with fd %d", fd);
@@ -1614,12 +1627,18 @@ static bool calculate_checksum(const int fd, const struct stat *fd_status,
 
 	*checksum = 0xFFFFFFFF;
 	calculate_checksum_iterator_init(&i);
-	while (!calculate_checksum_iterator_stop_condition(i) &&
-			(i >= 0 && i < fd_status->st_size)) {
-		byte = file_header[i];
-		calculate_checksum_iterator_next(&i);
-		*checksum = *checksum ^ byte;
 
+	/* */
+	while (!calculate_checksum_iterator_stop_condition(i) &&
+			(i >= 0 && i < fd_status->st_size) &&
+			num_iter < 10485760 && file_header != MAP_FAILED) {
+		byte = file_header[i];
+		calculate_checksum_iterator_next(&i, &low_bound, &up_bound,
+							fd_status->st_size, 
+							&file_header, fd);
+		num_iter++;
+		
+		*checksum = *checksum ^ byte;
 		bit_count = 8;
 		while (bit_count--) {
 		mask = -(*checksum & 1);
@@ -1634,7 +1653,11 @@ static bool calculate_checksum(const int fd, const struct stat *fd_status,
 	}
 	*checksum = ~*checksum;
 
-	munmap(file_header, fd_status->st_size);
+	if (file_header == MAP_FAILED) {
+		pr_warn("Couldn't mmap file with fd %d", fd);
+		return false;
+	}
+	munmap(file_header, up_bound - low_bound);
 	return true;
 }
 
