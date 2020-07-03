@@ -1579,6 +1579,7 @@ static inline void calculate_checksum_iterator_next(int *iter, int *low_bound,
 		*iter += opts.file_validation_chksm_parameter;
 		if (*iter >= *up_bound && *up_bound != file_size) {
 			munmap(*file_header, *up_bound - *low_bound);
+			*iter -= *up_bound;
 			*low_bound = *up_bound;
 			*up_bound = min_t(size_t, file_size, *up_bound + 10485760);
 			*file_header = (unsigned char *) mmap(0, *up_bound - *low_bound,
@@ -1630,7 +1631,7 @@ static bool calculate_checksum(const int fd, const struct stat *fd_status,
 
 	/* */
 	while (!calculate_checksum_iterator_stop_condition(i) &&
-			(i >= 0 && i < fd_status->st_size) &&
+			(i >= low_bound && i < up_bound) &&
 			num_iter < 10485760 && file_header != MAP_FAILED) {
 		byte = file_header[i];
 		calculate_checksum_iterator_next(&i, &low_bound, &up_bound,
