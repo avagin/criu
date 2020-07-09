@@ -384,6 +384,7 @@ TST		=				\
 		$(TST_DIR)			\
 		$(TST_DIR_FILE)			\
 		env00				\
+		env00-buildid			\
 		fifo-rowo-pair			\
 		umask00				\
 		cmdlinenv00			\
@@ -428,6 +429,8 @@ shm-unaligned.pid: shm-unaligned
 	$(<D)/$(<F) --pidfile=$@ --outfile=$<.out --shmem_size=5000
 
 env00.pid:	env00
+	$(<D)/$(<F) --pidfile=$@ --outfile=$<.out --envname=ENV_00_TEST
+env00-buildid.pid:	env00-buildid
 	$(<D)/$(<F) --pidfile=$@ --outfile=$<.out --envname=ENV_00_TEST
 umask00.pid:	umask00
 	$(<D)/$(<F) --pidfile=$@ --outfile=$<.out --mask=0345

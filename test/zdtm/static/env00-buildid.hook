@@ -1,0 +1,8 @@
+#!/bin/bash
+
+[ "$1" == "--pre-restore" ] || exit 0
+
+set -xe
+
+echo $ZDTM_IMG_DIR
+( cd ..; ./crit/crit decode -i test/$ZDTM_IMG_DIR/1/files.img | sed 's/build_id": \[[0-9, ]*\]/build_id": [3,1,4]/g' > test/$ZDTM_IMG_DIR/1/files.img.txt && ./crit/crit encode -i test/$ZDTM_IMG_DIR/1/files.img.txt -o test/$ZDTM_IMG_DIR/1/files.img )
