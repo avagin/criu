@@ -1358,7 +1358,8 @@ static int get_build_id_32(Elf32_Ehdr *file_header, unsigned char **build_id,
 	size_t file_header_end;
 	Elf32_Phdr *program_header, *program_header_end;
 	Elf32_Nhdr *note_header, *note_header_end;
-
+	
+	file_header_end = (size_t) file_header + mapped_size;
 	if (file_header >= (Elf32_Ehdr *) (file_header_end + sizeof(Elf32_Ehdr)))
 		goto err;
 
@@ -1370,13 +1371,6 @@ static int get_build_id_32(Elf32_Ehdr *file_header, unsigned char **build_id,
 		pr_warn("Couldn't find any program headers for file with fd %d\n", fd);
 		goto err;
 	}
-
-	/* 
-	 * If the build-id exists, then it will most likely be present in the
-	 * beginning of the file. Therefore at most only the first 1 MB of the 
-	 * file was mapped.
-	 */
-	file_header_end = (size_t) file_header + mapped_size;
 
 	program_header = (Elf32_Phdr *) (file_header->e_phoff + (char *) file_header);
 	if (program_header <= (Elf32_Phdr *) file_header)
@@ -1459,6 +1453,7 @@ static int get_build_id_64(Elf64_Ehdr *file_header, unsigned char **build_id,
 	Elf64_Phdr *program_header, *program_header_end;
 	Elf64_Nhdr *note_header, *note_header_end;
 
+	file_header_end = (size_t) file_header + mapped_size;
 	if (file_header >= (Elf64_Ehdr *) (file_header_end + sizeof(Elf64_Ehdr)))
 		goto err;
 
@@ -1470,13 +1465,6 @@ static int get_build_id_64(Elf64_Ehdr *file_header, unsigned char **build_id,
 		pr_warn("Couldn't find any program headers for file with fd %d\n", fd);
 		goto err;
 	}
-
-	/* 
-	 * If the build-id exists, then it will most likely be present in the
-	 * beginning of the file. Therefore at most only the first 1 MB of the 
-	 * file was mapped.
-	 */
-	file_header_end = (size_t) file_header + mapped_size;
 
 	program_header = (Elf64_Phdr *) (file_header->e_phoff + (char *) file_header);
 	if (program_header <= (Elf64_Phdr *) file_header)
