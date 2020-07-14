@@ -23,11 +23,12 @@
 #define SILLYNAME_PREF ".nfs"
 #define SILLYNAME_SUFF_LEN (((unsigned)sizeof(u64) << 1) + ((unsigned)sizeof(unsigned int) << 1))
 
-#if __x86_64__
-	#define Elf_ptr(name) Elf64_##name
-#else
-	#define Elf_ptr(name) Elf32_##name
-#endif
+/*
+ * If the build-id exists, then it will most likely be present in the
+ * beginning of the file. Therefore only the first 1MB will be mapped
+ * and checked.
+ */
+#define BUILD_ID_MAP_SIZE 1048576
 
 #include "cr_options.h"
 #include "imgset.h"
@@ -1346,30 +1347,40 @@ static bool should_check_size(int flags)
 	return true;
 }
 
-/* Gets the build-id (If it exists) from 32-bit ELF files */
-static int get_build_id_32(Elf32_Ehdr *file_header, const struct stat *fd_status,
-				unsigned char **build_id)
+/* Gets the build-id (If it exists) from 32-bit ELF files.
+ * Returns the number of bytes of the build-id if it could
+ * be obtained, else -1.
+ */
+static int get_build_id_32(Elf32_Ehdr *file_header, unsigned char **build_id,
+				size_t mapped_size)
 {
 	int size, num_iterations;
 	size_t file_header_end;
 	Elf32_Phdr *program_header, *program_header_end;
 	Elf32_Nhdr *note_header, *note_header_end;
 
+	if (file_header >= (Elf32_Ehdr *) (file_header_end + sizeof(Elf32_Ehdr)))
+		goto err;
+
 	/* 
 	 * If the file doesn't have atleast 1 program header entry, it definitely can't
 	 * have a build-id.
 	 */
 	if (!file_header->e_phnum) {
-		munmap(file_header, fd_status->st_size);
-		return -1;
+		pr_warn("Couldn't find any program headers for file with fd %d\n", fd);
+		goto err;
 	}
-	file_header_end = (size_t) fd_status->st_size + (size_t) file_header;
+
+	/* 
+	 * If the build-id exists, then it will most likely be present in the
+	 * beginning of the file. Therefore at most only the first 1 MB of the 
+	 * file was mapped.
+	 */
+	file_header_end = (size_t) file_header + mapped_size;
 
 	program_header = (Elf32_Phdr *) (file_header->e_phoff + (char *) file_header);
-	if (program_header <= (Elf32_Phdr *) file_header) {
-		munmap(file_header, fd_status->st_size);
-		return -1;
-	}
+	if (program_header <= (Elf32_Phdr *) file_header)
+		goto err;
 
 	program_header_end = (Elf32_Phdr *) (file_header_end - sizeof(Elf32_Phdr));
 	num_iterations = file_header->e_phnum + 1;
@@ -1381,19 +1392,18 @@ static int get_build_id_32(Elf32_Ehdr *file_header, const struct stat *fd_status
 	while (num_iterations-- && program_header <= program_header_end &&
 			program_header->p_type != PT_NOTE)
 		program_header++;
-
+	
 	if (!num_iterations || program_header >= program_header_end) {
-		munmap(file_header, fd_status->st_size);
-		return -1;
+		pr_warn("Couldn't find the note program header for file with fd %d\n", fd);
+		goto err;
 	}
 
 	note_header = (Elf32_Nhdr *) (program_header->p_offset + (char *) file_header);
-	if (note_header <= (Elf32_Nhdr *) file_header) {
-		munmap(file_header, fd_status->st_size);
-		return -1;
-	}
+	if (note_header <= (Elf32_Nhdr *) file_header)
+		goto err;
 
 	note_header_end = (Elf32_Nhdr *) (file_header_end - sizeof(Elf32_Nhdr));
+	/* Arbitrary large number to prevent unnecessarily searching the entire file */
 	num_iterations = 500;
 
 	/* The note type for the build-id is NT_GNU_BUILD_ID. */
@@ -1403,60 +1413,74 @@ static int get_build_id_32(Elf32_Ehdr *file_header, const struct stat *fd_status
 						note_header->n_namesz + note_header->n_descsz);
 
 	if (!num_iterations || note_header >= note_header_end) {
-		munmap(file_header, fd_status->st_size);
-		return -1;
+		pr_warn("Couldn't find the build-id note for file with fd %d\n", fd);
+		goto err;
 	}
 
+	/* 
+	 * If the size of the notes description is too large or is invalid
+	 * then the build-id could not be obtained.
+	 */
 	if (note_header->n_descsz <= 0 || note_header->n_descsz > 512) {
-		munmap(file_header, fd_status->st_size);
-		return -1;
+		pr_warn("Invalid description size for build-id note for file with fd %d\n", fd);
+		goto err;
 	}
 
 	size = note_header->n_descsz;
 	note_header = (Elf32_Nhdr *) ((char *) note_header + sizeof(Elf32_Nhdr) +
 					note_header->n_namesz);
 	note_header_end = (Elf32_Nhdr *) (file_header_end - size);
-	if (note_header <= (Elf32_Nhdr *) file_header || note_header > note_header_end) {
-		munmap(file_header, fd_status->st_size);
-		return -1;
-	}
+	if (note_header <= (Elf32_Nhdr *) file_header || note_header > note_header_end)
+		goto err;
 
 	*build_id = (unsigned char *) xmalloc(size);
-	if (!*build_id) {
-		munmap(file_header, fd_status->st_size);
-		return -1;
-	}
+	if (!*build_id)
+		goto err;
 
 	memcpy(*build_id, (void *) note_header, size);
 
-	munmap(file_header, fd_status->st_size);
+	munmap(file_header, mapped_size);
 	return size;
+
+err:
+	munmap(file_header, mapped_size);
+	return -1;
 }
 
-/* Gets the build-id (If it exists) from 64-bit ELF files */
-static int get_build_id_64(Elf64_Ehdr *file_header, const struct stat *fd_status,
-				unsigned char **build_id)
+/* Gets the build-id (If it exists) from 64-bit ELF files.
+ * Returns the number of bytes of the build-id if it could
+ * be obtained, else -1.
+ */
+static int get_build_id_64(Elf64_Ehdr *file_header, unsigned char **build_id,
+				size_t mapped_size)
 {
 	int size, num_iterations;
 	size_t file_header_end;
 	Elf64_Phdr *program_header, *program_header_end;
 	Elf64_Nhdr *note_header, *note_header_end;
 
+	if (file_header >= (Elf64_Ehdr *) (file_header_end + sizeof(Elf64_Ehdr)))
+		goto err;
+
 	/* 
 	 * If the file doesn't have atleast 1 program header entry, it definitely can't
 	 * have a build-id.
 	 */
 	if (!file_header->e_phnum) {
-		munmap(file_header, fd_status->st_size);
-		return -1;
+		pr_warn("Couldn't find any program headers for file with fd %d\n", fd);
+		goto err;
 	}
-	file_header_end = (size_t) fd_status->st_size + (size_t) file_header;
+
+	/* 
+	 * If the build-id exists, then it will most likely be present in the
+	 * beginning of the file. Therefore at most only the first 1 MB of the 
+	 * file was mapped.
+	 */
+	file_header_end = (size_t) file_header + mapped_size;
 
 	program_header = (Elf64_Phdr *) (file_header->e_phoff + (char *) file_header);
-	if (program_header <= (Elf64_Phdr *) file_header) {
-		munmap(file_header, fd_status->st_size);
-		return -1;
-	}
+	if (program_header <= (Elf64_Phdr *) file_header)
+		goto err;
 
 	program_header_end = (Elf64_Phdr *) (file_header_end - sizeof(Elf64_Phdr));
 	num_iterations = file_header->e_phnum + 1;
@@ -1470,17 +1494,16 @@ static int get_build_id_64(Elf64_Ehdr *file_header, const struct stat *fd_status
 		program_header++;
 
 	if (!num_iterations || program_header >= program_header_end) {
-		munmap(file_header, fd_status->st_size);
-		return -1;
+		pr_warn("Couldn't find the note program header for file with fd %d\n", fd);
+		goto err;
 	}
 
 	note_header = (Elf64_Nhdr *) (program_header->p_offset + (char *) file_header);
-	if (note_header <= (Elf64_Nhdr *) file_header) {
-		munmap(file_header, fd_status->st_size);
-		return -1;
-	}
+	if (note_header <= (Elf64_Nhdr *) file_header)
+		goto err;
 
 	note_header_end = (Elf64_Nhdr *) (file_header_end - sizeof(Elf64_Nhdr));
+	/* Arbitrary large number to prevent unnecessarily searching the entire file */
 	num_iterations = 500;
 
 	/* The note type for the build-id is NT_GNU_BUILD_ID. */
@@ -1490,69 +1513,81 @@ static int get_build_id_64(Elf64_Ehdr *file_header, const struct stat *fd_status
 						note_header->n_namesz + note_header->n_descsz);
 
 	if (!num_iterations || note_header >= note_header_end) {
-		munmap(file_header, fd_status->st_size);
-		return -1;
+		pr_warn("Couldn't find the build-id note for file with fd %d\n", fd);
+		goto err;
 	}
 
+	/* 
+	 * If the size of the notes description is too large or is invalid
+	 * then the build-id could not be obtained.
+	 */
 	if (note_header->n_descsz <= 0 || note_header->n_descsz > 512) {
-		munmap(file_header, fd_status->st_size);
-		return -1;
+		pr_warn("Invalid description size for build-id note for file with fd %d\n", fd);
+		goto err;
 	}
 
 	size = note_header->n_descsz;
 	note_header = (Elf64_Nhdr *) ((char *) note_header + sizeof(Elf64_Nhdr) +
 					note_header->n_namesz);
 	note_header_end = (Elf64_Nhdr *) (file_header_end - size);
-	if (note_header <= (Elf64_Nhdr *) file_header || note_header > note_header_end) {
-		munmap(file_header, fd_status->st_size);
-		return -1;
-	}
+	if (note_header <= (Elf64_Nhdr *) file_header || note_header > note_header_end)
+		goto err;
 
 	*build_id = (unsigned char *) xmalloc(size);
-	if (!*build_id) {
-		munmap(file_header, fd_status->st_size);
-		return -1;
-	}
+	if (!*build_id)
+		goto err;
 
 	memcpy(*build_id, (void *) note_header, size);
 
-	munmap(file_header, fd_status->st_size);
+	munmap(file_header, mapped_size);
 	return size;
+
+err:
+	munmap(file_header, mapped_size);
+	return -1;
 }
 
 /*
- * Does the actual work of finding the build-id of the file, if it exists.
- * http://ftp.openwatcom.org/devel/docs/elf-64-gen.pdf
+ * Finds the build-id of the file by checking if the file is an ELF file
+ * and then calling either the 32-bit or the 64-bit function as necessary.
+ * Returns the number of bytes of the build-id if it could be
+ * obtained, else -1.
  */
 static int get_build_id(const int fd, const struct stat *fd_status,
 				unsigned char **build_id)
 {
-	char *start_addr, buf[5];
+	char *start_addr, buf[SELFMAG+1];
+	size_t mapped_size;
 
-	if (read(fd, buf, 5) != 5)
+	if (read(fd, buf, SELFMAG+1) != SELFMAG+1)
 		return -1;
 
 	/* 
 	 * The first 4 bytes contain a magic number identifying the file as an
-	 * ELF file. They contain the characters ‘\x7f’, ‘E’, ‘L’, and
-	 * ‘F’, respectively.
+	 * ELF file. They should contain the characters ‘\x7f’, ‘E’, ‘L’, and
+	 * ‘F’, respectively. These characters are together defined as ELFMAG.
 	 */
-	if (buf[0] != 0x7f || buf[1] != 0x45 || buf[2] != 0x4c || buf[3] != 0x46)
+	if (strncmp(buf, ELFMAG, SELFMAG))
 		return -1;
 
-	start_addr = (char *) mmap(0, fd_status->st_size,
-					PROT_READ, MAP_PRIVATE | MAP_FILE, fd, 0);
+	/* 
+	 * If the build-id exists, then it will most likely be present in the
+	 * beginning of the file. Therefore at most only the first 1 MB of the 
+	 * file is mapped.
+	 */
+	mapped_size = min_t(size_t, fd_status->st_size, BUILD_ID_MAP_SIZE);
+	start_addr = (char *) mmap(0, mapped_size, PROT_READ, MAP_PRIVATE | MAP_FILE, fd, 0);
 	if (start_addr == MAP_FAILED) {
 		pr_warn("Couldn't mmap file with fd %d", fd);
 		return -1;
 	}
 
-	if (buf[4] == ELFCLASS32)
-		return get_build_id_32((Elf32_Ehdr *) start_addr, fd_status, build_id);
-	if (buf[4] == ELFCLASS64)
-		return get_build_id_64((Elf64_Ehdr *) start_addr, fd_status, build_id);
+	if (buf[EI_CLASS] == ELFCLASS32)
+		return get_build_id_32((Elf32_Ehdr *) start_addr, build_id, mapped_size);
+	if (buf[EI_CLASS] == ELFCLASS64)
+		return get_build_id_64((Elf64_Ehdr *) start_addr, build_id, mapped_size);
 	
-	munmap(start_addr, fd_status->st_size);
+	munmap(start_addr, mapped_size);
 	return -1;
 }
 
