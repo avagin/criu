@@ -1583,9 +1583,9 @@ static int get_build_id(const int fd, const struct stat *fd_status,
 	}
 
 	if (buf[EI_CLASS] == ELFCLASS32)
-		return get_build_id_32((Elf32_Ehdr *) start_addr, build_id, mapped_size);
+		return get_build_id_32((Elf32_Ehdr *) start_addr, build_id, fd, mapped_size);
 	if (buf[EI_CLASS] == ELFCLASS64)
-		return get_build_id_64((Elf64_Ehdr *) start_addr, build_id, mapped_size);
+		return get_build_id_64((Elf64_Ehdr *) start_addr, build_id, fd, mapped_size);
 	
 	munmap(start_addr, mapped_size);
 	return -1;
