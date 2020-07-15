@@ -1697,7 +1697,7 @@ static int store_validation_data_build_id(RegFileEntry *rfe, int lfd,
 	if (!build_id || build_id_size == -1)
 		return -1;
 
-	rfe->build_id = xmalloc(sizeof(int) * build_id_size);
+	rfe->build_id = xmalloc(round_up(build_id_size, sizeof(uint32_t)));
 	if (!rfe->build_id) {
 		pr_warn("Build-ID (For validation) could not be set for file %s\n",
 				rfe->name);
@@ -1705,9 +1705,7 @@ static int store_validation_data_build_id(RegFileEntry *rfe, int lfd,
 	}
 
 	rfe->n_build_id = build_id_size;
-	//memcpy(rfe->build_id, (void *) build_id, rfe->n_build_id);
-	for (i = 0; i < build_id_size; i++)
-		rfe->build_id[i] = build_id[i];
+	memcpy(rfe->build_id, (void *) build_id, rfe->n_build_id);
 
 	xfree(build_id);
 	return 1;
@@ -2167,13 +2165,10 @@ static int validate_with_build_id(const int fd, const struct stat *fd_status,
 		return 0;
 	}
 
-	for (i = 0; i < build_id_size; i++) {
-		if (build_id[i] != rfi->rfe->build_id[i]) {
-			pr_err("File %s has bad build-ID value %x at index %d (expect %x)\n",
-					rfi->path, build_id[i], i, rfi->rfe->build_id[i]);
-			xfree(build_id);
-			return 0;
-		}
+	if (memcmp(build_id, rfi->rfe->build_id, build_id_size)) {
+		pr_err("File %s has bad build-ID\n", rfi->path);
+		xfree(build_id);
+		return 0;
 	}
 
 	xfree(build_id);
