@@ -1347,7 +1347,8 @@ static bool should_check_size(int flags)
 	return true;
 }
 
-/* Gets the build-id (If it exists) from 32-bit ELF files.
+/*
+ * Gets the build-id (If it exists) from 32-bit ELF files.
  * Returns the number of bytes of the build-id if it could
  * be obtained, else -1.
  */
@@ -1358,66 +1359,63 @@ static int get_build_id_32(Elf32_Ehdr *file_header, unsigned char **build_id,
 	size_t file_header_end;
 	Elf32_Phdr *program_header, *program_header_end;
 	Elf32_Nhdr *note_header, *note_header_end;
-	
-	file_header_end = (size_t) file_header + mapped_size;
-	if (file_header >= (Elf32_Ehdr *) (file_header_end + sizeof(Elf32_Ehdr)))
-		goto err;
 
-	/* 
+	file_header_end = (size_t) file_header + mapped_size;
+	if (sizeof(Elf32_Ehdr) > mapped_size)
+		return -1;
+
+	/*
 	 * If the file doesn't have atleast 1 program header entry, it definitely can't
 	 * have a build-id.
 	 */
 	if (!file_header->e_phnum) {
 		pr_warn("Couldn't find any program headers for file with fd %d\n", fd);
-		goto err;
+		return -1;
 	}
 
 	program_header = (Elf32_Phdr *) (file_header->e_phoff + (char *) file_header);
 	if (program_header <= (Elf32_Phdr *) file_header)
-		goto err;
+		return -1;
 
 	program_header_end = (Elf32_Phdr *) (file_header_end - sizeof(Elf32_Phdr));
 	num_iterations = file_header->e_phnum + 1;
 
-	/* 
-	 * If the file has a build-id, it will be in the PT_NOTE program header 
+	/*
+	 * If the file has a build-id, it will be in the PT_NOTE program header
 	 * entry AKA the note sections.
 	 */
 	while (num_iterations-- && program_header <= program_header_end &&
 			program_header->p_type != PT_NOTE)
 		program_header++;
-	
+
 	if (!num_iterations || program_header >= program_header_end) {
 		pr_warn("Couldn't find the note program header for file with fd %d\n", fd);
-		goto err;
+		return -1;
 	}
 
 	note_header = (Elf32_Nhdr *) (program_header->p_offset + (char *) file_header);
 	if (note_header <= (Elf32_Nhdr *) file_header)
-		goto err;
+		return -1;
 
-	note_header_end = (Elf32_Nhdr *) (file_header_end - sizeof(Elf32_Nhdr));
-	/* Arbitrary large number to prevent unnecessarily searching the entire file */
-	num_iterations = 500;
+	note_header_end = (Elf32_Nhdr *) (note_header + program_header->p_filesz);
 
 	/* The note type for the build-id is NT_GNU_BUILD_ID. */
-	while (num_iterations-- && note_header <= note_header_end &&
-			note_header->n_type != NT_GNU_BUILD_ID)
+	while (note_header <= note_header_end && note_header->n_type != NT_GNU_BUILD_ID)
 		note_header = (Elf32_Nhdr *) ((char *) note_header + sizeof(Elf32_Nhdr) +
 						note_header->n_namesz + note_header->n_descsz);
 
 	if (!num_iterations || note_header >= note_header_end) {
 		pr_warn("Couldn't find the build-id note for file with fd %d\n", fd);
-		goto err;
+		return -1;
 	}
 
-	/* 
+	/*
 	 * If the size of the notes description is too large or is invalid
 	 * then the build-id could not be obtained.
 	 */
 	if (note_header->n_descsz <= 0 || note_header->n_descsz > 512) {
 		pr_warn("Invalid description size for build-id note for file with fd %d\n", fd);
-		goto err;
+		return -1;
 	}
 
 	size = note_header->n_descsz;
@@ -1425,23 +1423,18 @@ static int get_build_id_32(Elf32_Ehdr *file_header, unsigned char **build_id,
 					note_header->n_namesz);
 	note_header_end = (Elf32_Nhdr *) (file_header_end - size);
 	if (note_header <= (Elf32_Nhdr *) file_header || note_header > note_header_end)
-		goto err;
+		return -1;
 
 	*build_id = (unsigned char *) xmalloc(size);
 	if (!*build_id)
-		goto err;
+		return -1;
 
 	memcpy(*build_id, (void *) note_header, size);
-
-	munmap(file_header, mapped_size);
 	return size;
-
-err:
-	munmap(file_header, mapped_size);
-	return -1;
 }
 
-/* Gets the build-id (If it exists) from 64-bit ELF files.
+/*
+ * Gets the build-id (If it exists) from 64-bit ELF files.
  * Returns the number of bytes of the build-id if it could
  * be obtained, else -1.
  */
@@ -1454,27 +1447,27 @@ static int get_build_id_64(Elf64_Ehdr *file_header, unsigned char **build_id,
 	Elf64_Nhdr *note_header, *note_header_end;
 
 	file_header_end = (size_t) file_header + mapped_size;
-	if (file_header >= (Elf64_Ehdr *) (file_header_end + sizeof(Elf64_Ehdr)))
-		goto err;
+	if (sizeof(Elf64_Ehdr) > mapped_size)
+		return -1;
 
-	/* 
+	/*
 	 * If the file doesn't have atleast 1 program header entry, it definitely can't
 	 * have a build-id.
 	 */
 	if (!file_header->e_phnum) {
 		pr_warn("Couldn't find any program headers for file with fd %d\n", fd);
-		goto err;
+		return -1;
 	}
 
 	program_header = (Elf64_Phdr *) (file_header->e_phoff + (char *) file_header);
 	if (program_header <= (Elf64_Phdr *) file_header)
-		goto err;
+		return -1;
 
 	program_header_end = (Elf64_Phdr *) (file_header_end - sizeof(Elf64_Phdr));
 	num_iterations = file_header->e_phnum + 1;
 
-	/* 
-	 * If the file has a build-id, it will be in the PT_NOTE program header 
+	/*
+	 * If the file has a build-id, it will be in the PT_NOTE program header
 	 * entry AKA the note sections.
 	 */
 	while (num_iterations-- && program_header <= program_header_end &&
@@ -1483,35 +1476,32 @@ static int get_build_id_64(Elf64_Ehdr *file_header, unsigned char **build_id,
 
 	if (!num_iterations || program_header >= program_header_end) {
 		pr_warn("Couldn't find the note program header for file with fd %d\n", fd);
-		goto err;
+		return -1;
 	}
 
 	note_header = (Elf64_Nhdr *) (program_header->p_offset + (char *) file_header);
 	if (note_header <= (Elf64_Nhdr *) file_header)
-		goto err;
+		return -1;
 
-	note_header_end = (Elf64_Nhdr *) (file_header_end - sizeof(Elf64_Nhdr));
-	/* Arbitrary large number to prevent unnecessarily searching the entire file */
-	num_iterations = 500;
+	note_header_end = (Elf64_Nhdr *) (note_header + program_header->p_filesz);
 
 	/* The note type for the build-id is NT_GNU_BUILD_ID. */
-	while (num_iterations-- && note_header <= note_header_end &&
-			note_header->n_type != NT_GNU_BUILD_ID)
+	while (note_header <= note_header_end && note_header->n_type != NT_GNU_BUILD_ID)
 		note_header = (Elf64_Nhdr *) ((char *) note_header + sizeof(Elf64_Nhdr) +
 						note_header->n_namesz + note_header->n_descsz);
 
 	if (!num_iterations || note_header >= note_header_end) {
 		pr_warn("Couldn't find the build-id note for file with fd %d\n", fd);
-		goto err;
+		return -1;
 	}
 
-	/* 
+	/*
 	 * If the size of the notes description is too large or is invalid
 	 * then the build-id could not be obtained.
 	 */
 	if (note_header->n_descsz <= 0 || note_header->n_descsz > 512) {
 		pr_warn("Invalid description size for build-id note for file with fd %d\n", fd);
-		goto err;
+		return -1;
 	}
 
 	size = note_header->n_descsz;
@@ -1519,20 +1509,14 @@ static int get_build_id_64(Elf64_Ehdr *file_header, unsigned char **build_id,
 					note_header->n_namesz);
 	note_header_end = (Elf64_Nhdr *) (file_header_end - size);
 	if (note_header <= (Elf64_Nhdr *) file_header || note_header > note_header_end)
-		goto err;
+		return -1;
 
 	*build_id = (unsigned char *) xmalloc(size);
 	if (!*build_id)
-		goto err;
+		return -1;
 
 	memcpy(*build_id, (void *) note_header, size);
-
-	munmap(file_header, mapped_size);
 	return size;
-
-err:
-	munmap(file_header, mapped_size);
-	return -1;
 }
 
 /*
@@ -1544,13 +1528,15 @@ err:
 static int get_build_id(const int fd, const struct stat *fd_status,
 				unsigned char **build_id)
 {
-	char *start_addr, buf[SELFMAG+1];
+	char buf[SELFMAG+1];
+	void *start_addr;
 	size_t mapped_size;
+	int ret = -1;
 
 	if (read(fd, buf, SELFMAG+1) != SELFMAG+1)
 		return -1;
 
-	/* 
+	/*
 	 * The first 4 bytes contain a magic number identifying the file as an
 	 * ELF file. They should contain the characters ‘\x7f’, ‘E’, ‘L’, and
 	 * ‘F’, respectively. These characters are together defined as ELFMAG.
@@ -1558,25 +1544,25 @@ static int get_build_id(const int fd, const struct stat *fd_status,
 	if (strncmp(buf, ELFMAG, SELFMAG))
 		return -1;
 
-	/* 
+	/*
 	 * If the build-id exists, then it will most likely be present in the
-	 * beginning of the file. Therefore at most only the first 1 MB of the 
+	 * beginning of the file. Therefore at most only the first 1 MB of the
 	 * file is mapped.
 	 */
 	mapped_size = min_t(size_t, fd_status->st_size, BUILD_ID_MAP_SIZE);
-	start_addr = (char *) mmap(0, mapped_size, PROT_READ, MAP_PRIVATE | MAP_FILE, fd, 0);
+	start_addr = mmap(0, mapped_size, PROT_READ, MAP_PRIVATE | MAP_FILE, fd, 0);
 	if (start_addr == MAP_FAILED) {
 		pr_warn("Couldn't mmap file with fd %d", fd);
 		return -1;
 	}
 
 	if (buf[EI_CLASS] == ELFCLASS32)
-		return get_build_id_32((Elf32_Ehdr *) start_addr, build_id, fd, mapped_size);
+		ret = get_build_id_32(start_addr, build_id, fd, mapped_size);
 	if (buf[EI_CLASS] == ELFCLASS64)
-		return get_build_id_64((Elf64_Ehdr *) start_addr, build_id, fd, mapped_size);
+		ret = get_build_id_64(start_addr, build_id, fd, mapped_size);
 	
 	munmap(start_addr, mapped_size);
-	return -1;
+	return ret;
 }
 
 static inline void calculate_checksum_iterator_init(int *iter)
