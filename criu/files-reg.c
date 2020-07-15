@@ -1397,10 +1397,13 @@ static int get_build_id_32(Elf32_Ehdr *file_header, unsigned char **build_id,
 	if (note_header <= (Elf32_Nhdr *) file_header)
 		return -1;
 
-	note_header_end = (Elf32_Nhdr *) (note_header + program_header->p_filesz);
+	note_header_end = (Elf32_Nhdr *) (file_header_end - sizeof(Elf32_Nhdr));
+	/* Arbitrary large number to prevent unnecessarily searching the entire file */
+	num_iterations = 500;
 
 	/* The note type for the build-id is NT_GNU_BUILD_ID. */
-	while (note_header <= note_header_end && note_header->n_type != NT_GNU_BUILD_ID)
+	while (num_iterations-- && note_header <= note_header_end &&
+			note_header->n_type != NT_GNU_BUILD_ID)
 		note_header = (Elf32_Nhdr *) ((char *) note_header + sizeof(Elf32_Nhdr) +
 						note_header->n_namesz + note_header->n_descsz);
 
@@ -1483,10 +1486,13 @@ static int get_build_id_64(Elf64_Ehdr *file_header, unsigned char **build_id,
 	if (note_header <= (Elf64_Nhdr *) file_header)
 		return -1;
 
-	note_header_end = (Elf64_Nhdr *) (note_header + program_header->p_filesz);
+	note_header_end = (Elf64_Nhdr *) (file_header_end - sizeof(Elf64_Nhdr));
+	/* Arbitrary large number to prevent unnecessarily searching the entire file */
+	num_iterations = 500;
 
 	/* The note type for the build-id is NT_GNU_BUILD_ID. */
-	while (note_header <= note_header_end && note_header->n_type != NT_GNU_BUILD_ID)
+	while (num_iterations-- && note_header <= note_header_end &&
+			note_header->n_type != NT_GNU_BUILD_ID)
 		note_header = (Elf64_Nhdr *) ((char *) note_header + sizeof(Elf64_Nhdr) +
 						note_header->n_namesz + note_header->n_descsz);
 
