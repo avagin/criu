@@ -1679,7 +1679,7 @@ static int store_validation_data_build_id(RegFileEntry *rfe, int lfd,
 						const struct fd_parms *p)
 {
 	unsigned char *build_id = NULL;
-	int build_id_size, i;
+	int build_id_size;
 	int fd;
 	
 	if (p->stat.st_size < 5)
@@ -2145,7 +2145,7 @@ static int validate_with_build_id(const int fd, const struct stat *fd_status,
 					const struct reg_file_info *rfi)
 {
 	unsigned char *build_id;
-	int build_id_size, i;
+	int build_id_size;
 
 	if (!rfi->rfe->has_size)
 		return 1;
