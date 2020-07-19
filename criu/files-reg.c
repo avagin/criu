@@ -30,6 +30,9 @@
  */
 #define BUILD_ID_MAP_SIZE 1048576
 
+#define ALIGN_UP(x,a)              __ALIGN_MASK(x,(typeof(x))(a)-1)
+#define __ALIGN_MASK(x,mask)    (((x)+(mask))&~(mask))
+
 #include "cr_options.h"
 #include "imgset.h"
 #include "file-ids.h"
