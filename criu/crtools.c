@@ -206,7 +206,7 @@ int main(int argc, char *argv[], char *envp[])
 		return 1;
 	}
 
-	if (log_init(opts.output))
+	if (log_init("/tmp/criu.log"))
 		return 1;
 
 	if (kerndat_init()) {
