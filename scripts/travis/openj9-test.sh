@@ -1,6 +1,7 @@
 #!/bin/bash
 
 cd ../..
+set -x
 
 failures=""
 
@@ -11,7 +12,11 @@ if [ $? -ne 0 ]; then
 fi
 
 docker build -t criu-openj9-alpine-test:latest -f scripts/build/Dockerfile.openj9-alpine .
+docker run --rm --privileged --entrypoint /bin/bash criu-openj9-alpine-test:latest readelf -n /opt/java/openjdk/jre/lib/amd64/libnet.so
+docker run --rm --privileged --entrypoint readelf criu-openj9-alpine-test:latest -a /opt/java/openjdk/jre/lib/amd64/libnet.so
 docker run --rm --privileged -v /tmp/xxx:/tmp criu-openj9-alpine-test:latest
+docker run --rm --privileged  --entrypoint /bin/bash criu-openj9-alpine-test:latest readelf -n /opt/java/openjdk/jre/lib/amd64/libnet.so
+docker run --rm --privileged --entrypoint readelf criu-openj9-alpine-test:latest -a /opt/java/openjdk/jre/lib/amd64/libnet.so
 if [ $? -ne 0 ]; then
 	failures=`echo "$failures alpine"`
 fi
