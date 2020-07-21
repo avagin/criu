@@ -1464,8 +1464,10 @@ static int get_build_id_64(Elf64_Ehdr *file_header, unsigned char **build_id,
 	}
 
 	program_header = (Elf64_Phdr *) (file_header->e_phoff + (char *) file_header);
-	if (program_header <= (Elf64_Phdr *) file_header)
+	if (program_header <= (Elf64_Phdr *) file_header) {
+		pr_err("===\n");
 		return -1;
+	}
 
 	program_header_end = (Elf64_Phdr *) (file_header_end - sizeof(Elf64_Phdr));
 	if (program_header_end > (Elf64_Phdr *) (file_header_end - sizeof(Elf64_Nhdr))) {
@@ -1520,8 +1522,10 @@ static int get_build_id_64(Elf64_Ehdr *file_header, unsigned char **build_id,
 	note_header = (Elf64_Nhdr *) ((char *) note_header + sizeof(Elf64_Nhdr) +
 					ALIGN_UP(note_header->n_namesz, 4));
 	note_header_end = (Elf64_Nhdr *) (file_header_end - size);
-	if (note_header <= (Elf64_Nhdr *) file_header || note_header > note_header_end)
+	if (note_header <= (Elf64_Nhdr *) file_header || note_header > note_header_end) {
+		pr_err("===");
 		return -1;
+	}
 
 	*build_id = (unsigned char *) xmalloc(size);
 	if (!*build_id)
@@ -1568,12 +1572,15 @@ static int get_build_id(const int fd, const struct stat *fd_status,
 		return -1;
 	}
 
+	pr_err("===");
 	if (buf[EI_CLASS] == ELFCLASS32)
 		ret = get_build_id_32(start_addr, build_id, fd, mapped_size);
 	if (buf[EI_CLASS] == ELFCLASS64)
 		ret = get_build_id_64(start_addr, build_id, fd, mapped_size);
+	pr_err("===");
 	
 	munmap(start_addr, mapped_size);
+	pr_err("===");
 	return ret;
 }
 
@@ -2166,9 +2173,12 @@ static int validate_with_build_id(const int fd, const struct stat *fd_status,
 		return -1;
 
 	build_id = NULL;
+	pr_err("===");
 	build_id_size = get_build_id(fd, fd_status, &build_id);
+	pr_err("===");
 	if (!build_id || build_id_size == -1)
 		return -1;
+	pr_err("===");
 
 	if (build_id_size != rfi->rfe->n_build_id) {
 		pr_err("File %s has bad build-ID length %d (expect %d)\n", rfi->path,
