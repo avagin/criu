@@ -1450,10 +1450,12 @@ static int get_build_id_64(Elf64_Ehdr *file_header, unsigned char **build_id,
 	Elf64_Phdr *program_header, *program_header_end;
 	Elf64_Nhdr *note_header, *note_header_end;
 
+	pr_err("===");
 	file_header_end = (size_t) file_header + mapped_size;
 	if (sizeof(Elf64_Ehdr) > mapped_size)
 		return -1;
 
+	pr_err("===");
 	/*
 	 * If the file doesn't have atleast 1 program header entry, it definitely can't
 	 * have a build-id.
@@ -1477,6 +1479,7 @@ static int get_build_id_64(Elf64_Ehdr *file_header, unsigned char **build_id,
 	}
 	num_iterations = file_header->e_phnum + 1;
 
+	pr_err("===");
 	/*
 	 * If the file has a build-id, it will be in the PT_NOTE program header
 	 * entry AKA the note sections.
@@ -1484,6 +1487,7 @@ static int get_build_id_64(Elf64_Ehdr *file_header, unsigned char **build_id,
 	while (num_iterations-- && program_header <= program_header_end &&
 			program_header->p_type != PT_NOTE)
 		program_header++;
+	pr_err("===");
 
 	if (!num_iterations || program_header >= program_header_end) {
 		pr_warn("Couldn't find the note program header for file with fd %d\n", fd);
@@ -1495,6 +1499,7 @@ static int get_build_id_64(Elf64_Ehdr *file_header, unsigned char **build_id,
 		pr_err("====================");
 		return -1;
 	}
+	pr_err("===");
 
 	note_header_end = (Elf64_Nhdr *)((char *) note_header + program_header->p_filesz);
 
@@ -1509,6 +1514,7 @@ static int get_build_id_64(Elf64_Ehdr *file_header, unsigned char **build_id,
 		return -1;
 	}
 
+	pr_err("===");
 	/*
 	 * If the size of the notes description is too large or is invalid
 	 * then the build-id could not be obtained.
@@ -1518,6 +1524,7 @@ static int get_build_id_64(Elf64_Ehdr *file_header, unsigned char **build_id,
 		return -1;
 	}
 
+	pr_err("===");
 	size = note_header->n_descsz;
 	note_header = (Elf64_Nhdr *) ((char *) note_header + sizeof(Elf64_Nhdr) +
 					ALIGN_UP(note_header->n_namesz, 4));
@@ -1527,6 +1534,7 @@ static int get_build_id_64(Elf64_Ehdr *file_header, unsigned char **build_id,
 		return -1;
 	}
 
+	pr_err("===");
 	*build_id = (unsigned char *) xmalloc(size);
 	if (!*build_id)
 		return -1;
