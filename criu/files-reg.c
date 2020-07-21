@@ -1468,6 +1468,11 @@ static int get_build_id_64(Elf64_Ehdr *file_header, unsigned char **build_id,
 		return -1;
 
 	program_header_end = (Elf64_Phdr *) (file_header_end - sizeof(Elf64_Phdr));
+	if (program_header_end > (Elf64_Phdr *) (file_header_end - sizeof(Elf64_Nhdr))) {
+		pr_err("============ %p\n", program_header_end);
+		program_header_end = (Elf64_Phdr *) (file_header_end - sizeof(Elf64_Phdr));
+		pr_err("============ %p\n", program_header_end);
+	}
 	num_iterations = file_header->e_phnum + 1;
 
 	/*
@@ -1484,8 +1489,10 @@ static int get_build_id_64(Elf64_Ehdr *file_header, unsigned char **build_id,
 	}
 
 	note_header = (Elf64_Nhdr *) (program_header->p_offset + (char *) file_header);
-	if (note_header <= (Elf64_Nhdr *) file_header)
+	if (note_header <= (Elf64_Nhdr *) file_header) {
+		pr_err("====================");
 		return -1;
+	}
 
 	note_header_end = (Elf64_Nhdr *)((char *) note_header + program_header->p_filesz);
 
