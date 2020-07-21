@@ -1355,7 +1355,7 @@ static bool should_check_size(int flags)
 static int get_build_id_32(Elf32_Ehdr *file_header, unsigned char **build_id,
 				const int fd, size_t mapped_size)
 {
-	int size, num_iterations;
+	int size;
 	size_t file_header_end;
 	Elf32_Phdr *program_header, *program_header_end;
 	Elf32_Nhdr *note_header, *note_header_end;
@@ -1378,17 +1378,16 @@ static int get_build_id_32(Elf32_Ehdr *file_header, unsigned char **build_id,
 		return -1;
 
 	program_header_end = (Elf32_Phdr *) (file_header_end - sizeof(Elf32_Phdr));
-	num_iterations = file_header->e_phnum + 1;
 
 	/*
 	 * If the file has a build-id, it will be in the PT_NOTE program header
 	 * entry AKA the note sections.
 	 */
-	while (num_iterations-- && program_header <= program_header_end &&
+	while (program_header <= program_header_end &&
 			program_header->p_type != PT_NOTE)
 		program_header++;
 
-	if (!num_iterations || program_header >= program_header_end) {
+	if (program_header >= program_header_end) {
 		pr_warn("Couldn't find the note program header for file with fd %d\n", fd);
 		return -1;
 	}
@@ -1399,16 +1398,15 @@ static int get_build_id_32(Elf32_Ehdr *file_header, unsigned char **build_id,
 
 	note_header_end = (Elf32_Nhdr *) (file_header_end - sizeof(Elf32_Nhdr));
 	/* Arbitrary large number to prevent unnecessarily searching the entire file */
-	num_iterations = 500;
 
 	/* The note type for the build-id is NT_GNU_BUILD_ID. */
-	while (num_iterations-- && note_header <= note_header_end &&
+	while (note_header <= note_header_end &&
 			note_header->n_type != NT_GNU_BUILD_ID)
 		note_header = (Elf32_Nhdr *) ((char *) note_header + sizeof(Elf32_Nhdr) +
 						ALIGN(note_header->n_namesz, 4) +
 						ALIGN(note_header->n_descsz, 4));
 
-	if (!num_iterations || note_header >= note_header_end) {
+	if (note_header >= note_header_end) {
 		pr_warn("Couldn't find the build-id note for file with fd %d\n", fd);
 		return -1;
 	}
@@ -1445,7 +1443,7 @@ static int get_build_id_32(Elf32_Ehdr *file_header, unsigned char **build_id,
 static int get_build_id_64(Elf64_Ehdr *file_header, unsigned char **build_id,
 				const int fd, size_t mapped_size)
 {
-	int size, num_iterations;
+	int size;
 	size_t file_header_end;
 	Elf64_Phdr *program_header, *program_header_end;
 	Elf64_Nhdr *note_header, *note_header_end;
@@ -1468,17 +1466,16 @@ static int get_build_id_64(Elf64_Ehdr *file_header, unsigned char **build_id,
 		return -1;
 
 	program_header_end = (Elf64_Phdr *) (file_header_end - sizeof(Elf64_Phdr));
-	num_iterations = file_header->e_phnum + 1;
 
 	/*
 	 * If the file has a build-id, it will be in the PT_NOTE program header
 	 * entry AKA the note sections.
 	 */
-	while (num_iterations-- && program_header <= program_header_end &&
+	while (program_header <= program_header_end &&
 			program_header->p_type != PT_NOTE)
 		program_header++;
 
-	if (!num_iterations || program_header >= program_header_end) {
+	if (program_header >= program_header_end) {
 		pr_warn("Couldn't find the note program header for file with fd %d\n", fd);
 		return -1;
 	}
@@ -1489,16 +1486,15 @@ static int get_build_id_64(Elf64_Ehdr *file_header, unsigned char **build_id,
 
 	note_header_end = (Elf64_Nhdr *) (file_header_end - sizeof(Elf64_Nhdr));
 	/* Arbitrary large number to prevent unnecessarily searching the entire file */
-	num_iterations = 500;
 
 	/* The note type for the build-id is NT_GNU_BUILD_ID. */
-	while (num_iterations-- && note_header <= note_header_end &&
+	while (note_header <= note_header_end &&
 			note_header->n_type != NT_GNU_BUILD_ID)
 		note_header = (Elf64_Nhdr *) ((char *) note_header + sizeof(Elf64_Nhdr) +
 						ALIGN(note_header->n_namesz, 4) +
 						ALIGN(note_header->n_descsz, 4));
 
-	if (!num_iterations || note_header >= note_header_end) {
+	if (note_header >= note_header_end) {
 		pr_warn("Couldn't find the build-id note for file with fd %d\n", fd);
 		return -1;
 	}
