@@ -32,6 +32,7 @@ enum {
 };
 
 struct parasite_init_args {
+	struct parasite_cmd_args cmd;
 	int32_t				h_addr_len;
 	struct sockaddr_un		h_addr;
 	int32_t				log_level;

@@ -35,6 +35,7 @@ enum {
 	PARASITE_CMD_CHECK_VDSO_MARK,
 	PARASITE_CMD_CHECK_AIOS,
 	PARASITE_CMD_DUMP_CGROUP,
+	PARASITE_CMD_DUMP_NOP,
 
 	PARASITE_CMD_MAX,
 };
@@ -47,6 +48,7 @@ struct parasite_vma_entry
 };
 
 struct parasite_vdso_vma_entry {
+	struct parasite_cmd_args cmd;
 	unsigned long	start;
 	unsigned long	len;
 	unsigned long	orig_vdso_addr;
@@ -58,6 +60,7 @@ struct parasite_vdso_vma_entry {
 };
 
 struct parasite_dump_pages_args {
+	struct parasite_cmd_args cmd;
 	unsigned int	nr_vmas;
 	unsigned int	add_prot;
 	unsigned int	off;
@@ -76,10 +79,12 @@ static inline struct iovec *pargs_iovs(struct parasite_dump_pages_args *a)
 }
 
 struct parasite_dump_sa_args {
+	struct parasite_cmd_args cmd;
 	rt_sigaction_t sas[SIGMAX];
 };
 
 struct parasite_dump_itimers_args {
+	struct parasite_cmd_args cmd;
 	struct itimerval real;
 	struct itimerval virt;
 	struct itimerval prof;
@@ -92,6 +97,7 @@ struct posix_timer {
 };
 
 struct parasite_dump_posix_timers_args {
+	struct parasite_cmd_args cmd;
 	int timer_n;
 	struct posix_timer timer[0];
 };
@@ -102,6 +108,7 @@ struct parasite_aio {
 };
 
 struct parasite_check_aios_args {
+	struct parasite_cmd_args cmd;
 	unsigned nr_rings;
 	struct parasite_aio ring[0];
 };
@@ -117,6 +124,7 @@ static inline int posix_timers_dump_size(int timer_n)
  */
 
 struct parasite_dump_misc {
+	struct parasite_cmd_args cmd;
 	unsigned long		brk;
 
 	u32 pid;
@@ -138,6 +146,7 @@ struct parasite_dump_misc {
 	 offsetof(struct parasite_dump_creds, groups)) / sizeof(unsigned int)) /* groups */
 
 struct parasite_dump_creds {
+	struct parasite_cmd_args cmd;
 	unsigned int		cap_last_cap;
 
 	u32			cap_inh[CR_CAP_SIZE];
@@ -166,6 +175,7 @@ struct parasite_dump_creds {
 };
 
 struct parasite_dump_thread {
+	struct parasite_cmd_args cmd;
 	unsigned int			*tid_addr;
 	pid_t				tid;
 	tls_t				tls;
@@ -193,6 +203,7 @@ static inline void copy_sas(ThreadSasEntry *dst, const stack_t *src)
 #define PARASITE_MAX_FDS	CR_SCM_MAX_FD * 3
 
 struct parasite_drain_fd {
+	struct parasite_cmd_args cmd;
 	int	nr_fds;
 	int	fds[0];
 };
@@ -215,6 +226,7 @@ static inline int drain_fds_size(struct parasite_drain_fd *dfds)
 }
 
 struct parasite_tty_args {
+	struct parasite_cmd_args cmd;
 	int	fd;
 	int	type;
 
@@ -228,12 +240,13 @@ struct parasite_tty_args {
 };
 
 struct parasite_dump_cgroup_args {
+	struct parasite_cmd_args cmd;
 	/*
 	 * 4K should be enough for most cases.
 	 *
 	 * The string is null terminated.
 	 */
-	char contents[1 << 12];
+	char contents[(1 << 12) - sizeof(struct parasite_cmd_args)];
 };
 
 #endif /* !__ASSEMBLY__ */

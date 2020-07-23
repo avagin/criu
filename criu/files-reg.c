@@ -1473,6 +1473,7 @@ static int get_build_id_64(Elf64_Ehdr *file_header, unsigned char **build_id,
 	 * If the file has a build-id, it will be in the PT_NOTE program header
 	 * entry AKA the note sections.
 	 */
+again:
 	while (num_iterations-- && program_header <= program_header_end &&
 			program_header->p_type != PT_NOTE)
 		program_header++;
@@ -1496,9 +1497,10 @@ static int get_build_id_64(Elf64_Ehdr *file_header, unsigned char **build_id,
 						ALIGN(note_header->n_namesz, 4) +
 						ALIGN(note_header->n_descsz, 4));
 
-	if (note_header >= note_header_end) {
+	if (note_header > note_header_end) {
 		pr_warn("Couldn't find the build-id note for file with fd %d\n", fd);
-		return -1;
+		program_header++;
+		goto again;
 	}
 
 	/*

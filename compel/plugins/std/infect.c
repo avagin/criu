@@ -121,6 +121,11 @@ static noinline __used int noinline parasite_daemon(void *args)
 	ret = 0;
 
 	while (1) {
+		if (1) {
+			struct parasite_cmd_args *cargs = args;
+			futex_wait_while(&cargs->cmd, PARASITE_CMD_IDLE);
+			m.cmd = futex_get(&cargs->cmd);
+		} else
 		if (__parasite_daemon_wait_msg(&m))
 			break;
 
@@ -134,6 +139,12 @@ static noinline __used int noinline parasite_daemon(void *args)
 
 		ret = parasite_daemon_cmd(m.cmd, args);
 
+		if (1) {
+			struct parasite_cmd_args *cargs = args;
+			cargs->err = ret;
+			cargs->ack = m.cmd;
+			futex_set_and_wake(&cargs->cmd, PARASITE_CMD_IDLE);
+		} else
 		if (__parasite_daemon_reply_ack(m.cmd, ret))
 			break;
 

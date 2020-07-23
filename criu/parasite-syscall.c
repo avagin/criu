@@ -380,6 +380,15 @@ int parasite_dump_misc_seized(struct parasite_ctl *ctl, struct parasite_dump_mis
 	return 0;
 }
 
+int parasite_dump_nop_seized(struct parasite_ctl *ctl)
+{
+
+	if (compel_rpc_call_sync(PARASITE_CMD_DUMP_NOP, ctl) < 0)
+		return -1;
+
+	return 0;
+}
+
 struct parasite_tty_args *parasite_dump_tty(struct parasite_ctl *ctl, int fd, int type)
 {
 	struct parasite_tty_args *p;

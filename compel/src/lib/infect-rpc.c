@@ -62,8 +62,14 @@ int parasite_wait_ack(int sockfd, unsigned int cmd, struct ctl_msg *m)
 
 int compel_rpc_sync(unsigned int cmd, struct parasite_ctl *ctl)
 {
+	struct parasite_cmd_args *args = ctl->addr_args;
 	struct ctl_msg m;
 
+	if (1) {
+		futex_wait_while(&args->cmd, cmd);
+		m.err = args->err;
+		m.ack = args->ack;
+	} else
 	if (parasite_wait_ack(ctl->tsock, cmd, &m))
 		return -1;
 
@@ -79,6 +85,12 @@ int compel_rpc_sync(unsigned int cmd, struct parasite_ctl *ctl)
 int compel_rpc_call(unsigned int cmd, struct parasite_ctl *ctl)
 {
 	struct ctl_msg m;
+	struct parasite_cmd_args *args = ctl->addr_args;
+
+	if (1) {
+		futex_set_and_wake(&args->cmd, cmd);
+		return 0;
+	}
 
 	m = ctl_msg_cmd(cmd);
 	return __parasite_send_cmd(ctl->tsock, &m);

@@ -708,6 +708,8 @@ int parasite_daemon_cmd(int cmd, void *args)
 	case PARASITE_CMD_DUMP_THREAD:
 		ret = dump_thread(args);
 		break;
+	case PARASITE_CMD_DUMP_NOP:
+		break;
 	case PARASITE_CMD_DUMP_MISC:
 		ret = dump_misc(args);
 		break;
