@@ -1682,6 +1682,74 @@ nodata:
 	goto parse_err;
 }
 
+static int parse_bpfmap(struct bfd *f, char *str, BpfmapFileEntry *bpf)
+{
+	/*
+	 * Format is:
+	 * 
+	 * uint32_t map_type
+	 * uint32_t key_size
+	 * uint32_t value_size
+	 * uint32_t max_entries
+	 * uint32_t map_flags
+	 * uint64_t memlock
+	 * uint32_t map_id
+	 * boolean frozen
+	 */
+
+	if (sscanf(str, "map_type: %u", &bpf->map_type) != 1)
+		goto parse_err;
+
+	str = breadline(f);
+	if (IS_ERR_OR_NULL(str))
+		goto nodata;
+	if (sscanf(str, "key_size: %u", &bpf->key_size) != 1)
+		goto parse_err;
+
+	str = breadline(f);
+	if (IS_ERR_OR_NULL(str))
+		goto nodata;
+	if (sscanf(str, "value_size: %u", &bpf->value_size) != 1)
+		goto parse_err;
+
+	str = breadline(f);
+	if (IS_ERR_OR_NULL(str))
+		goto nodata;
+	if (sscanf(str, "max_entries: %u", &bpf->max_entries) != 1)
+		goto parse_err;
+
+	str = breadline(f);
+	if (IS_ERR_OR_NULL(str))
+		goto nodata;
+	if (sscanf(str, "map_flags: %"PRIx32"", &bpf->map_flags) != 1)
+		goto parse_err;
+
+	str = breadline(f);
+	if (IS_ERR_OR_NULL(str))
+		goto nodata;
+	if (sscanf(str, "memlock: %"PRIu64"", &bpf->memlock) != 1)
+		goto parse_err;
+
+	str = breadline(f);
+	if (IS_ERR_OR_NULL(str))
+		goto nodata;
+	if (sscanf(str, "map_id: %u", &bpf->map_id) != 1)
+		goto parse_err;
+
+	str = breadline(f);
+	if (IS_ERR_OR_NULL(str))
+		goto nodata;
+	if (sscanf(str, "frozen: %d", &bpf->frozen) != 1)
+		goto parse_err;
+	return 0;
+
+parse_err:
+	return -1;
+nodata:
+	pr_err("No data left in proc file while parsing bpfmap\n");
+	goto parse_err;
+}
+
 #define fdinfo_field(str, field)	!strncmp(str, field":", sizeof(field))
 
 static int parse_file_lock_buf(char *buf, struct file_lock *fl,
@@ -2011,6 +2079,18 @@ static int parse_fdinfo_pid_s(int pid, int fd, int type, void *arg)
 			}
 
 			ie->wd[i] = ify;
+			entry_met = true;
+			continue;
+		}
+		if (fdinfo_field(str, "map_type")) {
+			BpfmapFileEntry *bpf = arg;
+			if (type != FD_TYPES__BPFMAP)
+				goto parse_err;
+
+			ret = parse_bpfmap(&f, str, bpf);
+			if (ret)
+				goto parse_err;
+
 			entry_met = true;
 			continue;
 		}
