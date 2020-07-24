@@ -873,7 +873,7 @@ class criu_cli:
             env['CRIU_FAULT'] = fault
 
         cr = subprocess.Popen(strace +
-                              [criu_bin, action, "--no-default-config"] + args,
+                              ["time", criu_bin, action, "--no-default-config"] + args,
                               env=env,
                               close_fds=False,
                               preexec_fn=preexec)

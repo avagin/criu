@@ -4,6 +4,7 @@ LDLIBS	+= $(LIB)
 CPPFLAGS += -I$(LIBDIR)
 
 TST_NOFILE	:=				\
+		fork				\
 		busyloop00			\
 		sleeping00			\
 		pid00				\
