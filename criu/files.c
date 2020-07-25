@@ -1736,6 +1736,9 @@ static int collect_one_file(void *o, ProtobufCMessage *base, struct cr_img *i)
 	case FD_TYPES__MEMFD:
 		ret = collect_one_file_entry(fe, fe->memfd->id, &fe->memfd->base, &memfd_cinfo);
 		break;
+	case FD_TYPES__BPFMAP:
+		ret = collect_one_file_entry(fe, fe->bpf->id, &fe->bpf->base, &bpfmap_cinfo);
+		break;
 	}
 
 	return ret;
