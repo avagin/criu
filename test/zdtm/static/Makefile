@@ -230,6 +230,8 @@ TST_NOFILE	:=				\
 		timens_nested			\
 		timens_for_kids			\
 		zombie_leader			\
+		bpf_hash			\
+		bpf_array			\
 #		jobctl00			\
 
 ifneq ($(ARCH),arm)
@@ -573,6 +575,9 @@ s390x_regs_check:	LDFLAGS += -pthread
 s390x_gs_threads:	LDFLAGS += -pthread
 
 thread_different_uid_gid:	LDLIBS += -pthread -lcap
+
+bpf_hash:		LDLIBS += -lbpf
+bpf_array:		LDLIBS += -lbpf
 
 $(LIB):	force
 	$(Q) $(MAKE) -C $(LIBDIR)
