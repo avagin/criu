@@ -36,6 +36,13 @@ RUN yum install -y \
 	python2-pip \
 	rubygem-asciidoctor
 
+# libbpf depends on libc >= 2.26
+RUN yum install -y http://mirror.centos.org/centos-8/8/BaseOS/x86_64/os/Packages/glibc-2.28-101.el8.x86_64.rpm
+
+# libbpf is not available in EPEL repos - we have to install it from Fedora Rawhide
+RUN yum install -y https://dl.fedoraproject.org/pub/fedora/linux/development/rawhide/Everything/x86_64/os/Packages/l/libbpf-0.0.9-1.fc33.x86_64.rpm
+RUN yum install -y https://dl.fedoraproject.org/pub/fedora/linux/development/rawhide/Everything/x86_64/os/Packages/l/libbpf-devel-0.0.9-1.fc33.x86_64.rpm
+
 COPY . /criu
 WORKDIR /criu
 

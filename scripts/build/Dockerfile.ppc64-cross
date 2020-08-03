@@ -2,10 +2,11 @@ FROM dockcross/base:latest
 
 # Add the cross compiler sources
 RUN echo "deb http://ftp.us.debian.org/debian/ buster main" >> /etc/apt/sources.list && \
+  echo "deb http://ftp.us.debian.org/debian/ sid main" >> /etc/apt/sources.list && \
   dpkg --add-architecture ppc64el && \
   apt-get install emdebian-archive-keyring
 
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -t buster -y \
 	crossbuild-essential-ppc64el	\
 	libc6-dev-ppc64el-cross		\
 	libc6-ppc64el-cross		\
@@ -23,6 +24,10 @@ RUN apt-get update && apt-get install -y \
 	libcap-dev:ppc64el		\
 	libaio-dev:ppc64el		\
 	libnl-route-3-dev:ppc64el
+
+RUN apt-get install -t sid -y \
+	libbpf4.19:ppc64el	\
+	libbpf-dev:ppc64el
 
 ENV CROSS_TRIPLE=powerpc64le-linux-gnu
 ENV CROSS_COMPILE=${CROSS_TRIPLE}-				\

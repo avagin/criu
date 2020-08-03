@@ -24,6 +24,12 @@ RUN apt-get update && apt-get install -y \
 	python-minimal \
 	python-future
 
+RUN echo "deb http://ports.ubuntu.com/ubuntu-ports/ groovy universe" >> /etc/apt/sources.list
+  
+RUN apt-get update && apt-get install -t groovy -y \
+	libbpf0 	\
+	libbpf-dev
+
 COPY . /criu
 WORKDIR /criu
 ENV CC="ccache $CC" CCACHE_DIR=/tmp/.ccache CCACHE_NOCOMPRESS=1 $ENV1=yes

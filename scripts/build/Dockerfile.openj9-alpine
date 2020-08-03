@@ -19,7 +19,8 @@ RUN apk update && apk add \
 	maven \
 	ip6tables \
 	iptables \
-	bash
+	bash \
+	libbpf-dev
 
 COPY . /criu
 WORKDIR /criu

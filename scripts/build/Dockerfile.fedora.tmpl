@@ -31,7 +31,8 @@ RUN dnf install -y \
 	which \
 	e2fsprogs \
 	rubygem-asciidoctor \
-	kmod
+	kmod \
+	libbpf-devel
 
 RUN ln -sf python3 /usr/bin/python
 ENV PYTHON=python3

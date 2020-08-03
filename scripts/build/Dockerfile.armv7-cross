@@ -2,10 +2,11 @@ FROM dockcross/base:latest
 
 # Add the cross compiler sources
 RUN echo "deb http://ftp.us.debian.org/debian/ buster main" >> /etc/apt/sources.list && \
+  echo "deb http://ftp.us.debian.org/debian/ sid main" >> /etc/apt/sources.list && \
   dpkg --add-architecture armhf && \
   apt-get install emdebian-archive-keyring
 
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -t buster -y \
 	crossbuild-essential-armhf	\
 	libbz2-dev:armhf		\
 	libexpat1-dev:armhf		\
@@ -21,6 +22,11 @@ RUN apt-get update && apt-get install -y \
 	libcap-dev:armhf		\
 	libaio-dev:armhf		\
 	libnl-route-3-dev:armhf
+
+RUN apt-get install -t sid -y \
+	libbpf4.19:armhf	\
+	libbpf-dev:armhf
+
 
 ENV CROSS_TRIPLE=arm-linux-gnueabihf
 ENV CROSS_COMPILE=${CROSS_TRIPLE}-				\
