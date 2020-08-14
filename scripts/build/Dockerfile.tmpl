@@ -23,17 +23,8 @@ RUN apt-get update && apt-get install -qy --no-install-recommends \
 	protobuf-c-compiler \
 	protobuf-compiler \
 	python3-minimal \
-	python3-future
-
-RUN echo "deb http://archive.ubuntu.com/ubuntu groovy universe" >> /etc/apt/sources.list && \
-  echo "deb http://archive.ubuntu.com/ubuntu focal main universe" >> /etc/apt/sources.list
-
-# libbpf depends on libc >= 2.26
-RUN apt-get update && apt-get install -t focal -y \
-	libc6=2.31-0ubuntu9
-
-RUN apt-get update && apt-get install -t groovy -y \
-	libbpf0 	\
+	python3-future \
+	libbpf0 \
 	libbpf-dev
 
 COPY . /criu

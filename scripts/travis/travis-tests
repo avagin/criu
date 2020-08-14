@@ -77,23 +77,6 @@ travis_prep () {
 	fi
 
 	apt_install $TRAVIS_PKGS
-
-	if [ "$UNAME_M" = "x86_64" ]; then
-		echo "deb http://archive.ubuntu.com/ubuntu/ groovy universe" >> /etc/apt/sources.list
-		echo "deb http://archive.ubuntu.com/ubuntu/ focal main universe" >> /etc/apt/sources.list
-	else
-		echo "deb http://ports.ubuntu.com/ubuntu-ports/ groovy universe" >> /etc/apt/sources.list
-		echo "deb http://ports.ubuntu.com/ubuntu-ports/ focal main universe" >> /etc/apt/sources.list
-	fi
-	
-	# libbpf depends on libc >= 2.26
-	apt-get update && apt-get install -t focal -y \
-		libc6=2.31-0ubuntu9
-
-	apt-get update && apt-get install -t groovy -y \
-		libbpf0 	\
-		libbpf-dev
-
 	chmod a+x $HOME
 }
 
@@ -150,28 +133,6 @@ if [ "${COMPAT_TEST}x" = "yx" ] ; then
 	apt_install $IA32_PKGS
 	mkdir -p /usr/lib/x86_64-linux-gnu/
 	mv "$REFUGE"/* /usr/lib/x86_64-linux-gnu/
-
-	BPF_LIBS="libbpf0 libbpf-dev"
-	BPF_IA32_PKGS=""
-	REFUGE_BPF=64-refuge-bpf
-
-	mkdir "$REFUGE_BPF"
-	for i in $BPF_LIBS ; do
-		for j in $(dpkg --listfiles $i | grep '\.so') ; do
-			cp "$j" "$REFUGE_BPF/"
-		done
-		BPF_IA32_PKGS="$BPF_IA32_PKGS $i:i386"
-	done
-
-	# bpf packages for i386 are not available in ubuntu repositories
-	echo "deb http://ftp.us.debian.org/debian/ sid main" >> /etc/apt/sources.list
-	# installing packages debian-keyring and debian-archive-keyring does not fix this problem
-	# we therefore have to add the keys for manually
-	apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 04EE7237B7D453EC
-	apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 648ACFD622F3D138
-	apt-get remove $BPF_LIBS
-	apt-get update && apt-get install -t sid $BPF_IA32_PKGS
-	mv "$REFUGE_BPF"/* /usr/lib/x86_64-linux-gnu/
 fi
 
 time make CC="$CC" -j4 -C test/zdtm

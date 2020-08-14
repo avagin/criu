@@ -22,11 +22,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends protobuf-c-comp
 	gcc \
 	maven
 
-RUN echo "deb http://archive.ubuntu.com/ubuntu groovy universe" >> /etc/apt/sources.list
-
-RUN apt-get update && apt-get install -t groovy -y \
-	libbpf-dev
-
 COPY . /criu
 WORKDIR /criu
 

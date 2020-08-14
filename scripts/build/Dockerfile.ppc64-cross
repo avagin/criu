@@ -23,10 +23,7 @@ RUN apt-get update && apt-get install -t buster -y \
 	libprotobuf-c-dev:ppc64el		\
 	libcap-dev:ppc64el		\
 	libaio-dev:ppc64el		\
-	libnl-route-3-dev:ppc64el
-
-RUN apt-get install -t sid -y \
-	libbpf4.19:ppc64el	\
+	libnl-route-3-dev:ppc64el	\
 	libbpf-dev:ppc64el
 
 ENV CROSS_TRIPLE=powerpc64le-linux-gnu

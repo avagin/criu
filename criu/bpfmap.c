@@ -88,7 +88,7 @@ int restore_bpfmap_data(int map_fd, uint32_t map_id, struct bpfmap_data_rst **bp
 	count = bde->count;
 
 	keys = mmap(NULL, bde->keys_bytes, PROT_READ | PROT_WRITE,
-				MAP_SHARED | MAP_ANONYMOUS, 0, 0); 
+				MAP_SHARED | MAP_ANONYMOUS, 0, 0);
 	if (keys == MAP_FAILED) {
 		pr_perror("Can't map memory for BPF map keys");
 		goto err;
@@ -96,13 +96,13 @@ int restore_bpfmap_data(int map_fd, uint32_t map_id, struct bpfmap_data_rst **bp
 	memcpy(keys, map_data->data, bde->keys_bytes);
 
 	values = mmap(NULL, bde->values_bytes, PROT_READ | PROT_WRITE,
-				MAP_SHARED | MAP_ANONYMOUS, 0, 0); 
+				MAP_SHARED | MAP_ANONYMOUS, 0, 0);
 	if (values == MAP_FAILED) {
 		pr_perror("Can't map memory for BPF map values");
 		goto err;
 	}
 	memcpy(values, map_data->data + bde->keys_bytes, bde->values_bytes);
-	
+
 	if (bpf_map_update_batch(map_fd, keys, values, &count, &opts)) {
 		pr_perror("Can't load key-value pairs to BPF map");
 		goto err;
@@ -234,15 +234,15 @@ static int dump_one_bpfmap(int lfd, u32 id, const struct fd_parms *p)
 
 	if (parse_fdinfo(lfd, FD_TYPES__BPFMAP, &bpf))
 		return -1;
-	
+
 	switch (bpf.map_type) {
-		
+
 		case BPF_MAP_TYPE_HASH:
 		case BPF_MAP_TYPE_ARRAY:
 			bpf.id = id;
 			bpf.flags = p->flags;
 			bpf.fown = (FownEntry *)&p->fown;
-			
+
 			fe.type = FD_TYPES__BPFMAP;
 			fe.id = bpf.id;
 			fe.bpf = &bpf;

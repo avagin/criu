@@ -273,7 +273,9 @@ static struct collect_image_info *cinfos[] = {
 	&pipe_data_cinfo,
 	&fifo_data_cinfo,
 	&sk_queues_cinfo,
+#ifdef CONFIG_HAS_LIBBPF
 	&bpfmap_data_cinfo,
+#endif
 };
 
 static struct collect_image_info *cinfos_files[] = {

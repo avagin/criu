@@ -22,8 +22,7 @@ RUN apk update && apk add \
 	py3-pip \
 	py3-protobuf \
 	python3 \
-	sudo \
-	libbpf-dev
+	sudo
 
 COPY . /criu
 WORKDIR /criu
