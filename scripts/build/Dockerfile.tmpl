@@ -1,7 +1,8 @@
 ARG CC=gcc
 ARG ENV1=FOOBAR
 
-RUN apt-get update && apt-get install -y \
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -qy \
 	ccache \
 	libnet-dev \
 	libnl-route-3-dev \
