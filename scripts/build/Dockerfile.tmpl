@@ -25,6 +25,7 @@ RUN apt-get update && apt-get install -qy --no-install-recommends \
 	python3-minimal \
 	python3-future \
 	libbpf0 \
+	libelf-dev \
 	libbpf-dev
 
 COPY . /criu
