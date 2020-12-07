@@ -1,42 +1,27 @@
 #!/bin/bash
 
+set -e
+
 # This test creates a process in non-host pidns and then dumps it and restores
 # it into host pidns. We use pid >100000 in non-host pidns to make sure it does
 # not intersect with some host pid on restore but it is potentially racy so
 # please run this test only in manualy.
 
-trap "cleanup" QUIT TERM INT HUP EXIT
-
-function cleanup()
-{
-	PIDS=$(pgrep -x -f "sh _run_pidns.sh")
-	for PID in $PIDS; do
-		kill -9 $PID
-	done
-
-	sleep 0.5
-	umount -lf pidns_proc || :
-	rm -f pidns_proc || :
-}
-
 CRIU=../../../criu/criu
 
-unshare -p -f sh -c 'mkdir pidns_proc;
-mount -t proc proc pidns_proc;
-echo 100000 > pidns_proc/sys/kernel/ns_last_pid;
-umount -l pidns_proc;
-rmdir pidns_proc;
-setsid sh _run_pidns.sh &>/dev/null </dev/null' &>/dev/null </dev/null &
+exec {pipe}<> <(:)
+exec {pipe_r}</proc/self/fd/$pipe
+exec {pipe_w}>/proc/self/fd/$pipe
+exec {pipe}>&-
 
-while :; do
-	PID=$(pgrep -x -f "sh _run_pidns.sh" -n)
-	if [ -n "$PID" ]; then
-		break
-	fi
-	sleep 0.1
-done
+unshare -p sh -c "bash _run_pidns.sh $pipe_w &"
+exec {pipe_w}>&-
+
+PID=$(cat <&$pipe_r)
+echo PID: $PID
 
 PIDNS=$(readlink /proc/$PID/ns/pid | sed 's/://')
+echo PIDNS: $PIDNS
 
 exec 100<&-
 exec 100< /proc/$$/ns/pid
@@ -47,6 +32,7 @@ echo "before c/r: $BEFORE"
 rm -rf images_pidns || :
 mkdir -p images_pidns
 
+echo $CRIU dump -v4 -o dump.log -t $PID -D images_pidns --external $PIDNS:exti
 $CRIU dump -v4 -o dump.log -t $PID -D images_pidns --external $PIDNS:exti
 RESULT=$?
 cat images_pidns/dump.log | grep -B 5 Error || echo ok
@@ -56,16 +42,17 @@ cat images_pidns/dump.log | grep -B 5 Error || echo ok
 	exit 1
 }
 
-$CRIU restore -v4 -o restore.log -D images_pidns --restore-detached --inherit-fd fd[100]:exti
+echo $CRIU restore -v4 -o restore.log -D images_pidns --restore-detached --inherit-fd fd[100]:exti
+$CRIU restore -v4 -o restore.log -D images_pidns --restore-detached --inherit-fd fd[100]:exti --pidfile test.pidfile
 RESULT=$?
-cat images_pidns/dump.log | grep -B 5 Error || echo ok
+cat images_pidns/restore.log | grep -B 5 Error || echo ok
 [ "$RESULT" != "0" ] && {
 	echo "CRIU restore failed"
 	echo FAIL
 	exit 1
 }
 
-PID=$(pgrep -x -f "sh _run_pidns.sh" -n)
+PID=$(cat images_pidns/test.pidfile)
 AFTER=$(grep NSpid /proc/$PID/status)
 echo "after c/r: $AFTER"
 echo PASS
