@@ -447,6 +447,7 @@ static int parasite_run(pid_t pid, int cmd, unsigned long ip, void *stack,
 	k_rtsigset_t block;
 
 	ksigfillset(&block);
+	block.sig[0] = block.sig[0] & ~(1<<(SIGTRAP - 1));
 	if (ptrace(PTRACE_SETSIGMASK, pid, sizeof(k_rtsigset_t), &block)) {
 		pr_perror("Can't block signals for %d", pid);
 		goto err_sig;
