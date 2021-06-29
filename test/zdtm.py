@@ -881,6 +881,41 @@ class criu_cli:
             return cr
         return cr.wait()
 
+class criu_conf:
+    @staticmethod
+    def run(action,
+            args,
+            criu_bin,
+            fault=None,
+            strace=[],
+            preexec=None,
+            nowait=False):
+
+        config = tempfile.mktemp(".conf", "criu-%s-" % action)
+        with open(config, "w") as fconf:
+            for arg in args:
+                if arg.startswith("-"):
+                    fconf.write("\n")
+                    arg = arg.strip("-")
+                fconf.write("%s " % arg)
+        args = ["--config", config]
+        env = dict(
+            os.environ,
+            ASAN_OPTIONS="log_path=asan.log:disable_coredump=0:detect_leaks=0")
+
+        if fault:
+            print("Forcing %s fault" % fault)
+            env['CRIU_FAULT'] = fault
+
+        cr = subprocess.Popen(strace +
+                              [criu_bin, action, "--no-default-config"] + args,
+                              env=env,
+                              close_fds=False,
+                              preexec_fn=preexec)
+        if nowait:
+            return cr
+        return cr.wait()
+
 
 class criu_rpc_process:
     def wait(self):
@@ -1034,7 +1069,6 @@ class criu:
         self.__user = bool(opts['user'])
         self.__leave_stopped = bool(opts['stop'])
         self.__stream = bool(opts['stream'])
-        self.__criu = (opts['rpc'] and criu_rpc or criu_cli)
         self.__show_stats = bool(opts['show_stats'])
         self.__lazy_pages_p = None
         self.__page_server_p = None
@@ -1043,6 +1077,13 @@ class criu:
         self.__criu_bin = opts['criu_bin']
         self.__crit_bin = opts['crit_bin']
         self.__pre_dump_mode = opts['pre_dump_mode']
+
+        if opts['rpc']:
+            self.__criu = criu_rpc
+        elif opts['criu_conf']:
+            self.__criu = criu_conf
+        else:
+            self.__criu = criu_cli
 
     def fini(self):
         if self.__lazy_migrate:
@@ -1110,7 +1151,7 @@ class criu:
         if not log:
             log = action + ".log"
 
-        s_args = ["-o", log, "-D", self.__ddir(), "-v4"] + opts
+        s_args = ["--log-file", log, "--images-dir", self.__ddir(), "--verbosity=4"] + opts
 
         with open(os.path.join(self.__ddir(), action + '.cropt'), 'w') as f:
             f.write(' '.join(s_args) + '\n')
@@ -1294,7 +1335,7 @@ class criu:
         os.mkdir(self.__ddir())
         os.chmod(self.__ddir(), 0o777)
 
-        a_opts = ["-t", self.__test.getpid()]
+        a_opts = ["--tree", self.__test.getpid()]
         if self.__prev_dump_iter:
             a_opts += [
                 "--prev-images-dir",
@@ -1439,7 +1480,7 @@ class criu:
                 return False
 
         return criu_cli.run(
-            "check", ["--no-default-config", "-v0", "--feature", feature],
+            "check", ["--no-default-config", "--verbosity=0", "--feature", feature],
             opts['criu_bin']) == 0
 
     @staticmethod
@@ -1979,7 +2020,7 @@ class Launcher:
 
         nd = ('nocr', 'norst', 'pre', 'iters', 'page_server', 'sibling',
               'stop', 'empty_ns', 'fault', 'keep_img', 'report', 'snaps',
-              'sat', 'script', 'rpc', 'lazy_pages', 'join_ns', 'dedup', 'sbs',
+              'sat', 'script', 'rpc', 'criu_conf', 'lazy_pages', 'join_ns', 'dedup', 'sbs',
               'freezecg', 'user', 'dry_run', 'noauto_dedup',
               'remote_lazy_pages', 'show_stats', 'lazy_migrate', 'stream',
               'tls', 'criu_bin', 'crit_bin', 'pre_dump_mode')
@@ -2604,6 +2645,10 @@ rp.add_argument("--freezecg", help="Use freeze cgroup (path:state)")
 rp.add_argument("--user", help="Run CRIU as regular user", action='store_true')
 rp.add_argument("--rpc",
                 help="Run CRIU via RPC rather than CLI",
+                action='store_true')
+
+rp.add_argument("--criu-conf",
+                help="Run CRIU with all options in a config file",
                 action='store_true')
 
 rp.add_argument("--page-server",
