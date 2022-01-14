@@ -201,6 +201,10 @@ fi
 
 # shellcheck disable=SC2086
 ./test/zdtm.py run -a -p 2 --keep-going $ZDTM_OPTS
+if criu/criu check --feature move_mount_set_group; then
+	# shellcheck disable=SC2086
+	./test/zdtm.py run -a -p 2 --mounts-v2 --keep-going $ZDTM_OPTS
+fi
 
 # Newer kernels are blocking access to userfaultfd:
 # uffd: Set unprivileged_userfaultfd sysctl knob to 1 if kernel faults must be handled without obtaining CAP_SYS_PTRACE capability
