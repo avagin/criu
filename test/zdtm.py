@@ -936,6 +936,8 @@ class criu_rpc:
                 if key == "splice":
                     mode = crpc.rpc.SPLICE
                 criu.opts.pre_dump_mode = mode
+            elif "--on-demand" == arg:
+                criu.opts.on_demand = True
             elif "--track-mem" == arg:
                 criu.opts.track_mem = True
             elif "--tcp-established" == arg:
@@ -1046,6 +1048,7 @@ class criu:
         self.__criu_bin = opts['criu_bin']
         self.__crit_bin = opts['crit_bin']
         self.__pre_dump_mode = opts['pre_dump_mode']
+        self.__on_demand = opts['on_demand']
 
     def fini(self):
         if self.__lazy_migrate:
@@ -1409,6 +1412,9 @@ class criu:
 
         if self.__dedup:
             r_opts += ["--auto-dedup"]
+
+        if self.__on_demand:
+            r_opts += ["--on-demand"]
 
         self.__prev_dump_iter = None
         criu_dir = os.path.dirname(os.getcwd())
@@ -2025,7 +2031,7 @@ class Launcher:
               'sat', 'script', 'rpc', 'lazy_pages', 'join_ns', 'dedup', 'sbs',
               'freezecg', 'user', 'dry_run', 'noauto_dedup',
               'remote_lazy_pages', 'show_stats', 'lazy_migrate', 'stream',
-              'tls', 'criu_bin', 'crit_bin', 'pre_dump_mode')
+              'tls', 'criu_bin', 'crit_bin', 'pre_dump_mode', 'on_demand')
         arg = repr((name, desc, flavor, {d: self.__opts[d] for d in nd}))
 
         if self.__use_log:
@@ -2690,6 +2696,9 @@ rp.add_argument("--ignore-taint",
                 help="Don't care about a non-zero kernel taint flag",
                 action='store_true')
 rp.add_argument("--lazy-pages",
+                help="restore pages on demand",
+                action='store_true')
+rp.add_argument("--on-demand",
                 help="restore pages on demand",
                 action='store_true')
 rp.add_argument("--lazy-migrate",
