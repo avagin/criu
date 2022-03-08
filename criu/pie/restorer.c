@@ -368,19 +368,21 @@ static inline int restore_pdeath_sig(struct thread_restore_args *ta)
 static int map_iovec(struct iovec *iovs, loff_t off, int nr, struct task_restore_args *args)
 {
 	/* Using mmap to load content as an on-demand way rather than egarly read all the content */
-	int j;
-	VmaEntry *tmp_entry;
 	unsigned long iov_size, tmp;
 	loff_t local_offset = off;
 	ssize_t local_r, r = 0;
+	int j;
 
 	for (j = 0; j < nr; j++) {
 		/* p = iov_base and grow up, end = base + len */
 		unsigned long iov_offset = 0;
 		unsigned long end = iovs[j].iov_len;
+
 		pr_debug("Change preadv to map of iov buffer %d, iov base %p\n", j, iovs[j].iov_base);
 		/* Considering the iov buffer may cross multiple regions */
 		while (iov_offset < end) {
+			VmaEntry *tmp_entry;
+
 			/* Find the vma_entry */
 			tmp_entry = lookup(iovs[j].iov_base + iov_offset, args);
 			iov_size = tmp_entry->end < (unsigned long)iovs[j].iov_base + end ?
@@ -394,17 +396,21 @@ static int map_iovec(struct iovec *iovs, loff_t off, int nr, struct task_restore
 			 * which is not VMA_AREA_REGULAR, and stack area, whose flag has MAP_GROWSDOWN still need
 			 * to use `sys_pread`.
 			 */
-			if (!vma_entry_is(tmp_entry, VMA_AREA_REGULAR) || (tmp_entry->flags & MAP_GROWSDOWN) ||
-			    (tmp_entry->flags & MAP_ANONYMOUS) || (tmp_entry->flags & MAP_HUGETLB) ||
-			    (tmp_entry->flags & MAP_SHARED) || (tmp_entry->prot & PROT_WRITE)) {
+			if (!vma_entry_is(tmp_entry, VMA_AREA_REGULAR) ||
+			    (tmp_entry->flags & MAP_GROWSDOWN) ||
+			    (tmp_entry->flags & MAP_HUGETLB) ||
+			    (tmp_entry->flags & MAP_SHARED)) {
 				local_r = sys_pread(args->vma_ios_fd, iovs[j].iov_base + iov_offset, iov_size,
 						    local_offset);
 				pr_debug("Can't use mmap, still choose pread, %p, %ld, %d\n",
 					 iovs[j].iov_base + iov_offset, iov_size, args->vma_ios_fd);
 
 			} else {
-				tmp = sys_mmap(iovs[j].iov_base + iov_offset, iov_size, tmp_entry->prot,
-					       tmp_entry->flags | MAP_FIXED | MAP_PRIVATE, args->vma_ios_fd,
+				tmp = sys_mmap(iovs[j].iov_base + iov_offset, iov_size,
+					       tmp_entry->prot,
+					       (tmp_entry->flags & ~MAP_ANONYMOUS) |
+					       MAP_FILE| MAP_FIXED | MAP_PRIVATE,
+					       args->vma_ios_fd,
 					       local_offset);
 				if (tmp != (unsigned long)iovs[j].iov_base + iov_offset) {
 					pr_err("Unable to map page content %p (%lx)\n", iovs[j].iov_base + iov_offset,
