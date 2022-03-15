@@ -1765,17 +1765,28 @@ static int cr_dump_finish(int ret)
 
 	if (arch_set_thread_regs(root_item, true) < 0)
 		return -1;
+	pr_err("================= ret = %d, post_dump_ret = %d\n", ret, post_dump_ret);
 	pstree_switch_state(root_item, (ret || post_dump_ret) ? TASK_ALIVE : opts.final_state);
+	pr_err("=================\n");
 	timing_stop(TIME_FROZEN);
+	pr_err("=================\n");
 	free_pstree(root_item);
+	pr_err("=================\n");
 	seccomp_free_entries();
+	pr_err("=================\n");
 	free_file_locks();
+	pr_err("=================\n");
 	free_link_remaps();
+	pr_err("=================\n");
 	free_aufs_branches();
+	pr_err("=================\n");
 	free_userns_maps();
+	pr_err("=================\n");
 
 	close_service_fd(CR_PROC_FD_OFF);
+	pr_err("=================\n");
 	close_image_dir();
+	pr_err("=================\n");
 
 	if (ret) {
 		pr_err("Dumping FAILED.\n");
