@@ -139,6 +139,8 @@ time make unittest
 
 ulimit -c unlimited
 
+./test/zdtm_mount_cgroups $$
+ 
 echo "|$(pwd)/test/abrt.sh %P %p %s %e" > /proc/sys/kernel/core_pattern
 
 if [ "${COMPAT_TEST}x" = "yx" ] ; then
