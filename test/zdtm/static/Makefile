@@ -346,6 +346,7 @@ TST_FILE	=				\
 		socket_close_data01		\
 		fifo_upon_unix_socket00		\
 		fifo_upon_unix_socket01		\
+		sk-unix-listen			\
 
 TST_DIR		=				\
 		cwd00				\
