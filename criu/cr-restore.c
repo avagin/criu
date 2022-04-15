@@ -2078,7 +2078,7 @@ static int clear_breakpoints(void)
 		if (!task_alive(item))
 			continue;
 		for (i = 0; i < item->nr_threads; i++)
-			ret |= ptrace_flush_breakpoints(item->threads[i].real);
+			ret |= ptrace_flush_breakpoints(item->threads[i].real, true);
 	}
 
 	return ret;
