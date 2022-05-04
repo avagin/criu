@@ -207,9 +207,8 @@ if [ "${STREAM_TEST}" = "1" ]; then
 fi
 
 # shellcheck disable=SC2086
-for i in `seq 10`; do
-./test/zdtm.py run -t zdtm/static/macvlan -t zdtm/static/bridge -t zdtm/static/sit -t zdtm/static/cr_veth -t zdtm/static/cr_veth02 -t zdtm/static/netns_sub_veth -p 2 --keep-going $ZDTM_OPTS
-done
+./test/zdtm.py run -a -p 2 --keep-going $ZDTM_OPTS -f uns
+./test/zdtm.py run -a -p 2 --keep-going $ZDTM_OPTS -f h,ns
 
 exit 0
 if criu/criu check --feature move_mount_set_group; then
