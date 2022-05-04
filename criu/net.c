@@ -1203,6 +1203,7 @@ static int populate_newlink_req(struct ns_id *ns, struct newlink_req *req, int m
 		if (extras->link >= 0)
 			addattr_l(&req->h, sizeof(*req), IFLA_LINK, &extras->link, sizeof(extras->link));
 
+		pr_err("target_ns %d\n", extras->target_netns);
 		if (extras->target_netns >= 0)
 			addattr_l(&req->h, sizeof(*req), IFLA_NET_NS_FD, &extras->target_netns,
 				  sizeof(extras->target_netns));
@@ -1212,7 +1213,7 @@ static int populate_newlink_req(struct ns_id *ns, struct newlink_req *req, int m
 	addattr_l(&req->h, sizeof(*req), IFLA_MTU, &nde->mtu, sizeof(nde->mtu));
 
 	if (nde->has_address) {
-		pr_debug("Restore ll addr (%02x:../%d) for device\n", (int)nde->address.data[0], (int)nde->address.len);
+		pr_err("Restore ll addr (%02x:../%d) for device\n", (int)nde->address.data[0], (int)nde->address.len);
 		addattr_l(&req->h, sizeof(*req), IFLA_ADDRESS, nde->address.data, nde->address.len);
 	}
 
@@ -1390,7 +1391,7 @@ static int move_veth(const char *netdev, struct ns_id *ns, struct net_link *link
 	addattr_l(&req->h, sizeof(*req), IFLA_NEW_IFINDEX, &nde->ifindex, sizeof(nde->ifindex));
 
 	if (nde->has_address) {
-		pr_debug("Restore ll addr (%02x:../%d) for device with target ifindex %d\n", (int)nde->address.data[0],
+		pr_err("Restore ll addr (%02x:../%d) for device with target ifindex %d\n", (int)nde->address.data[0],
 			 (int)nde->address.len, nde->ifindex);
 		addattr_l(&req->h, sizeof(*req), IFLA_ADDRESS, nde->address.data, nde->address.len);
 	}

@@ -207,7 +207,11 @@ if [ "${STREAM_TEST}" = "1" ]; then
 fi
 
 # shellcheck disable=SC2086
-./test/zdtm.py run -a -p 2 --keep-going $ZDTM_OPTS
+for i in `seq 10`; do
+./test/zdtm.py run -t zdtm/static/bridge -t zdtm/static/cr_veth -t zdtm/static/cr_veth02 -t zdtm/static/netns_sub_veth -p 2 --keep-going $ZDTM_OPTS
+done
+
+exit 0
 if criu/criu check --feature move_mount_set_group; then
 	# shellcheck disable=SC2086
 	./test/zdtm.py run -a -p 2 --mntns-compat-mode --keep-going $ZDTM_OPTS

@@ -89,11 +89,20 @@ int main(int argc, char **argv)
 		fail("Can't save net config");
 		goto out;
 	}
+	if (system("ip a > bridge-full.dump.test")) {
+		pr_perror("can't save net config");
+		fail("Can't save net config");
+		goto out;
+	}
 
 	test_daemon();
 	test_waitsig();
 
 	if (system("ip addr list dev " BRIDGE_NAME " | grep inet | sort > bridge.rst.test")) {
+		fail("Can't get net config");
+		goto out;
+	}
+	if (system("ip a  > bridge-full.rst.test")) {
 		fail("Can't get net config");
 		goto out;
 	}
