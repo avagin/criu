@@ -208,7 +208,7 @@ fi
 
 # shellcheck disable=SC2086
 for i in `seq 10`; do
-./test/zdtm.py run -t zdtm/static/bridge -t zdtm/static/cr_veth -t zdtm/static/cr_veth02 -t zdtm/static/netns_sub_veth -p 2 --keep-going $ZDTM_OPTS
+./test/zdtm.py run -t zdtm/static/macvlan -t zdtm/static/bridge -t zdtm/static/sit -t zdtm/static/cr_veth -t zdtm/static/cr_veth02 -t zdtm/static/netns_sub_veth -p 2 --keep-going $ZDTM_OPTS
 done
 
 exit 0
