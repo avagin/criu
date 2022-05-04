@@ -220,7 +220,6 @@ TST_NOFILE	:=				\
 		helper_zombie_child		\
 		clone_fs			\
 		macvlan			\
-		sit				\
 		cr_veth				\
 		cr_veth02			\
 		sock_peercred			\
