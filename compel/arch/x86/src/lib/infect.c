@@ -612,7 +612,7 @@ int ptrace_set_breakpoint(pid_t pid, void *addr)
 	return 1;
 }
 
-int ptrace_flush_breakpoints(pid_t pid, bool restore)
+int ptrace_flush_breakpoints(pid_t pid)
 {
 	/* Disable the breakpoint */
 	if (ptrace(PTRACE_POKEUSER, pid, offsetof(struct user, u_debugreg[DR_CONTROL]), 0)) {

@@ -37,6 +37,6 @@ struct hwbp_cap {
 #define ENABLE_HBP  1
 
 int ptrace_set_breakpoint(pid_t pid, void *addr);
-int ptrace_flush_breakpoints(pid_t pid, bool restore);
+int ptrace_flush_breakpoints(pid_t pid);
 
 #endif

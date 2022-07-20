@@ -251,7 +251,7 @@ int ptrace_set_breakpoint(pid_t pid, void *addr)
 	return 1;
 }
 
-int ptrace_flush_breakpoints(pid_t pid, bool restore)
+int ptrace_flush_breakpoints(pid_t pid)
 {
 	struct hwbp_cap *info = ptrace_get_hwbp_cap(pid);
 	struct user_hwdebug_state regs = {};
@@ -273,68 +273,6 @@ int ptrace_flush_breakpoints(pid_t pid, bool restore)
 
 	if (ptrace(PTRACE_SETREGSET, pid, NT_ARM_HW_BREAK, &iovec))
 		return -1;
-
-	/*
-	 * It's okay to return directly during checkpointing procedure, the
-	 * program will stop at the `svc` instruction fetching point.
-	 */
-	if (!restore)
-		return 0;
-
-	/*
-	 * The restorer stops at the breakpoint, but segment fault will trigger
-	 * if the function returns here. The reason is that the breakpoint event
-	 * happens before the instruction(`svc`) is fetched, the segment fault
-	 * will trigger once the restorer continues to execute after the
-	 * parasite blob area is mumapped.
-	 * To prevent the above problem, use single step debug tip here. It will
-	 * make restorer to execute `svc` instruction, then stop to the status
-	 * which is the same as using `ptrace(SYSCALL)`.
-	 */
-	if (ptrace(PTRACE_SINGLESTEP, pid, NULL, NULL)) {
-		pr_perror("Unable to restart the %d process", pid);
-		return -1;
-	}
-
-	return 0;
-}
-
-static bool task_is_trapped(int status, pid_t pid)
-{
-	if (WIFSTOPPED(status) && WSTOPSIG(status) == SIGTRAP)
-		return true;
-
-	pr_err("Task %d is in unexpected state: %x\n", pid, status);
-	if (WIFEXITED(status))
-		pr_err("Task exited with %d\n", WEXITSTATUS(status));
-	if (WIFSIGNALED(status))
-		pr_err("Task signaled with %d: %s\n", WTERMSIG(status), strsignal(WTERMSIG(status)));
-	if (WIFSTOPPED(status))
-		pr_err("Task stopped with %d: %s\n", WSTOPSIG(status), strsignal(WSTOPSIG(status)));
-	if (WIFCONTINUED(status))
-		pr_err("Task continued\n");
-
-	return false;
-}
-
-/* wait single step debug trap event */
-int arch_wait_tasks_trap(int tasks)
-{
-	int status;
-	pid_t pid;
-
-	while (tasks > 0) {
-		pid = wait4(-1, &status, __WALL, NULL);
-		if (pid == -1) {
-			pr_perror("wait failed");
-			return -1;
-		}
-
-		if (task_is_trapped(status, pid))
-			tasks -= 1;
-		else
-			return -1;
-	}
 
 	return 0;
 }

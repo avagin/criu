@@ -2027,7 +2027,7 @@ static int restore_rseq_cs(void)
 	return 0;
 }
 
-static int catch_tasks(bool root_seized, enum trace_flags *flag)
+static int catch_tasks(bool root_seized)
 {
 	struct pstree_item *item;
 
@@ -2057,17 +2057,12 @@ static int catch_tasks(bool root_seized, enum trace_flags *flag)
 				return -1;
 			}
 
-			ret = compel_stop_pie(pid, rsti(item)->breakpoint, flag, fault_injected(FI_NO_BREAKPOINTS));
+			ret = compel_stop_pie(pid, rsti(item)->breakpoint, fault_injected(FI_NO_BREAKPOINTS));
 			if (ret < 0)
 				return -1;
 		}
 	}
 
-	return 0;
-}
-
-int __attribute__((weak)) arch_wait_tasks_trap(int nr)
-{
 	return 0;
 }
 
@@ -2083,11 +2078,11 @@ static int clear_breakpoints(void)
 		if (!task_alive(item))
 			continue;
 		for (i = 0; i < item->nr_threads; i++)
-			ret |= ptrace_flush_breakpoints(item->threads[i].real, true);
+			ret |= ptrace_flush_breakpoints(item->threads[i].real);
 		nr += item->nr_threads;
 	}
 
-	return arch_wait_tasks_trap(nr);
+	return 0;
 }
 
 static void finalize_restore(void)
@@ -2230,7 +2225,6 @@ static void reap_zombies(void)
 
 static int restore_root_task(struct pstree_item *init)
 {
-	enum trace_flags flag = TRACE_ALL;
 	int ret, fd, mnt_ns_fd = -1;
 	int root_seized = 0;
 	struct pstree_item *item;
@@ -2445,7 +2439,7 @@ skip_ns_bouncing:
 
 	timing_stop(TIME_RESTORE);
 
-	if (catch_tasks(root_seized, &flag)) {
+	if (catch_tasks(root_seized)) {
 		pr_err("Can't catch all tasks\n");
 		goto out_kill_network_unlocked;
 	}
@@ -2455,7 +2449,7 @@ skip_ns_bouncing:
 
 	__restore_switch_stage(CR_STATE_COMPLETE);
 
-	ret = compel_stop_on_syscall(task_entries->nr_threads, __NR(rt_sigreturn, 0), __NR(rt_sigreturn, 1), flag);
+	ret = compel_stop_on_syscall(task_entries->nr_threads, __NR(rt_sigreturn, 0), __NR(rt_sigreturn, 1));
 	if (ret) {
 		pr_err("Can't stop all tasks on rt_sigreturn\n");
 		goto out_kill_network_unlocked;
