@@ -125,7 +125,7 @@ bool should_dump_page(VmaEntry *vmae, u64 pme)
 		return false;
 	if (vma_entry_is(vmae, VMA_AREA_AIORING))
 		return true;
-	if ((pme & (PME_PRESENT | PME_SWAP)) && !__page_is_zero(pme))
+	if (pme & (PME_PRESENT | PME_SWAP))
 		return true;
 
 	return false;
@@ -163,26 +163,115 @@ static bool is_stack(struct pstree_item *item, unsigned long vaddr)
  * "Holes" in page-pipe are regions, that should be dumped, but
  * the memory contents is present in the pagent image set.
  */
+struct page_region {
+        __u64 start;
+        __u64 len;
+        __u64 flags;
+};
 
-static int generate_iovs(struct pstree_item *item, struct vma_area *vma, struct page_pipe *pp, u64 *map, u64 *off,
+struct pm_scan_arg {
+        __u64 size;
+        __u64 flags;
+        __u64 start;
+        __u64 len;
+        __u64 vec;
+        __u64 vec_len;
+        __u64 max_pages;
+        __u64 required_mask;
+        __u64 anyof_mask;
+        __u64 excluded_mask;
+        __u64 return_mask;
+};
+#define PAGEMAP_SCAN    _IOWR('f', 16, struct pm_scan_arg)
+
+#define PAGE_IS_WRITTEN         (1 << 0)
+#define PAGE_IS_FILE            (1 << 1)
+#define PAGE_IS_PRESENT         (1 << 2)
+#define PAGE_IS_SWAPPED         (1 << 3)
+
+#define PM_SCAN_OP_GET  (1 << 0)                                                          
+#define PM_SCAN_OP_WP   (1 << 1)
+
+static int generate_iovs(pmc_t *pmc, struct pstree_item *item, struct vma_area *vma, struct page_pipe *pp, u64 *map, u64 *off,
 			 bool has_parent)
 {
 	u64 *at = &map[PAGE_PFN(*off)];
 	unsigned long pfn, nr_to_scan;
 	unsigned long pages[3] = {};
+	struct pm_scan_arg pmargs = {};
+	struct page_region regions[4096];
 	int ret = 0;
+	long n, vec_idx, vec_off;
 
 	nr_to_scan = (vma_area_len(vma) - *off) / PAGE_SIZE;
 
+	if (vma_entry_is(vma->e, VMA_AREA_VVAR))
+		return 0;
+
+	if (vma_entry_is(vma->e, VMA_AREA_VDSO) || vma_entry_is(vma->e, VMA_AREA_AIORING)) {
+		n = 1;
+		regions[0].start = vma->e->start + *off;;
+		regions[0].len = vma_area_len(vma) - *off;
+		regions[0].flags = PAGE_IS_PRESENT;
+	} else {
+		pmargs.size = sizeof(pmargs);
+		pmargs.start = vma->e->start + *off;
+		pmargs.len = vma_area_len(vma) - *off;
+		pmargs.vec = (unsigned long)regions;
+		pmargs.vec_len = 4096;
+		pmargs.anyof_mask = PAGE_IS_PRESENT | PAGE_IS_SWAPPED | PAGE_IS_FILE;
+		pmargs.excluded_mask = PAGE_IS_FILE;
+		pmargs.required_mask = 0;
+		pmargs.return_mask = PAGE_IS_PRESENT | PAGE_IS_SWAPPED | PAGE_IS_FILE;
+		pmargs.flags = PM_SCAN_OP_GET;
+
+		n = ioctl(pmc->fd, PAGEMAP_SCAN, &pmargs);
+		if (n  == -1) {
+			pr_perror("PAGEMAP_SCAN");
+			return -1;
+		}
+		pr_err("req %lx %lx -> %ld\n", vma->e->start + *off, vma_area_len(vma) - *off, n);
+	}
+
+	vec_idx = 0;
+	vec_off = 0;
 	for (pfn = 0; pfn < nr_to_scan; pfn++) {
 		unsigned long vaddr;
 		unsigned int ppb_flags = 0;
 		int st;
 
+		vaddr = vma->e->start + *off + pfn * PAGE_SIZE;
+		{
+			struct page_region *r = regions + vec_idx;
+			unsigned long addr;
+			addr = r->start + vec_off * PAGE_SIZE;
+			pr_err("%lx %lx %lx %lx\n", addr, vaddr, at[pfn], pfn);
+		}
 		if (!should_dump_page(vma->e, at[pfn]))
 			continue;
 
-		vaddr = vma->e->start + *off + pfn * PAGE_SIZE;
+		if (__page_is_zero(at[pfn]))
+			continue;
+
+		{
+			struct page_region *r = regions + vec_idx;
+			unsigned long addr;
+			if (vec_idx == n) {
+				pr_err("out of bound pfn %016lx zero %d\n", at[pfn], __page_is_zero(at[pfn]));
+				return -1;
+			}
+			pr_err("%016llx %016llx %llx\n", r->start, r->start + r->len * 4096, r->flags);
+			addr = r->start + vec_off * PAGE_SIZE;
+			if (addr != vaddr) {
+				pr_err("add mismatch: %lx %lx %lx\n", addr, vaddr, at[pfn]);
+				return -1;
+			}
+			vec_off++;
+			if (vec_off >= r->len) {
+				vec_off = 0;
+				vec_idx++;
+			}
+		}
 
 		if (vma_entry_can_be_lazy(vma->e) && !is_stack(item, vaddr))
 			ppb_flags |= PPB_LAZY;
@@ -429,7 +518,7 @@ static int generate_vma_iovs(struct pstree_item *item, struct vma_area *vma, str
 		return add_shmem_area(item->pid->real, vma->e, map);
 
 again:
-	ret = generate_iovs(item, vma, pp, map, &off, has_parent);
+	ret = generate_iovs(pmc, item, vma, pp, map, &off, has_parent);
 	if (ret == -EAGAIN) {
 		BUG_ON(!(pp->flags & PP_CHUNK_MODE));
 
