@@ -217,6 +217,9 @@ if [ "${STREAM_TEST}" = "1" ]; then
 	exit 0
 fi
 
+cat /proc/self/mountinfo
+uname -a
+./test/zdtm.py run -t zdtm/static/fanotify00
 ./test/zdtm.py run -a -p 2 --keep-going "${ZDTM_OPTS[@]}"
 if criu/criu check --feature move_mount_set_group; then
 	./test/zdtm.py run -a -p 2 --mntns-compat-mode --keep-going "${ZDTM_OPTS[@]}"
