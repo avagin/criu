@@ -116,7 +116,7 @@ struct tp_node *sys_get_node_by_gpu_id(const struct tp_system *sys, const uint32
 struct tp_node *sys_get_node_by_render_minor(const struct tp_system *sys, const int drm_render_minor);
 struct tp_node *sys_get_node_by_index(const struct tp_system *sys, uint32_t index);
 
-int node_get_drm_render_device(struct tp_node *node);
+int node_get_drm_render_device(struct tp_node *node, bool restore);
 void sys_close_drm_render_devices(struct tp_system *sys);
 
 int set_restore_gpu_maps(struct tp_system *tp_checkpoint, struct tp_system *tp_local, struct device_maps *maps);

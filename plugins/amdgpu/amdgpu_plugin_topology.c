@@ -15,6 +15,7 @@
 #include "common/list.h"
 
 #include "xmalloc.h"
+#include "fdstore.h"
 #include "kfd_ioctl.h"
 #include "amdgpu_plugin_topology.h"
 
@@ -61,17 +62,10 @@ bool kfd_numa_check = true;
 /* Skip capability check */
 bool kfd_capability_check = true;
 
-/*
- * During dump, we can use any fd value so fd_next is always -1.
- * During restore, we have to use a fd value that does not conflict with fd values in use by the target restore process.
- * fd_next is initialized as 1 greater than the highest-numbered file descriptor used by the target restore process.
- */
-int fd_next = -1;
-
 static int open_drm_render_device(int minor)
 {
 	char path[128];
-	int fd, ret_fd;
+	int fd;
 
 	if (minor < DRM_FIRST_RENDER_NODE || minor > DRM_LAST_RENDER_NODE) {
 		pr_perror("DRM render minor %d out of range [%d, %d]", minor, DRM_FIRST_RENDER_NODE,
@@ -90,16 +84,7 @@ static int open_drm_render_device(int minor)
 		return -EBADFD;
 	}
 
-	if (fd_next < 0)
-		return fd;
-
-	ret_fd = fcntl(fd, F_DUPFD, fd_next++);
-	close(fd);
-
-	if (ret_fd < 0)
-		pr_perror("Failed to duplicate fd for minor:%d (fd_next:%d)", minor, fd_next);
-
-	return ret_fd;
+	return fd;
 }
 
 static const char *link_type(uint32_t type)
@@ -124,11 +109,23 @@ static struct tp_node *p2pgroup_get_node_by_gpu_id(const struct tp_p2pgroup *gro
 	return NULL;
 }
 
-int node_get_drm_render_device(struct tp_node *node)
+int node_get_drm_render_device(struct tp_node *node, bool restore)
 {
-	if (node->drm_fd < 0)
-		node->drm_fd = open_drm_render_device(node->drm_render_minor);
+	if (node->drm_fd < 0) {
+		int fd = open_drm_render_device(node->drm_render_minor);
+		node->drm_fd = fd;
+		if (restore) {
+			node->drm_fd = fdstore_add(fd);
+			if (node->drm_fd < 0) {
+				close(fd);
+				return -1;
+			}
+		}
+		return fd;
+	}
 
+	if (restore)
+		return fdstore_get(node->drm_fd);
 	return node->drm_fd;
 }
 

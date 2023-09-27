@@ -200,6 +200,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <errno.h>
+#include <unistd.h>
 #include "common/list.h"
 
 #include "amdgpu_plugin_topology.h"
@@ -1075,6 +1076,16 @@ struct test {
 	int (*test_func)(void);
 	bool success; /* true if we expect function to return 0 */
 };
+
+int fdstore_add(int fd)
+{
+	return dup(fd);
+}
+
+int fdstore_get(int id)
+{
+	return dup(id);
+}
 
 int main(int argc, char **argv)
 {

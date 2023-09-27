@@ -85,7 +85,7 @@ struct vma_metadata {
 	uint64_t new_pgoff;
 	uint64_t vma_entry;
 	uint32_t new_minor;
-	int fd;
+	struct tp_node *node;
 };
 
 /************************************ Global Variables ********************************************/
@@ -94,8 +94,6 @@ struct tp_system dest_topology;
 
 struct device_maps checkpoint_maps;
 struct device_maps restore_maps;
-
-extern int fd_next;
 
 static LIST_HEAD(update_vma_info_list);
 
@@ -529,9 +527,6 @@ int amdgpu_plugin_init(int stage)
 void amdgpu_plugin_fini(int stage, int ret)
 {
 	pr_info("finished  %s (AMDGPU/KFD)\n", CR_PLUGIN_DESC.name);
-
-	if (stage == CR_PLUGIN_STAGE__RESTORE)
-		sys_close_drm_render_devices(&dest_topology);
 
 	maps_free(&checkpoint_maps);
 	maps_free(&restore_maps);
@@ -1258,7 +1253,7 @@ static int save_bos(int id, int fd, struct kfd_ioctl_criu_args *args, struct kfd
 		thread_datas[i].bo_entries = e->bo_entries;
 		thread_datas[i].pid = e->pid;
 		thread_datas[i].num_of_bos = args->num_bos;
-		thread_datas[i].drm_fd = node_get_drm_render_device(dev);
+		thread_datas[i].drm_fd = node_get_drm_render_device(dev, false);
 		if (thread_datas[i].drm_fd < 0) {
 			ret = thread_datas[i].drm_fd;
 			goto exit;
@@ -1551,7 +1546,7 @@ static int restore_devices(struct kfd_ioctl_criu_args *args, CriuKfd *e)
 			goto exit;
 		}
 
-		device_bucket->drm_fd = node_get_drm_render_device(tp_node);
+		device_bucket->drm_fd = node_get_drm_render_device(tp_node, true);
 		if (device_bucket->drm_fd < 0) {
 			pr_perror("Can't pass NULL drm render fd to driver");
 			goto exit;
@@ -1563,6 +1558,16 @@ static int restore_devices(struct kfd_ioctl_criu_args *args, CriuKfd *e)
 exit:
 	pr_info("Restore devices %s (ret:%d)\n", ret ? "Failed" : "Ok", ret);
 	return ret;
+}
+
+static void release_devices(struct kfd_ioctl_criu_args *args)
+{
+	struct kfd_criu_device_bucket *device_buckets = (void *)args->devices;
+
+	for (int i = 0; i < args->num_devices; i++) {
+		close(device_buckets[i].drm_fd);
+		device_buckets[i].drm_fd = -1;
+	}
 }
 
 static int restore_bos(struct kfd_ioctl_criu_args *args, CriuKfd *e)
@@ -1638,7 +1643,12 @@ static int restore_bo_data(int id, struct kfd_criu_bo_bucket *bo_buckets, CriuKf
 
 			vma_md->new_minor = tp_node->drm_render_minor;
 			vma_md->new_pgoff = bo_bucket->restored_offset;
-			vma_md->fd = node_get_drm_render_device(tp_node);
+			vma_md->node = tp_node;
+			ret = node_get_drm_render_device(tp_node, true);
+			if (ret < 0)
+				goto exit;
+			close(ret);
+			ret = 0;
 
 			plugin_log_msg("adding vma_entry:addr:0x%lx old-off:0x%lx "
 				       "new_off:0x%lx new_minor:%d\n",
@@ -1675,7 +1685,7 @@ static int restore_bo_data(int id, struct kfd_criu_bo_bucket *bo_buckets, CriuKf
 		thread_datas[thread_i].pid = e->pid;
 		thread_datas[thread_i].num_of_bos = e->num_of_bos;
 
-		thread_datas[thread_i].drm_fd = node_get_drm_render_device(dev);
+		thread_datas[thread_i].drm_fd = node_get_drm_render_device(dev, true);
 		if (thread_datas[thread_i].drm_fd < 0) {
 			ret = -thread_datas[thread_i].drm_fd;
 			goto exit;
@@ -1695,6 +1705,7 @@ static int restore_bo_data(int id, struct kfd_criu_bo_bucket *bo_buckets, CriuKf
 		pthread_join(thread_datas[i].thread, NULL);
 		pr_info("Thread[0x%x] finished ret:%d\n", thread_datas[i].gpu_id, thread_datas[i].ret);
 
+		close(thread_datas[i].drm_fd);
 		if (thread_datas[i].ret) {
 			ret = thread_datas[i].ret;
 			goto exit;
@@ -1781,7 +1792,7 @@ int amdgpu_plugin_restore_file(int id)
 
 		pr_info("render node destination gpu_id = 0x%04x\n", tp_node->gpu_id);
 
-		fd = node_get_drm_render_device(tp_node);
+		fd = node_get_drm_render_device(tp_node, true);
 		if (fd < 0)
 			pr_err("Failed to open render device (minor:%d)\n", tp_node->drm_render_minor);
 	fail:
@@ -1834,18 +1845,6 @@ int amdgpu_plugin_restore_file(int id)
 
 	plugin_log_msg("read image file data\n");
 
-	/*
-	 * Initialize fd_next to be 1 greater than the biggest file descriptor in use by the target restore process.
-	 * This way, we know that the file descriptors we store will not conflict with file descriptors inside core
-	 * CRIU.
-	 */
-	fd_next = find_unused_fd_pid(e->pid);
-	if (fd_next <= 0) {
-		pr_err("Failed to find unused fd (fd:%d)\n", fd_next);
-		ret = -EINVAL;
-		goto exit;
-	}
-
 	ret = devinfo_to_topology(e->device_entries, e->num_of_gpus + e->num_of_cpus, &src_topology);
 	if (ret) {
 		pr_err("Failed to convert stored device information to topology\n");
@@ -1871,7 +1870,7 @@ int amdgpu_plugin_restore_file(int id)
 
 	ret = restore_bos(&args, e);
 	if (ret)
-		goto exit;
+		goto exit_devices;
 
 	args.num_objects = e->num_of_objects;
 	args.priv_data_size = e->priv_data.len;
@@ -1881,15 +1880,17 @@ int amdgpu_plugin_restore_file(int id)
 	if (kmtIoctl(fd, AMDKFD_IOC_CRIU_OP, &args) == -1) {
 		pr_perror("Restore ioctl failed");
 		ret = -1;
-		goto exit;
+		goto exit_devices;
 	}
 
 	ret = restore_bo_data(id, (struct kfd_criu_bo_bucket *)args.bos, e);
 	if (ret)
-		goto exit;
+		goto exit_devices;
 
 	ret = restore_hsakmt_shared_mem(e->shared_mem_size, e->shared_mem_magic);
 
+exit_devices:
+	release_devices(&args);
 exit:
 	if (e)
 		criu_kfd__free_unpacked(e, NULL);
@@ -1956,7 +1957,7 @@ int amdgpu_plugin_update_vmamap(const char *in_path, const uint64_t addr, const 
 			*new_offset = vma_md->new_pgoff;
 
 			if (is_renderD)
-				*updated_fd = vma_md->fd;
+				*updated_fd = node_get_drm_render_device(vma_md->node, true);
 			else
 				*updated_fd = -1;
 
