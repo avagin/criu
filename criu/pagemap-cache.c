@@ -97,7 +97,7 @@ static int pmc_fill_cache(pmc_t *pmc, const struct vma_area *vma)
 	unsigned long low = vma->e->start & PMC_MASK;
 	unsigned long high = low + PMC_SIZE;
 	size_t len = vma_area_len(vma);
-	size_t size_map;
+	size_t size_map, off;
 
 	if (high > kdat.task_size)
 		high = kdat.task_size;
@@ -153,10 +153,16 @@ static int pmc_fill_cache(pmc_t *pmc, const struct vma_area *vma)
 	BUG_ON(pmc->map_len < size_map);
 	BUG_ON(pmc->fd < 0);
 
-	if (pread(pmc->fd, pmc->map, size_map, PAGEMAP_PFN_OFF(pmc->start)) != size_map) {
-		pmc_zap(pmc);
-		pr_perror("Can't read %d's pagemap file", pmc->pid);
-		return -1;
+	for (off = 0; off != size_map;) {
+		ssize_t ret;
+
+		ret = pread(pmc->fd, ((void *)pmc->map) + off, size_map - off, PAGEMAP_PFN_OFF(pmc->start) + off);
+		if (ret == -1) {
+			pmc_zap(pmc);
+			pr_perror("Can't read %d's pagemap file", pmc->pid);
+			return -1;
+		}
+		off += ret;
 	}
 
 	return 0;
