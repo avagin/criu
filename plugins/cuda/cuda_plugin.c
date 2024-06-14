@@ -194,6 +194,9 @@ static int cuda_process_checkpoint_action(int pid, const char *action, unsigned 
 
 static int interrupt_restore_thread(int restore_pid)
 {
+	struct proc_status_creds creds;
+	int ret;
+
 	/* Since we resumed a thread that CRIU previously already froze we need to
 	 * INTERRUPT it once again, task was already SEIZE'd so we don't need to do
 	 * a compel_interrupt_task()
@@ -209,9 +212,10 @@ static int interrupt_restore_thread(int restore_pid)
 	 * compel_stop_on_syscall() will hang waiting for the task to hit a
 	 * sigreturn when cleaning up the parasite
 	 */
-	struct proc_status_creds creds;
-	if (compel_wait_task(restore_pid, -1, parse_pid_status, NULL, &creds.s, NULL)) {
-		pr_debug("wait_task failed as expected. ignoring\n");
+	ret = compel_wait_task(restore_pid, -1, parse_pid_status, NULL, &creds.s, NULL);
+	if (ret != COMPEL_TASK_ALIVE) {
+		pr_err("wait_task failed with the %d code\n", ret);
+		return -1;
 	}
 
 	return 0;
