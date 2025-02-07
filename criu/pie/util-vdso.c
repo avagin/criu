@@ -310,8 +310,8 @@ static unsigned long elf_symbol_lookup(uintptr_t mem, size_t size,
 	addr = mem + dyn_symtab->d_un.d_ptr - load->p_vaddr;
 
 	if (use_gnu_hash) {
-		uint32_t *h = bucket + nbucket + (j - sym_off);
-		uint32_t hash_val;
+		Hash_t *h = bucket + nbucket + (j - sym_off);
+		Hash_t hash_val;
 
 		symbol_hash |= 1;
 		do {
