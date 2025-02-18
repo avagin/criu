@@ -17,6 +17,7 @@
 #include <sys/mount.h>
 #include <sys/prctl.h>
 #include <sched.h>
+#include <linux/elf.h>
 
 #include "types.h"
 #include <compel/ptrace.h>
@@ -1747,6 +1748,8 @@ static int attach_to_tasks(bool root_seized)
 				pr_perror("Unable to set PTRACE_O_TRACESYSGOOD for %d", pid);
 				return -1;
 			}
+			if (arch_ptrace_restore(pid, item))
+				return -1;
 			/*
 			 * Suspend seccomp if necessary. We need to do this because
 			 * although seccomp is restored at the very end of the
@@ -3322,6 +3325,7 @@ static int sigreturn_restore(pid_t pid, struct task_restore_args *task_args, uns
 	 */
 	creds_pos_next = creds_pos;
 	siginfo_n = task_args->siginfo_n;
+	arch_rsti_init(current);
 	for (i = 0; i < current->nr_threads; i++) {
 		CoreEntry *tcore;
 		struct rt_sigframe *sigframe;
