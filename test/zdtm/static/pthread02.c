@@ -20,22 +20,24 @@ static void *thread_func(void *args)
 	exit(0);
 }
 
+#define NR 128
 int main(int argc, char *argv[])
 {
-	pthread_t th1;
-	int ret;
+	pthread_t th[NR];
+	int ret, i;
 
 	test_init(argc, argv);
 
-	ret = pthread_create(&th1, NULL, &thread_func, NULL);
-
-	if (ret) {
-		fail("Can't pthread_create");
-		exit(1);
+	for (i = 0; i < NR; i++) {
+		ret = pthread_create(&th[i], NULL, &thread_func, NULL);
+		if (ret) {
+			fail("Can't pthread_create");
+			exit(1);
+		}
 	}
 
 	test_daemon();
+	test_waitsig();
 
-	pthread_exit(NULL);
 	return 0;
 }
