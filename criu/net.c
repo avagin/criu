@@ -3211,7 +3211,7 @@ static inline int nftables_lock_network_internal(void)
 #if defined(CONFIG_HAS_NFTABLES_LIB_API_0) || defined(CONFIG_HAS_NFTABLES_LIB_API_1)
 	cleanup_file FILE *fp = NULL;
 	struct nft_ctx *nft;
-	int ret = 0;
+	int exit_code = -1;
 	char table[32];
 	char buf[128];
 
@@ -3224,7 +3224,7 @@ static inline int nftables_lock_network_internal(void)
 
 	fp = redirect_nftables_output(nft);
 	if (!fp)
-		goto out;
+		goto err2;
 
 	snprintf(buf, sizeof(buf), "create table %s", table);
 	if (NFT_RUN_CMD(nft, buf))
@@ -3246,17 +3246,17 @@ static inline int nftables_lock_network_internal(void)
 	if (NFT_RUN_CMD(nft, buf))
 		goto err1;
 
-	goto out;
+	exit_code = 0;
+out:
+	nft_ctx_free(nft);
+	return exit_code;
 
 err1:
 	snprintf(buf, sizeof(buf), "delete table %s", table);
 	NFT_RUN_CMD(nft, buf);
 err2:
-	ret = -1;
 	pr_err("Locking network failed using nftables\n");
-out:
-	nft_ctx_free(nft);
-	return ret;
+goto out;
 #else
 	pr_err("CRIU was built without libnftables support\n");
 	return -1;
