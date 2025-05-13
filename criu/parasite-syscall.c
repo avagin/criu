@@ -67,6 +67,8 @@ unsigned long get_exec_start(struct vm_area_list *vmas)
 	return 0;
 }
 
+extern void ptrace_dump_state(pid_t pid);
+
 /*
  * We need to detect parasite crashes not to hang on socket operations.
  * Since CRIU holds parasite with ptrace, it will receive SIGCHLD if the
@@ -90,8 +92,10 @@ static void sigchld_handler(int signal, siginfo_t *siginfo, void *data)
 		pr_err("%d exited with %d unexpectedly\n", pid, WEXITSTATUS(status));
 	else if (WIFSIGNALED(status))
 		pr_err("%d was killed by %d unexpectedly: %s\n", pid, WTERMSIG(status), strsignal(WTERMSIG(status)));
-	else if (WIFSTOPPED(status))
+	else if (WIFSTOPPED(status)) {
 		pr_err("%d was stopped by %d unexpectedly\n", pid, WSTOPSIG(status));
+		ptrace_dump_state(pid);
+	}
 
 	exit(1);
 }

@@ -4,6 +4,8 @@
 #include <sys/uio.h>
 #include <asm/ptrace.h>
 #include <linux/elf.h>
+#include <stdio.h>
+#include <stdint.h>
 
 #include <compel/plugins/std/syscall-codes.h>
 #include "common/page.h"
@@ -285,4 +287,49 @@ int ptrace_flush_breakpoints(pid_t pid)
 		return -1;
 
 	return 0;
+}
+
+void ptrace_dump_state(pid_t pid)
+{
+        user_regs_struct_t regs;
+        struct iovec iov, riov;
+        int ret, i, slen;
+        char buf[64];
+        char strbuf[4096], *sp;
+	unsigned long long code_offset = 4;
+
+        iov.iov_base = &regs;
+        iov.iov_len = sizeof(user_regs_struct_t);
+        if ((ret = ptrace(PTRACE_GETREGSET, pid, NT_PRSTATUS, &iov))) {
+                pr_perror("Failed to obtain CPU registers for %d", pid);
+                return;
+        }
+        pr_err("pc=%llx\n", regs.pc);
+        iov.iov_base = buf;
+        iov.iov_len = sizeof(buf);
+        riov.iov_base = (void *)(long)regs.pc - code_offset;
+        riov.iov_len = sizeof(buf);
+        ret = process_vm_readv(pid, &iov, 1, &riov, 1, 0);
+        if (ret < 0)
+                return;
+        slen = sizeof(strbuf);
+        sp = strbuf;;
+        for (i = 0; i < ret; i++) {
+		unsigned long long pc = regs.pc - code_offset + i;
+                int r;
+
+		if (i == 0 || pc % 8 == 0) {
+			r = snprintf(sp, slen, "\nError: %016llx: ", pc);
+			if (r <= 0)
+				break;
+			sp += r;
+			slen -= r;
+		}
+                r = snprintf(sp, slen, "0x%02x ", (unsigned int)buf[i]);
+                if (r <= 0)
+                        break;
+                sp += r;
+                slen -= r;
+        }
+        pr_err("code: %s", strbuf);
 }
