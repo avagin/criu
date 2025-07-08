@@ -16,8 +16,10 @@ clean:
 	rm -f parasite.po
 	rm -f parasite.o
 
+victim: CFLAGS += -mbranch-protection=standard
+victim: LDFLAGS += -z experimental-gcs=check
 victim: victim.c
-	$(CC) $(CFLAGS) -o $@ $^
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 spy: spy.c parasite.h
 	$(CC) $(CFLAGS) $(shell $(COMPEL) includes) -o $@ $< $(shell $(COMPEL) --static libs)

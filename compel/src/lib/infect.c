@@ -601,6 +601,7 @@ static int parasite_trap(struct parasite_ctl *ctl, pid_t pid, user_regs_struct_t
 		goto err;
 	}
 
+	pr_debug("si_add %lx pc %lx sp %lx ctl->ictx.syscall_ip %lx\n", (long)siginfo.si_addr, (long)regs->pc, (long)regs->sp, (long)ctl->ictx.syscall_ip);
 	if (WSTOPSIG(status) != SIGTRAP || siginfo.si_code != ARCH_SI_TRAP) {
 		pr_debug("** delivering signal %d si_code=%d\n", siginfo.si_signo, siginfo.si_code);
 
@@ -639,6 +640,7 @@ int compel_execute_syscall(struct parasite_ctl *ctl, user_regs_struct_t *regs, c
 	err = parasite_run(pid, PTRACE_CONT, ctl->ictx.syscall_ip, 0, regs, &ctl->orig);
 	if (!err)
 		err = parasite_trap(ctl, pid, regs, &ctl->orig, false);
+
 
 	if (ptrace_poke_area(pid, (void *)code_orig, (void *)ctl->ictx.syscall_ip, sizeof(code_orig))) {
 		pr_err("Can't restore syscall blob (pid: %d)\n", ctl->rpid);

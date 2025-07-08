@@ -4,6 +4,9 @@
 #include <sys/uio.h>
 #include <asm/ptrace.h>
 #include <linux/elf.h>
+#include <linux/const.h>
+#include <linux/bits.h>
+#include <linux/types.h>
 
 #include <compel/plugins/std/syscall-codes.h>
 #include "common/page.h"
@@ -13,6 +16,10 @@
 #include "infect.h"
 #include "infect-priv.h"
 #include "asm/breakpoints.h"
+
+#define PR_SHADOW_STACK_ENABLE      (1UL << 0)
+#define PR_SHADOW_STACK_WRITE		(1UL << 1)
+#define PR_SHADOW_STACK_PUSH		(1UL << 2)
 
 unsigned __page_size = 0;
 unsigned __page_shift = 0;
@@ -33,23 +40,78 @@ static inline void __always_unused __check_code_syscall(void)
 	BUILD_BUG_ON(!is_log2(sizeof(code_syscall)));
 }
 
+#ifndef NT_ARM_GCS
+#define NT_ARM_GCS 0x410
+#endif
+
+#define GCS_SIGNAL_CAP(addr) (((unsigned long)addr) & GCS_CAP_ADDR_MASK)
+
+#define GCS_CAP_ADDR_MASK               __GENMASK(63, 12)
+
+extern int __parasite_setup_shstk(struct parasite_ctl *ctl,
+                                user_fpregs_struct_t *ext_regs)
+{
+	struct user_gcs gcs;
+
+	pid_t pid = ctl->rpid;
+        struct iovec iov;
+	unsigned long long ssp, token;
+
+
+	iov.iov_base = &gcs;
+        iov.iov_len = sizeof(gcs);
+        if (ptrace(PTRACE_GETREGSET, pid, (unsigned int)NT_ARM_GCS, &iov) < 0) {
+                /* ENODEV means CET is not supported by the CPU  */
+                if (errno != ENODEV) {
+                        pr_perror("shstk: %d: cannot get SSP", pid);
+                        return -1;
+                }
+        }
+
+	ssp = gcs.gcspr_el0;
+	token = GCS_SIGNAL_CAP(ssp);
+	pr_debug("gcspr_el0 %llx cap %llx\n", ssp, token);
+	ssp = ALIGN_DOWN(ssp, 8) - 8;
+        if (ptrace(PTRACE_POKEDATA, pid, (void *)ssp, token)) {
+                pr_perror("shstk: %d: failed to inject shadow stack token", pid);
+                return -1;
+        }
+	gcs.gcspr_el0 = ssp;
+        if (ptrace(PTRACE_SETREGSET, pid, (unsigned int)NT_ARM_GCS, &iov) < 0) {
+                pr_perror("shstk: %d: cannot write SSP", pid);
+                return -1;
+        }
+
+	return 0;
+}
+
 int sigreturn_prep_regs_plain(struct rt_sigframe *sigframe, user_regs_struct_t *regs, user_fpregs_struct_t *fpregs)
 {
 	struct fpsimd_context *fpsimd = RT_SIGFRAME_FPU(sigframe);
+	struct gcs_context *gcs = RT_SIGFRAME_GCS(sigframe);
 
 	memcpy(sigframe->uc.uc_mcontext.regs, regs->regs, sizeof(regs->regs));
 
+	pr_debug("sigreturn_prep_regs_plain: sp %lx pc %lx\n", (long)regs->sp, (long)regs->pc);
 	sigframe->uc.uc_mcontext.sp = regs->sp;
 	sigframe->uc.uc_mcontext.pc = regs->pc;
 	sigframe->uc.uc_mcontext.pstate = regs->pstate;
 
-	memcpy(fpsimd->vregs, fpregs->vregs, 32 * sizeof(__uint128_t));
+	memcpy(fpsimd->vregs, fpregs->fpstate.vregs, 32 * sizeof(__uint128_t));
 
-	fpsimd->fpsr = fpregs->fpsr;
-	fpsimd->fpcr = fpregs->fpcr;
+	fpsimd->fpsr = fpregs->fpstate.fpsr;
+	fpsimd->fpcr = fpregs->fpstate.fpcr;
 
 	fpsimd->head.magic = FPSIMD_MAGIC;
 	fpsimd->head.size = sizeof(*fpsimd);
+
+	gcs->head.magic = GCS_MAGIC;
+	gcs->head.size = sizeof(*gcs);
+	gcs->reserved = 0;
+	gcs->gcspr = fpregs->gcs.gcspr_el0-8;
+	gcs->features_enabled = fpregs->gcs.features_enabled;
+
+	pr_debug("sigframe gcspr  %llx enabled %llx\n", fpregs->gcs.gcspr_el0-8, fpregs->gcs.features_enabled);
 
 	return 0;
 }
@@ -59,11 +121,22 @@ int sigreturn_prep_fpu_frame_plain(struct rt_sigframe *sigframe, struct rt_sigfr
 	return 0;
 }
 
+struct user_gcs {
+	__u64 features_enabled;
+	__u64 features_locked;
+	__u64 gcspr_el0;
+};
+
 int compel_get_task_regs(pid_t pid, user_regs_struct_t *regs, user_fpregs_struct_t *fpsimd, save_regs_t save,
 			 void *arg, __maybe_unused unsigned long flags)
 {
 	struct iovec iov;
 	int ret;
+
+	struct iovec gcs_iov = {
+		.iov_base = &fpsimd->gcs,
+		.iov_len = sizeof(fpsimd->gcs),
+	};
 
 	pr_info("Dumping GP/FPU registers for %d\n", pid);
 
@@ -74,11 +147,23 @@ int compel_get_task_regs(pid_t pid, user_regs_struct_t *regs, user_fpregs_struct
 		goto err;
 	}
 
-	iov.iov_base = fpsimd;
-	iov.iov_len = sizeof(*fpsimd);
+	iov.iov_base = &fpsimd->fpstate;
+	iov.iov_len = sizeof(fpsimd->fpstate);
 	if ((ret = ptrace(PTRACE_GETREGSET, pid, NT_PRFPREG, &iov))) {
 		pr_perror("Failed to obtain FPU registers for %d", pid);
 		goto err;
+	}
+
+	if (ptrace(PTRACE_GETREGSET, pid, 0x410 /* NT_ARM_GCS */, &gcs_iov) == 0) {
+		struct user_gcs *gcs = &fpsimd->gcs;
+		pr_info("GCSPR_EL0 for %d: 0x%llx, features: 0x%llx\n", pid, gcs->gcspr_el0, gcs->features_enabled);
+
+		if (gcs->features_enabled & PR_SHADOW_STACK_ENABLE)
+			pr_info("✅ GCS is ENABLED\n");
+		else
+			pr_info("❌ GCS is NOT enabled\n");
+	} else {
+		pr_warn("GCS state not available for %d (likely unsupported)\n", pid);
 	}
 
 	ret = save(pid, arg, regs, fpsimd);
@@ -138,8 +223,7 @@ void *remote_mmap(struct parasite_ctl *ctl, void *addr, size_t length, int prot,
 void parasite_setup_regs(unsigned long new_ip, void *stack, user_regs_struct_t *regs)
 {
 	regs->pc = new_ip;
-	if (stack)
-		regs->sp = (unsigned long)stack;
+	regs->sp = (unsigned long)stack;
 }
 
 bool arch_can_dump_task(struct parasite_ctl *ctl)
@@ -285,4 +369,20 @@ int ptrace_flush_breakpoints(pid_t pid)
 		return -1;
 
 	return 0;
+}
+
+bool __compel_gcs_enabled(struct user_gcs *gcs)
+{
+	if (gcs->features_enabled & PR_SHADOW_STACK_ENABLE)
+		return true;
+
+	return false;
+
+	// if (!compel_cpu_has_feature(X86_FEATURE_SHSTK))
+	// 	return false;
+
+	// if (ext_regs->cet.cet & ARCH_SHSTK_SHSTK)
+	// 	return true;
+
+	// return false;
 }

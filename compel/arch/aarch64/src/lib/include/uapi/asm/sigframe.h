@@ -14,6 +14,7 @@ typedef struct fpsimd_context fpu_state_t;
 
 struct aux_context {
 	struct fpsimd_context fpsimd;
+	struct gcs_context gcs;
 	/* additional context to be added before "end" */
 	struct _aarch64_ctx end;
 };
@@ -61,6 +62,7 @@ struct cr_sigcontext {
 #define RT_SIGFRAME_SIGCONTEXT(rt_sigframe)  ((struct cr_sigcontext *)&(rt_sigframe)->uc.uc_mcontext)
 #define RT_SIGFRAME_AUX_CONTEXT(rt_sigframe) ((struct aux_context *)&(RT_SIGFRAME_SIGCONTEXT(rt_sigframe)->__reserved))
 #define RT_SIGFRAME_FPU(rt_sigframe)	     (&RT_SIGFRAME_AUX_CONTEXT(rt_sigframe)->fpsimd)
+#define RT_SIGFRAME_GCS(rt_sigframe)	     (&RT_SIGFRAME_AUX_CONTEXT(rt_sigframe)->gcs)
 #define RT_SIGFRAME_OFFSET(rt_sigframe)	     0
 
 #define rt_sigframe_erase_sigset(sigframe)	memset(&sigframe->uc.uc_sigmask, 0, sizeof(k_rtsigset_t))

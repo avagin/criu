@@ -519,7 +519,7 @@ $(TST_FILE:%=%.pid):	%.pid:	%
 	$(<D)/$(<F) --pidfile=$@ --outfile=$<.out --filename=$<.test
 
 $(TST_DIR:%=%.pid):	%.pid:	%
-	$(<D)/$(<F) --pidfile=$@ --outfile=$<.out --dirname=$<.test
+	GLIBC_TUNABLES=glibc.cpu.aarch64_gcs=1:glibc.cpu.aarch64_gcs_policy=2 $(<D)/$(<F) --pidfile=$@ --outfile=$<.out --dirname=$<.test
 
 $(TST_DIR_FILE:%=%.pid):	%.pid:	%
 	$(<D)/$(<F) --pidfile=$@ --outfile=$<.out --dirname=$<.dir.test --filename=$<.test
@@ -721,6 +721,9 @@ fifo_upon_unix_socket01:	CFLAGS += -DFIFO_UPON_UNIX01
 sk-unix-listen02: CFLAGS += -DSK_UNIX_LISTEN02
 sk-unix-listen03: CFLAGS += -DSK_UNIX_LISTEN03
 sk-unix-listen04: CFLAGS += -DSK_UNIX_LISTEN02 -DSK_UNIX_LISTEN03
+
+cwd00: CFLAGS += -mbranch-protection=standard
+cwd00: LDFLAGS += -z experimental-gcs=check
 
 cgroupv2_01:		LDLIBS += -pthread
 
