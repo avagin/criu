@@ -400,6 +400,7 @@ struct parasite_ctl *parasite_infect_seized(pid_t pid, struct pstree_item *item,
 	ret = parasite_prepare_threads(ctl, item);
 	if (ret)
 		return NULL;
+	compel_dump_mem(__func__, __LINE__);
 
 	ictx = compel_infect_ctx(ctl);
 

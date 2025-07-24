@@ -1095,9 +1095,11 @@ int compel_infect(struct parasite_ctl *ctl, unsigned long nr_threads, unsigned l
 {
 	if (compel_infect_no_daemon(ctl, nr_threads, args_size))
 		return -1;
+	compel_dump_mem(__func__, __LINE__);
 
 	if (parasite_start_daemon(ctl))
 		return -1;
+	compel_dump_mem(__func__, __LINE__);
 
 	return 0;
 }
@@ -1144,6 +1146,29 @@ void compel_release_thread(struct parasite_thread_ctl *tctl)
 	xfree(tctl);
 }
 
+static pid_t debug_pid;
+static long debug_sp;
+
+void compel_dump_mem(const char *func, int lineno)
+{
+	struct iovec rvec, lvec;
+	unsigned long buf[16];
+	int ret, i;
+	long sp = (debug_sp / 8) * 8;
+
+	rvec.iov_base =( void *) (sp - sizeof(buf)/2);
+	rvec.iov_len = sizeof(buf);
+	lvec.iov_base = buf;
+	lvec.iov_len = rvec.iov_len;
+
+	ret = process_vm_readv(debug_pid, &lvec, 1, &rvec, 1,  0);
+	pr_err("%s: %d: process_vm_readv(sp=%lx) -> %d %d\n", func, lineno, debug_sp, ret, errno);
+	for (i = 0; i < sizeof(buf)/sizeof(buf[0]); i++) {
+		pr_err("%d: %016lx: %016lx\n", debug_pid, sp - sizeof(buf)/2 + i*sizeof(buf[0]), buf[i]);
+	}
+
+}
+
 struct parasite_ctl *compel_prepare_noctx(int pid)
 {
 	struct parasite_ctl *ctl = NULL;
@@ -1163,6 +1188,9 @@ struct parasite_ctl *compel_prepare_noctx(int pid)
 	if (prepare_thread(pid, &ctl->orig))
 		goto err;
 
+	debug_pid = pid;
+	debug_sp = ctl->orig.regs.native.sp;
+	compel_dump_mem(__func__, __LINE__);
 	ctl->rpid = pid;
 
 	BUILD_BUG_ON(PARASITE_START_AREA_MIN < BUILTIN_SYSCALL_SIZE + MEMFD_FNAME_SZ);

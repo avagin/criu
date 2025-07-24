@@ -47,6 +47,7 @@ extern int compel_resume_task_sig(pid_t pid, int orig_state, int state, int stop
 struct parasite_ctl;
 struct parasite_thread_ctl;
 
+extern void compel_dump_mem(const char *func, int lineno);
 extern struct parasite_ctl __must_check *compel_prepare(int pid);
 extern struct parasite_ctl __must_check *compel_prepare_noctx(int pid);
 extern int __must_check compel_infect(struct parasite_ctl *ctl, unsigned long nr_threads, unsigned long args_size);

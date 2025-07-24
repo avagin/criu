@@ -1616,6 +1616,7 @@ static int dump_one_task(struct pstree_item *item, InventoryEntry *parent_ie)
 		pr_err("Fixup rseq for %d failed %d\n", pid, ret);
 		goto err;
 	}
+	compel_dump_mem(__func__, __LINE__);
 
 	if (fault_injected(FI_DUMP_EARLY)) {
 		pr_info("fault: CRIU sudden detach\n");
@@ -1630,6 +1631,7 @@ static int dump_one_task(struct pstree_item *item, InventoryEntry *parent_ie)
 			pr_err("Can't get proc fd (pid: %d)\n", pid);
 			goto err_cure;
 		}
+		compel_dump_mem(__func__, __LINE__);
 
 		if (install_service_fd(CR_PROC_FD_OFF, pfd) < 0)
 			goto err_cure;
@@ -1640,18 +1642,21 @@ static int dump_one_task(struct pstree_item *item, InventoryEntry *parent_ie)
 		pr_err("Can't fixup vdso VMAs (pid: %d)\n", pid);
 		goto err_cure;
 	}
+	compel_dump_mem(__func__, __LINE__);
 
 	ret = parasite_collect_aios(parasite_ctl, &vmas); /* FIXME -- merge with above */
 	if (ret) {
 		pr_err("Failed to check aio rings (pid: %d)\n", pid);
 		goto err_cure;
 	}
+	compel_dump_mem(__func__, __LINE__);
 
 	ret = parasite_dump_misc_seized(parasite_ctl, &misc);
 	if (ret) {
 		pr_err("Can't dump misc (pid: %d)\n", pid);
 		goto err_cure;
 	}
+	compel_dump_mem(__func__, __LINE__);
 
 	item->pid->ns[0].virt = misc.pid;
 	pstree_insert_pid(item->pid);
@@ -1674,6 +1679,7 @@ static int dump_one_task(struct pstree_item *item, InventoryEntry *parent_ie)
 		pr_err("Dump ids (pid: %d) failed with %d\n", pid, ret);
 		goto err_cure;
 	}
+	compel_dump_mem(__func__, __LINE__);
 
 	if (dfds) {
 		ret = dump_task_files_seized(parasite_ctl, item, dfds);
@@ -1681,6 +1687,7 @@ static int dump_one_task(struct pstree_item *item, InventoryEntry *parent_ie)
 			pr_err("Dump files (pid: %d) failed with %d\n", pid, ret);
 			goto err_cure;
 		}
+		compel_dump_mem(__func__, __LINE__);
 		ret = flush_eventpoll_dinfo_queue();
 		if (ret) {
 			pr_err("Dump eventpoll (pid: %d) failed with %d\n", pid, ret);
@@ -1696,48 +1703,56 @@ static int dump_one_task(struct pstree_item *item, InventoryEntry *parent_ie)
 	ret = parasite_dump_pages_seized(item, &vmas, &mdc, parasite_ctl);
 	if (ret)
 		goto err_cure;
+	compel_dump_mem(__func__, __LINE__);
 
 	ret = parasite_dump_sigacts_seized(parasite_ctl, item);
 	if (ret) {
 		pr_err("Can't dump sigactions (pid: %d) with parasite\n", pid);
 		goto err_cure;
 	}
+	compel_dump_mem(__func__, __LINE__);
 
 	ret = parasite_dump_itimers_seized(parasite_ctl, item);
 	if (ret) {
 		pr_err("Can't dump itimers (pid: %d)\n", pid);
 		goto err_cure;
 	}
+	compel_dump_mem(__func__, __LINE__);
 
 	ret = parasite_dump_posix_timers_seized(&proc_args, parasite_ctl, item);
 	if (ret) {
 		pr_err("Can't dump posix timers (pid: %d)\n", pid);
 		goto err_cure;
 	}
+	compel_dump_mem(__func__, __LINE__);
 
 	ret = dump_task_core_all(parasite_ctl, item, &pps_buf, cr_imgset, &misc);
 	if (ret) {
 		pr_err("Dump core (pid: %d) failed with %d\n", pid, ret);
 		goto err_cure;
 	}
+	compel_dump_mem(__func__, __LINE__);
 
 	ret = dump_task_cgroup(parasite_ctl, item);
 	if (ret) {
 		pr_err("Dump cgroup of threads in process (pid: %d) failed with %d\n", pid, ret);
 		goto err_cure;
 	}
+	compel_dump_mem(__func__, __LINE__);
 
 	ret = compel_stop_daemon(parasite_ctl);
 	if (ret) {
 		pr_err("Can't stop daemon in parasite (pid: %d)\n", pid);
 		goto err_cure;
 	}
+	compel_dump_mem(__func__, __LINE__);
 
 	ret = dump_task_threads(parasite_ctl, item);
 	if (ret) {
 		pr_err("Can't dump threads\n");
 		goto err_cure;
 	}
+	compel_dump_mem(__func__, __LINE__);
 
 	/*
 	 * On failure local map will be cured in cr_dump_finish()
@@ -1751,6 +1766,7 @@ static int dump_one_task(struct pstree_item *item, InventoryEntry *parent_ie)
 		pr_err("Can't cure (pid: %d) from parasite\n", pid);
 		goto err;
 	}
+	compel_dump_mem(__func__, __LINE__);
 
 	ret = dump_task_mm(pid, &pps_buf, &misc, &vmas, cr_imgset);
 	if (ret) {
