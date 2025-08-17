@@ -1737,6 +1737,103 @@ int compel_stop_on_syscall(int tasks, const int sys_nr, const int sys_nr_compat)
 	return 0;
 }
 
+int compel_stop_tasks_on_syscall(int tasks, pid_t *pids, const int sys_nr, const int sys_nr_compat)
+{
+	enum trace_flags trace = tasks > 1 ? TRACE_ALL : TRACE_ENTER;
+	user_regs_struct_t regs;
+	int status, ret, exit_code = -1;
+	int cont = 1, i;
+	pid_t pid;
+	bool *done;
+
+	done = xzalloc(sizeof(done[0]) * tasks);
+	if (!done)
+		return -1;
+
+	/* Stop all threads on the enter point in sys_rt_sigreturn */
+	while (cont) {
+		cont = 0;
+
+		for (i = 0; i < tasks; i++) {
+			if (done[i])
+				continue;
+			cont = 1;
+			pid = pids[i];
+			pid = wait4(pid, &status, __WALL, NULL);
+			if (pid == -1) {
+				pr_perror("wait4 failed");
+				goto err;
+			}
+
+			if (!task_is_trapped(status, pid))
+				goto err;
+
+			pr_debug("%d was trapped\n", pid);
+
+			if ((WSTOPSIG(status) & PTRACE_SYSCALL_TRAP) == 0) {
+				/*
+				 * On some platforms such as ARM64, it is impossible to
+				 * pass through a breakpoint, so let's clear it right
+				 * after it has been triggered.
+				*/
+				if (ptrace_flush_breakpoints(pid)) {
+					pr_err("Unable to clear breakpoints\n");
+					return -1;
+				}
+				goto goon;
+			}
+			if (trace == TRACE_EXIT) {
+				trace = TRACE_ENTER;
+				pr_debug("`- Expecting exit\n");
+				goto goon;
+			}
+			if (trace == TRACE_ENTER)
+				trace = TRACE_EXIT;
+
+			ret = ptrace_get_regs(pid, &regs);
+			if (ret) {
+				pr_perror("ptrace");
+				goto err;
+			}
+
+			if (is_required_syscall(&regs, pid, sys_nr, sys_nr_compat)) {
+				/*
+				 * The process is going to execute the required syscall,
+				 * the next stop will be on the exit from this syscall
+				 */
+				ret = ptrace(PTRACE_SYSCALL, pid, NULL, NULL);
+				if (ret) {
+					pr_perror("ptrace");
+					goto err;
+				}
+
+				pid = wait4(pid, &status, __WALL, NULL);
+				if (pid == -1) {
+					pr_perror("wait4 failed");
+					goto err;
+				}
+
+				if (!task_is_trapped(status, pid))
+					goto err;
+
+				pr_debug("%d was stopped\n", pid);
+				done[i] = true;
+				continue;
+			}
+		goon:
+			ret = ptrace(PTRACE_SYSCALL, pid, NULL, NULL);
+			if (ret) {
+				pr_perror("ptrace");
+				goto err;
+			}
+		}
+	}
+	exit_code = 0;
+err:
+	xfree(done);
+	return exit_code;
+}
+
 int compel_mode_native(struct parasite_ctl *ctl)
 {
 	return user_regs_native(&ctl->orig.regs);

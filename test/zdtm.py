@@ -1296,9 +1296,11 @@ class criu:
 
         preload_libfault = self.__preload_libfault and action in ['dump', 'pre-dump', 'restore']
 
+        start = time.time()
         ret = self.__criu.run(action, s_args, self.__criu_bin, self.__fault,
                               strace, preexec, preload_libfault, nowait)
 
+        print("took %s seconds", time.time() - start)
         if nowait:
             os.close(status_fds[1])
             if os.read(status_fds[0], 1) != b'\0':

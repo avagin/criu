@@ -1817,10 +1817,11 @@ static int restore_rseq_cs(void)
 	return 0;
 }
 
-static int catch_tasks(bool root_seized)
+static int catch_tasks(bool root_seized, pid_t *pids, int tasks)
 {
 	struct pstree_item *item;
 	bool nobp = fault_injected(FI_NO_BREAKPOINTS) || !kdat.has_breakpoints;
+	int npids = 0;
 
 	for_each_pstree_item(item) {
 		int status, i, ret;
@@ -1838,6 +1839,11 @@ static int catch_tasks(bool root_seized)
 		for (i = 0; i < item->nr_threads; i++) {
 			pid_t pid = item->threads[i].real;
 
+			if (tasks <= npids) {
+				return -1;
+			}
+			pids[npids] = pid;
+			npids++;
 			if (ptrace(PTRACE_INTERRUPT, pid, 0, 0)) {
 				pr_perror("Can't interrupt the %d task", pid);
 				return -1;
@@ -2000,6 +2006,7 @@ static int restore_root_task(struct pstree_item *init)
 	int ret, fd, mnt_ns_fd = -1;
 	int root_seized = 0;
 	struct pstree_item *item;
+	pid_t *pids = NULL;
 
 	ret = run_scripts(ACT_PRE_RESTORE);
 	if (ret != 0) {
@@ -2218,7 +2225,10 @@ skip_ns_bouncing:
 
 	timing_stop(TIME_RESTORE);
 
-	if (catch_tasks(root_seized)) {
+	pids = xzalloc(sizeof(pid_t) * task_entries->nr_threads);
+	if (!pids)
+		goto out_kill_network_unlocked;
+	if (catch_tasks(root_seized, pids, task_entries->nr_threads)) {
 		pr_err("Can't catch all tasks\n");
 		goto out_kill_network_unlocked;
 	}
@@ -2228,11 +2238,13 @@ skip_ns_bouncing:
 
 	__restore_switch_stage(CR_STATE_COMPLETE);
 
-	ret = compel_stop_on_syscall(task_entries->nr_threads, __NR(rt_sigreturn, 0), __NR(rt_sigreturn, 1));
+	ret = compel_stop_tasks_on_syscall(task_entries->nr_threads, pids, __NR(rt_sigreturn, 0), __NR(rt_sigreturn, 1));
 	if (ret) {
 		pr_err("Can't stop all tasks on rt_sigreturn\n");
 		goto out_kill_network_unlocked;
 	}
+	xfree(pids);
+	pids = NULL;
 
 	finalize_restore();
 
@@ -2318,6 +2330,7 @@ out_kill:
 	}
 
 out:
+	xfree(pids);
 	depopulate_roots_yard(mnt_ns_fd, true);
 	stop_usernsd();
 	__restore_switch_stage(CR_STATE_FAIL);

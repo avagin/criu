@@ -16,26 +16,28 @@ const char *test_author = "Andrew Vagin <avagin@openvz.org";
 static void *thread_func(void *args)
 {
 	test_waitsig();
-	pass();
-	exit(0);
+	return NULL;
 }
 
 int main(int argc, char *argv[])
 {
-	pthread_t th1;
-	int ret;
+	pthread_t th[10000];
+	int ret, i;
 
 	test_init(argc, argv);
 
-	ret = pthread_create(&th1, NULL, &thread_func, NULL);
+        for (i = 0; i < 10000; i++) {
+          ret = pthread_create(&th[i], NULL, &thread_func, NULL);
 
-	if (ret) {
-		fail("Can't pthread_create");
-		exit(1);
-	}
+          if (ret) {
+                  fail("Can't pthread_create");
+                  exit(1);
+          }
+        }
 
 	test_daemon();
-
-	pthread_exit(NULL);
+        test_waitsig();
+	pass();
+	exit(0);
 	return 0;
 }
