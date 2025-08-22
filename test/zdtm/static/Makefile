@@ -286,6 +286,7 @@ TST_NOFILE	:=				\
 		sigtrap01			\
 		change_mnt_context		\
 		fd_offset			\
+		uprobes				\
 #		jobctl00			\
 
 PKG_CONFIG ?= pkg-config
@@ -725,6 +726,9 @@ sk-unix-listen03: CFLAGS += -DSK_UNIX_LISTEN03
 sk-unix-listen04: CFLAGS += -DSK_UNIX_LISTEN02 -DSK_UNIX_LISTEN03
 
 cgroupv2_01:		LDLIBS += -pthread
+
+uprobes:		CFLAGS += $(call pkg-cflags, libtracefs libtraceevent)
+uprobes:		LDLIBS += $(call pkg-libs, libtracefs libelf)
 
 $(LIB):	force
 	$(Q) $(MAKE) -C $(LIBDIR)

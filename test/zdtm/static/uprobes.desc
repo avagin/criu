@@ -1,0 +1,6 @@
+{
+	'feature': 'cgroupns',
+	'flags': 'suid nouser',
+	'flavor': 'h ns uns',
+	'opts': '--allow-uprobes'
+}
