@@ -1786,12 +1786,11 @@ __visible long __export_restore_task(struct task_restore_args *args)
 		if (vma_entry->start > vma_entry->shmid)
 			break;
 
-		/*
-		 * shadow stack VMAs cannot be remapped, they must be
-		 * recreated with map_shadow_stack system call
-		 */
-		if (vma_entry_is(vma_entry, VMA_AREA_SHSTK))
+		if (vma_entry_is(vma_entry, VMA_AREA_SHSTK)) {
+			if (shstk_vma_restore((void *)vma_premmaped_start(vma_entry), vma_entry->start, vma_entry_len(vma_entry)))
+				goto core_restore_end;
 			continue;
+		}
 
 		if (vma_remap(vma_entry, args->uffd))
 			goto core_restore_end;
@@ -1810,12 +1809,11 @@ __visible long __export_restore_task(struct task_restore_args *args)
 		if (vma_entry->start < vma_entry->shmid)
 			break;
 
-		/*
-		 * shadow stack VMAs cannot be remapped, they must be
-		 * recreated with map_shadow_stack system call
-		 */
-		if (vma_entry_is(vma_entry, VMA_AREA_SHSTK))
+		if (vma_entry_is(vma_entry, VMA_AREA_SHSTK)) {
+			if (shstk_vma_restore((void *)vma_premmaped_start(vma_entry), vma_entry->start, vma_entry_len(vma_entry)))
+				goto core_restore_end;
 			continue;
+		}
 
 		if (vma_remap(vma_entry, args->uffd))
 			goto core_restore_end;
