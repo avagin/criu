@@ -286,7 +286,6 @@ TST_NOFILE	:=				\
 		sigtrap01			\
 		change_mnt_context		\
 		fd_offset			\
-		uprobes				\
 #		jobctl00			\
 
 PKG_CONFIG ?= pkg-config
@@ -299,7 +298,8 @@ endif
 
 ifneq ($(ARCH),arm)
 ifneq ($(COMPAT_TEST),y)
-        TST_NOFILE += maps03
+        TST_NOFILE += maps03			\
+		uprobes
 endif
 endif
 

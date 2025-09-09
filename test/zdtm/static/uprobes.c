@@ -201,7 +201,7 @@ int uprobes_vma_exists(void)
  * SIGTRAP is sent if execution reaches a previously set uprobed location, and
  * the corresponding uprobe is not active. We don't want this to happen on restore
 */
-void sigtrap_handler(int, siginfo_t *info, void*)
+void sigtrap_handler(int signo, siginfo_t *info, void *context)
 {
 	if (info->si_code == SI_KERNEL) {
 		got_sigtrap = true;
