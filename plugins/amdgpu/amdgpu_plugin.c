@@ -48,6 +48,7 @@
 #include "image.h"
 #include "cr_options.h"
 #include "util.h"
+
 struct vma_metadata {
 	struct list_head list;
 	uint64_t old_pgoff;
@@ -1132,7 +1133,6 @@ int amdgpu_restore_init(void)
 		if (d) {
 			while ((dir = readdir(d)) != NULL) {
 				if (strncmp("amdgpu-kfd-", dir->d_name, strlen("amdgpu-kfd-")) == 0) {
-					pr_info("CC3: Found kfd file\n");
 					img_fp = open_img_file(dir->d_name, false, &img_size);
 					buf = xmalloc(img_size);
 					if (!buf) {
@@ -1155,7 +1155,6 @@ int amdgpu_restore_init(void)
 					xfree(buf);
 				}
 				if (strncmp("amdgpu-renderD-", dir->d_name, strlen("amdgpu-renderD-")) == 0) {
-					pr_info("CC3: Found drm file\n");
 					img_fp = open_img_file(dir->d_name, false, &img_size);
 					buf = xmalloc(img_size);
 					if (!buf) {
