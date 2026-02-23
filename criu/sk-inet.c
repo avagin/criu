@@ -711,7 +711,7 @@ static int collect_one_inetsk(void *o, ProtobufCMessage *base, struct cr_img *i)
 	int ret;
 
 	ii->ie = pb_msg(base, InetSkEntry);
-	
+
 	ret = run_plugins(UPDATE_INETSK, ii->ie->family, ii->ie->state, ii->ie->src_addr, ii->ie->dst_addr);
 	if (ret < 0 && ret != -ENOTSUP)
 		return -1;
