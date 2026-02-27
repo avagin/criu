@@ -905,7 +905,7 @@ static unsigned long restore_mapping(VmaEntry *vma_entry)
 	 * that mechanism as it causes the process to be charged for memory
 	 * immediately upon mmap, not later upon preadv().
 	 */
-	pr_debug("\tmmap(%" PRIx64 " -> %" PRIx64 ", %x %x %d)\n", vma_entry->start, vma_entry->end, prot, flags,
+	pr_debug("\tmmap(%" PRIx64 " - %" PRIx64 ", %x %x %d)\n", vma_entry->start, vma_entry->end, prot, flags,
 		 (int)vma_entry->fd);
 	/*
 	 * Should map memory here. Note we map them as
