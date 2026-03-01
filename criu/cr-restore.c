@@ -2221,6 +2221,7 @@ skip_ns_bouncing:
 		goto out_kill_network_unlocked;
 
 	timing_stop(TIME_RESTORE);
+	timing_start(TIME_RESUME);
 
 	if (catch_tasks(root_seized)) {
 		pr_err("Can't catch all tasks\n");
@@ -2280,6 +2281,7 @@ skip_ns_bouncing:
 	/* Detaches from processes and they continue run through sigreturn. */
 	if (finalize_restore_detach())
 		goto out_kill_network_unlocked;
+	timing_stop(TIME_RESUME);
 
 	pr_info("Restore finished successfully. Tasks resumed.\n");
 	write_stats(RESTORE_STATS);
