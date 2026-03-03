@@ -7,7 +7,7 @@
 #include <sys/ioctl.h>
 #include <sys/uio.h>
 
-#include "linux/rseq.h"
+#include "linux/criu-rseq.h"
 
 #include "common/config.h"
 #include "int.h"

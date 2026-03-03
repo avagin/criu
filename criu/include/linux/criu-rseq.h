@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0+ WITH Linux-syscall-note */
-#ifndef _UAPI_LINUX_RSEQ_H
-#define _UAPI_LINUX_RSEQ_H
+#ifndef _UAPI_CRIU_RSEQ_H
+#define _UAPI_CRIU_RSEQ_H
 
-#ifdef __has_include
+#if defined __has_include
 #if __has_include("sys/rseq.h")
 #include <sys/rseq.h>
 #include "asm/thread_pointer.h"

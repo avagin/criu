@@ -23,7 +23,7 @@
 #include <compel/ptrace.h>
 #include "common/compiler.h"
 
-#include "linux/rseq.h"
+#include "linux/criu-rseq.h"
 
 #include "clone-noasan.h"
 #include "cr_options.h"
