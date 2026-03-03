@@ -169,12 +169,6 @@ enum rseq_cpu_id_state {
 	RSEQ_CPU_ID_REGISTRATION_FAILED = -2,
 };
 
-enum rseq_cs_flags_bit {
-	RSEQ_CS_FLAG_NO_RESTART_ON_PREEMPT_BIT = 0,
-	RSEQ_CS_FLAG_NO_RESTART_ON_SIGNAL_BIT = 1,
-	RSEQ_CS_FLAG_NO_RESTART_ON_MIGRATE_BIT = 2,
-};
-
 int main(void)
 {
 	return 0;
