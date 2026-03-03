@@ -10,7 +10,7 @@
 #include <time.h>
 #include <signal.h>
 
-#include "linux/criu-rseq.h"
+#include "linux/rseq.h"
 
 #include "image.h"
 #include "util-pie.h"

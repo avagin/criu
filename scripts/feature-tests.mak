@@ -158,7 +158,7 @@ endef
 
 define FEATURE_TEST_NO_LIBC_RSEQ_DEFS
 
-#if defined __has_include
+#ifdef __has_include
 #if __has_include(\"sys/rseq.h\")
 #include <sys/rseq.h>
 #endif
@@ -167,12 +167,6 @@ define FEATURE_TEST_NO_LIBC_RSEQ_DEFS
 enum rseq_cpu_id_state {
 	RSEQ_CPU_ID_UNINITIALIZED = -1,
 	RSEQ_CPU_ID_REGISTRATION_FAILED = -2,
-};
-
-enum rseq_cs_flags_bit {
-	RSEQ_CS_FLAG_NO_RESTART_ON_PREEMPT_BIT = 0,
-	RSEQ_CS_FLAG_NO_RESTART_ON_SIGNAL_BIT = 1,
-	RSEQ_CS_FLAG_NO_RESTART_ON_MIGRATE_BIT = 2,
 };
 
 int main(void)
