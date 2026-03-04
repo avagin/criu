@@ -78,23 +78,15 @@ start_worker()
 	local pid_file="${WORK_DIR}/worker.pid"
 
 	rm -f "$pid_file"
-	"$WORKER_BIN" "$nr_threads" "$pid_file" &
-	local bgpid=$!
+	"$WORKER_BIN" "$nr_threads" "$pid_file"
 
-	# Wait for PID file
-	local tries=0
-	while [[ ! -s "$pid_file" ]] && kill -0 "$bgpid" 2>/dev/null; do
-		sleep 0.1
-		tries=$((tries + 1))
-		if [[ $tries -ge 50 ]]; then
-			die "Worker did not write PID file in 5s"
-		fi
-	done
+	if [[ ! -s "$pid_file" ]]; then
+		die "Worker did not write PID file"
+	fi
 
 	WORKER_PID=$(cat "$pid_file")
 
-	# Verify it's running and threads are up
-	sleep 0.2
+	# Verify it's running
 	if ! kill -0 "$WORKER_PID" 2>/dev/null; then
 		die "Worker process $WORKER_PID is not running"
 	fi
