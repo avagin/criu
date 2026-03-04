@@ -21,7 +21,7 @@ WORKER_SRC="${SCRIPT_DIR}/bp_bench_worker.c"
 WORKER_BIN="${SCRIPT_DIR}/bp_bench_worker"
 WORK_DIR="/tmp/bp_bench_$$"
 ITERATIONS="${1:-5}"
-THREAD_COUNTS="1 10 50 100 500 1000 10000"
+THREAD_COUNTS="1 10 50 100 500 1000"
 
 # Colors for output
 RED='\033[0;31m'
@@ -101,7 +101,10 @@ do_dump()
 	rm -rf "$img_dir"
 	mkdir -p "$img_dir"
 
-	"$CRIU" dump -t "$pid" -D "$img_dir" --shell-job -v0 2>/dev/null
+	"$CRIU" dump -t "$pid" -D "$img_dir" --shell-job -v4 -o dump.log || {
+		cat "$img_dir/dump.log" >&2
+		return 1
+	}
 }
 
 # Restore a process and return restore_time in microseconds
@@ -128,14 +131,14 @@ do_restore()
 			-W "$stats_dir" \
 			--shell-job -d \
 			--display-stats \
-			-v0 2>&1) || true
+			-v0 2>&1) || echo "failed" >&2
 	else
 		output=$("$CRIU" restore \
 			-D "$img_dir" \
 			-W "$stats_dir" \
 			--shell-job -d \
 			--display-stats \
-			-v0 2>&1) || true
+			-v0 2>&1) || echo "failed" >&2
 	fi
 
 	# Extract restore time from output
@@ -197,7 +200,7 @@ run_bench()
 
 		# --- Without breakpoints (CRIU_FAULT=130) ---
 		start_worker "$nr_threads"
-		do_dump "$WORKER_PID" "$img_dir"
+		do_dump "$WORKER_PID" "$img_dir" || exit 1
 
 		local rtime_nobp
 		rtime_nobp=$(do_restore "$img_dir" "CRIU_FAULT" "130")
