@@ -1,31 +1,39 @@
-# Pidfd
+# Pidfd Support
 
-This article describes how CRIU checkpoints and restores `pidfds` (process file descriptors).
+A **pidfd** is a file descriptor that refers to a specific process. Unlike traditional numeric PIDs, which can be reused by the kernel once a process terminates, a pidfd is a stable and race-free handle. It remains valid as long as the descriptor is open, even after the process it refers to has died. CRIU provides full support for checkpointing and restoring pidfds owned by applications.
 
-## Checkpointing
-All information required to restore a `pidfd` is available in the `/proc/$pid/fdinfo/$pidfd` entry.
+## How CRIU Handles Pidfds
 
-Since CRIU does not currently support nested PID namespaces, the correct PID to use during restoration is the final entry in the `NSpid` field (representing the PID in the most deeply nested namespace). CRIU captures only this PID.
+CRIU treats pidfds as a specialized type of file descriptor. During a dump, it captures both the target of the pidfd and its configuration.
 
-## Restoring Pidfds for Active Processes
-During restoration, CRIU first recreates the entire process tree and then begins opening file descriptors for each process. If a `pidfd` points to a process that is already alive, CRIU simply uses the `pidfd_open()` system call to recreate it.
+### 1. Checkpointing (Dumping)
+When CRIU encounters a pidfd in a process's file descriptor table:
+*   **Target Identification**: It parses `/proc/$pid/fdinfo/$fd` to determine the numeric PID that the pidfd currently refers to.
+*   **Tree Validation**: CRIU verifies that this target PID is part of the process tree being checkpointed. This ensures that the process will be available for re-binding during restoration.
+*   **Metadata Capture**: CRIU records the target process's namespace-local PID and any flags associated with the pidfd (such as `O_NONBLOCK` or `O_CLOEXEC`).
 
-## Restoring Pidfds for Terminated Processes
-If the process originally referenced by the `pidfd` has terminated, the PID information in `proc` is lost (the `NSpid` field becomes -1), and `pidfd_open()` cannot be used.
+### 2. Restoration
+Restoring a pidfd involves recreating a handle that points to the equivalent process in the newly restored tree.
 
-To handle this, CRIU uses the following mechanism:
+*   **Alive Processes**: If the target process is alive, CRIU simply calls the `pidfd_open()` system call on the restored PID of that task.
+*   **Dead Processes**: A unique feature of pidfds is that they can be held open even after the target process has exited. To restore this state, CRIU:
+    1.  Creates a temporary "helper" process.
+    2.  Opens a pidfd to this helper.
+    3.  Terminates the helper process.
+    This leaves the restored application with a valid pidfd that refers to a dead process, perfectly mimicking the original state.
 
-1. A hash table is created using the `pidfd`'s inode number as the key. It stores:
-    - A list of all processes that held a `pidfd` with that inode number.
-    - A designated `creator_id` (the highest ID in the list).
+## Kernel Evolution: From Anonymous Inodes to `pidfs`
 
-1. For each unique inode number, the process identified as the `creator` creates a temporary process (let's call it `x`).
+The underlying implementation of pidfds in the Linux kernel has changed over time:
+*   **Pre-v6.9**: Pidfds were implemented using anonymous inodes. In `/proc/$pid/fd`, they appeared as `anon_inode:[pidfd]`.
+*   **v6.9 and later**: Pidfds are now part of a dedicated **pidfs** filesystem. They appear in `/proc` as `pidfd:[N]`.
 
-1. The `creator` process then opens a `pidfd` pointing to `x` and transmits it to all other processes that originally held a `pidfd` with the same inode number. This is done using CRIU's `send_desc_to_peer` and `recv_desc_from_peer` functions.
+CRIU automatically detects these kernel differences and handles both formats transparently, ensuring that pidfds are correctly identified and restored regardless of the host kernel version.
 
-This ensures that all processes with `pidfds` pointing to the same terminated process are restored to a consistent state, sharing the same inode number. Once the `pidfds` have been distributed, the `creator` terminates the temporary process `x`.
+## Current Limitations
+*   **PIDFD_THREAD**: Support for pidfds that target specific threads (created with the `PIDFD_THREAD` flag) is currently not implemented.
 
-## Limitations
-
-- CRIU does not currently support `pidfds` opened with the `PIDFD_THREAD` flag.
-- CRIU cannot checkpoint or restore `pidfds` that point to processes outside the captured process tree.
+## See also
+* [Pidfd Store (Iterative Migration)](pidfd-store.md)
+* [PID Restoration](pid-restore.md)
+* [Kerndat Feature Detection](kerndat.md)
