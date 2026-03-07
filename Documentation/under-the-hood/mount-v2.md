@@ -1,63 +1,42 @@
-# Mount-v2
+# Mount V2: Advanced Mount Restoration
 
-CRIU Mount-v2 Algorithm
+Introduced in CRIU v3.16, **Mount V2** is a sophisticated restoration engine that leverages modern Linux kernel APIs to handle complex mount hierarchies, propagation groups, and overmounts with high reliability.
 
-## Introduction
+## Why Mount V2 was Necessary
 
-With the introduction of the `MOVE_MOUNT_SET_GROUP` feature in Linux v5.15 ([commit 9ffb14e](https://github.com/torvalds/linux/commit/9ffb14ef61bab83fa818736bf3e7e6b6e182e8e2)), CRIU can now restore mount sharing groups independently. We can construct mount trees using private mounts and then apply sharing groups at a later stage, rather than relying on complex inheritance during mount creation.
+The original mount restoration mechanism (Mount V1) relied on sequential, path-based `mount()` calls. This approach had several critical flaws:
+1.  **Overmount Sensitivity**: If a directory was already covered by another mount, performing a path-based mount on it could fail or target the wrong filesystem.
+2.  **Circular Dependencies**: Resolving mounts that depend on each other in non-linear ways was difficult and often resulted in ordering failures.
+3.  **Propagation Complexity**: Establishing `shared` and `slave` relationships required creating dummy mount points and performing specific sequences of `mount --make-shared/slave` calls, which was fragile in complex scenarios.
 
-Restoring mount propagation using the traditional approach of inheriting groups is nearly impossible due to several factors:
-- CRIU lacks information about the original order or history of mount tree creation.
-- Propagation can trigger the creation of numerous unintended mounts.
-- Propagation can unexpectedly change the parent of an existing mount.
-- "Mount traps" can occur where propagation covers an initial mount.
-- "Non-uniform" propagation requires specific mount orders and temporary "lock" mounts to recreate.
-- Cross-namespace sharing requires strict ordering relative to namespace creation.
+## How Mount V2 Works
 
-For more details, see the following presentations from the Linux Plumbers Conference:
-- [CRIU mounts migration: problems and solutions](https://www.linuxplumbersconf.org/event/7/contributions/640/)
-- [Mount-v2 CRIU migration engine: status update](https://linuxplumbersconf.org/event/11/contributions/923/)
+Mount V2 moves away from path-based mounting, instead using **File Descriptor-based** mounting provided by newer kernel system calls.
 
-Below is an example of order inversion where multiple temporary mounts are required:
-![File:Mounts-inverse-order-example.gif](File:Mounts-inverse-order-example.gif)
+### 1. Detached Mounts
+CRIU creates each required mount as a **detached mount**. These mounts exist in the kernel but are not yet attached to any visible path in the filesystem.
+*   **New Filesystems**: Created using `fsopen()` and `fsmount()`.
+*   **Bind Mounts**: Created using `open_tree()` with the `OPEN_TREE_CLONE` flag to create an unattached clone of an existing path.
 
-## Mount-v2 Description
+### 2. Precise Propagation Grouping
+Using the `move_mount()` syscall with the `MOVE_MOUNT_SET_GROUP` flag (introduced in kernel v5.15), CRIU can explicitly assign a detached mount to a specific **shared or slave propagation group**. This eliminates the need for dummy mounts and ensures that the propagation state is perfectly restored as recorded in the images.
 
-The Mount-v2 algorithm is integrated into the original engine; dumping remains unchanged. Preparatory steps—such as detecting bind mounts, external mounts, and helper mounts—have been refined to make the code more robust and reusable for Mount-v2.
+### 3. Tree Construction via File Descriptors
+CRIU constructs the entire mount hierarchy by attaching child mounts to their parents using their respective file descriptors. Since this happens "off-line" (outside of any mount namespace), it is immune to path shadowing, path resolution errors, or overmounting issues.
 
-### Plain Mount Points
+### 4. Atomic Final Attachment
+Once the complete hierarchy is assembled as a tree of detached mounts, CRIU performs a final `move_mount()` to attach the root of this reconstructed tree into the target mount namespace at the desired destination path.
 
-A key difference in Mount-v2 is that mounts are initially created as "plain" mounts. In the original engine, a mount with `mnt_id=1000` at `/mount/point/path` would be mounted directly into the target tree (e.g., `<root_yard>/<mntns>/mount/point/path`). This required the parent mount to exist beforehand.
+## Kernel Requirements
 
-In Mount-v2, this mount is first created at a flat location like `<root_yard>/mnt-1000`. This allows the tree assembly to be handled as a separate second stage. This separation enables useful heuristics, such as creating over-mounts after the mounts they cover, or creating external mounts before their corresponding bind mounts, without causing conflicts.
+Mount V2 requires a modern kernel that supports:
+*   `fsopen()`, `fsmount()`, `move_mount()` (Kernel v5.2+)
+*   `open_tree()` (Kernel v5.3+)
+*   `MOVE_MOUNT_SET_GROUP` (Kernel v5.15+)
 
-To maintain compatibility with existing code that expects a tree-like structure (e.g., for restoring file content or ghost files), CRIU uses a `service_mountpoint()` helper. This helper returns traditional "tree" paths for the original engine and "plain" paths for Mount-v2.
+CRIU automatically detects these features during the [Kerndat](kerndat.md) phase. It will fall back to the older Mount V1 engine if these calls are unavailable, though many modern container layouts now effectively require Mount V2 for a successful restore.
 
-### Resolving Sharing Groups
-
-When Mount-v2 is enabled, CRIU takes an additional step after reading mount images to resolve sharing group information (`resolve_shared_mounts_v2`). 
-1. CRIU iterates through all mounts and creates a sharing group for each unique `shared_id` + `master_id` pair.
-1. Groups with a non-zero `master_id` are linked to their respective parent sharing groups to form a tree.
-1. If a `master_id` has no corresponding parent group within the container, CRIU detects this as external slavery and identifies the source path (either an external mount or the root container mount).
-
-### Actual Restore Process
-
-When Mount-v2 is enabled, `prepare_mnt_ns()` delegates to `prepare_mnt_ns_v2()`, which follows these stages:
-
-1. **Pre-create Namespaces**: Namespaces are initially created almost empty, containing only `tmpfs` at the root and a "root yard" for assembling the mount tree. CRIU preserves `nsfs` file descriptors to re-enter these namespaces.
-1. **Populate Namespaces**: CRIU iterates through the mount tree. Using `can_mount_now_v2()`, it skips mounts that depend on others (like bind mounts whose source is not yet ready) and restarts the walk as needed.
-1. **Detecting Directories**: For each new mount, CRIU determines if it is a directory or a file by performing a `stat` on its parent "plain" mount point.
-1. **Create Plain Mount Points**: CRIU creates an empty file or directory to serve as the "plain" mount point.
-1. **Create New Mounts**: CRIU creates the actual mount. This could be a new device, a bind of the container root, or an external bind mount. This process is simpler than the original engine because sharing group inheritance is not a concern.
-1. **Advanced Bind Mounts**: `do_bind_mount_v2()` uses `open_tree()` and `move_mount()` to perform bind mounts without traversing symlinks or `autofs` points.
-1. **Cross-namespace Binding**: The new mount is bind-mounted into the target namespace at the same "plain" location, ensuring it is visible and accessible for subsequent steps (like restoring UNIX sockets).
-1. **Set Unbindable**: Once bind mounts are complete, mounts are marked as unbindable.
-1. **Assemble Trees**: CRIU moves mounts from their "plain" locations into their final positions within the mount tree. It opens file descriptors for each mount point to allow file access later.
-1. **Restore Sharing Groups**: Finally, CRIU restores sharing groups across the assembled forest using `restore_mount_sharing_options()`. It traverses the sharing group trees and applies the correct sharing settings (e.g., making a mount a slave or shared).
-1. **Cleanup**: CRIU removes the temporary "service" mount points for deleted mounts.
-
-## Links
-
-- **Virtuozzo (Original) Version**: [Mounts-v2-Virtuozzo](mounts-v2-virtuozzo.md). (Requires specific kernel support).
-- **Kernel Feature**: [`MOVE_MOUNT_SET_GROUP` commit](https://github.com/torvalds/linux/commit/9ffb14ef61bab83fa818736bf3e7e6b6e182e8e2).
-- **CRIU Pull Request**: [PR #1721](https://github.com/checkpoint-restore/criu/pull/1721).
+## See also
+* [Mount Points](mount-points.md)
+* [Checkpoint/Restore Architecture](checkpointrestore.md)
+* [Kerndat](kerndat.md)
