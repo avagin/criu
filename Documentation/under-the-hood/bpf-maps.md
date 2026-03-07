@@ -1,22 +1,34 @@
 # BPF Maps
 
-BPF maps are kernel objects that store data (used by BPF programs) in the form of key-value pairs. Applications access BPF maps using file descriptors. C/R of BPF maps involves serializing their *metadata* and *data*:
+BPF maps are kernel objects that store data used by BPF programs, typically in the form of key-value pairs. Applications access these maps via file descriptors. Checkpointing and restoring BPF maps involves serializing both their **metadata** and their **data contents**.
 
-**Metadata** - This includes information such as map type, key size, value size, etc. CRIU obtains this information from the `proc` filesystem and via the `bpf` system call with the `BPF_OBJ_GET_INFO_BY_FD` argument.
+## How CRIU Handles BPF Maps
 
-**Data** - This is the map's content, i.e., the actual key-value pairs. CRIU relies on batch operations to read (`BPF_MAP_LOOKUP_BATCH`) key-value pairs from maps during the checkpoint stage and to write (`BPF_MAP_UPDATE_BATCH`) them during the restore phase.
+### Metadata Serialization
+CRIU collects essential map attributes from several sources:
+- **/proc filesystem**: Essential fields such as `map_type`, `key_size`, `value_size`, `max_entries`, and the `frozen` status are parsed from the task's `fdinfo`.
+- **BPF System Call**: CRIU uses the `bpf` system call with the `BPF_OBJ_GET_INFO_BY_FD` command to retrieve additional information, including the map name and interface index (`ifindex`).
 
-## Support for BPF Maps
+### Data Serialization
+To preserve the map's contents, CRIU relies on batch operations:
+- **Dumping**: During the checkpoint stage, CRIU uses `BPF_MAP_LOOKUP_BATCH` to efficiently read all key-value pairs from the map.
+- **Restoring**: During the restore phase, CRIU recreates the map and uses `BPF_MAP_UPDATE_BATCH` to repopulate it with the saved key-value pairs.
 
-CRIU currently supports C/R of the following BPF map types:
-
+### Supported Map Types
+CRIU currently supports data serialization for the following BPF map types:
 - `BPF_MAP_TYPE_HASH`
 - `BPF_MAP_TYPE_ARRAY`
 
+For other map types, CRIU may be able to restore the map itself (metadata) but not its contents, depending on kernel support for batch operations on those types.
+
+### Frozen Maps
+If a BPF map was marked as read-only (frozen) using `bpf_map_freeze()`, CRIU detects this state from `fdinfo` and reapplies the freeze during restoration after the data has been repopulated.
+
 ## To-Do
 
-- C/R of BTF (BPF Type Format) information
-- C/R of other kinds of BPF maps
+- **BTF Support**: Serialization and restoration of BPF Type Format (BTF) information associated with maps.
+- **Extended Map Types**: Implementation of data serialization for more BPF map types (e.g., `BPF_MAP_TYPE_PERF_EVENT_ARRAY`, `BPF_MAP_TYPE_LPM_TRIE`).
+- **Map Extra Data**: Full support for `map_extra` fields introduced in recent kernels (currently only partially parsed with limited restoration).
 
 ## External Links
 - [BPF Documentation](https://www.kernel.org/doc/html/latest/bpf/index.html)
