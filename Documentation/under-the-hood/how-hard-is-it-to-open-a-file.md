@@ -1,320 +1,237 @@
-# How hard is it to open a file
+# How Hard is it to Open a File?
 
-This article outlines what CRIU restore needs to take care of when re-creating an open file descriptor.
+This article outlines what CRIU must handle when recreating an open file descriptor during restoration.
 
-Let's imagine we have an information about a file we want to open.
-What should it contain? Apparently, access mode and path:
+Suppose we have information about a file we want to open, such as its access mode and path:
 
-```C
-
-	struct file {
-		char *path;
-		unsigned mode;
-	} *f;
-
+```c
+struct file {
+    char *path;
+    unsigned mode;
+} *f;
 ```
 
-and we'd like to have that path being opened by a process.  We would
-do it like below:
+To have this path opened by a process, we might try:
 
-```C
-
-	int fd;
-
-	fd = open(f->path, f->mode);
-
+```c
+int fd;
+fd = open(f->path, f->mode);
 ```
 
-Right? Right, but it's not all of it. We all know, that not only regular
-files might be opened via paths, but also such things as FIFOs. And
-plain `open()` with the flags we want it to have may just hang. So we need
-to change that code to look like this:
+However, this is insufficient. Regular files are not the only things opened via paths; FIFOs are another example. A standard `open()` on a FIFO with certain flags might hang indefinitely. To prevent this, the code must be modified:
 
-```C
+```c
+int fd, tfd = -1;
 
-	int fd, tfd = -1;
+if (S_ISFIFO(f->mode))
+    tfd = open(f->path, O_RDWR);
 
-	if (S_ISFIFO(f->mode))
-		tfd = open(f->path, O_RDWR);
+fd = open(f->path, f->mode);
 
-	fd = open(f->path, f->mode);
-
-	if (tfd >= 0)
-		close(tfd);
-
+if (tfd >= 0)
+    close(tfd);
 ```
 
-The tfd keeps FIFO read-write opened while we open it with any flags
-we want. Then we close it.
+Using `tfd` to keep the FIFO open for reading and writing ensures the subsequent `open()` succeeds regardless of the flags.
 
-Now this seems to be OK, but it's actually not. In Linux, file can be
-unlinked while being opened (these [invisible files](invisible-files.md) are treated carefully
-on dump). In that case what was formerly pointed by
-path may be kept in some temporary location. We have to create a
-temporary name for it, and unlink it afterwards. So, we need to extend the
-info about a file:
+Even this revised approach has issues. In Linux, a file can be unlinked while it is still open (these [invisible files](invisible-files.md) require careful handling during a dump). If a file is unlinked, the path it once occupied may no longer exist or may point to something else. We must create a temporary name for it and unlink it after opening. Thus, we extend our file information and the opening logic:
 
-```C
-
-	struct file {
-		char *path;
-		unsigned mode;
-		char *temp_path;
-	} *f;
-
+```c
+struct file {
+    char *path;
+    unsigned mode;
+    char *temp_path;
+} *f;
 ```
 
-and the opening code to take care of that temporary location
+```c
+int fd, tfd = -1;
 
-```C
+if (f->temp_path)
+    link(f->temp_path, f->path);
 
-	int fd, tfd = -1;
+if (S_ISFIFO(f->mode))
+    tfd = open(f->path, O_RDWR);
 
-	if (f->temp_path)
-		link(f->temp_path, f->path);
+fd = open(f->path, f->mode);
 
-	if (S_ISFIFO(f->mode))
-		tfd = open(f->path, O_RDWR);
+if (tfd >= 0)
+    close(tfd);
 
-	fd = open(f->path, f->mode);
-
-	if (tfd >= 0)
-		close(tfd);
-
-	if (f->temp_path)
-		unlink(f->path);
-
+if (f->temp_path)
+    unlink(f->path);
 ```
 
-And we haven't seen all the code we need to manage what is pointed by
-the `temp_path`, but let's proceed.
+Directories can also be open while removed. Since `link()` and `unlink()` do not work for directories, we must adjust the logic:
 
-We have forgotten, that opened and <s>unlinked</s> removed can also be a
-directory. For directories, link and unlink do not work, and we have to
-append the code to at least try to make things work OK:
+```c
+int fd, tfd = -1;
 
-```C
+if (f->temp_path) {
+    if (S_ISDIR(f->mode))
+        mkdir(f->path);
+    else
+        link(f->temp_path, f->path);
+}
 
-	int fd, tfd = -1;
+if (S_ISFIFO(f->mode))
+    tfd = open(f->path, O_RDWR);
 
-	if (f->temp_path) {
-		if (S_ISDIR(f->mode))
-			mkdir(f->path);
-		else
-			link(f->temp_path, f->path);
-	}
+fd = open(f->path, f->mode);
 
-	if (S_ISFIFO(f->mode))
-		tfd = open(f->path, O_RDWR);
+if (tfd >= 0)
+    close(tfd);
 
-	fd = open(f->path, f->mode);
-
-	if (tfd >= 0)
-		close(tfd);
-
-	if (f->temp_path) {
-		if (S_ISDIR(f->mode))
-			rmdir(f->mode);
-		else
-			unlink(f->path);
-	}
-
+if (f->temp_path) {
+    if (S_ISDIR(f->mode))
+        rmdir(f->path);
+    else
+        unlink(f->path);
+}
 ```
 
-Done. Oh wait, we also should take care of hard links! If a file has any,
-and both were opened and removed, we cannot just go
-ahead and kill the `temp_path` after opening, as
-it can be waiting for some other
-`struct file` to open one. A little bit more information should be added
-to the `struct file`.
+Hard links introduce further complexity. If a file has multiple hard links that were all opened and then removed, we cannot simply delete the `temp_path` after opening it, as other `struct file` instances might still need it.
 
-```C
+```c
+struct temp_file {
+    char *path;
+    unsigned users;
+};
 
-	struct temp_file {
-		char *path;
-		unsigned users;
-	};
-
-	struct file {
-		char *path;
-		unsigned mode;
-		struct temp_file *temp;
-	} *f;
-
+struct file {
+    char *path;
+    unsigned mode;
+    struct temp_file *temp;
+} *f;
 ```
 
-and to the code that opens one now looks like this:
+The opening logic then becomes:
 
-```C
+```c
+int fd, tfd = -1;
 
-	int fd, tfd = -1;
+if (f->temp) {
+    if (S_ISDIR(f->mode))
+        mkdir(f->path);
+    else
+        link(f->temp->path, f->path);
+}
 
-	if (f->temp) {
-		if (S_ISDIR(f->mode))
-			mkdir(f->path);
-		else
-			link(f->temp->path, f->path);
-	}
+if (S_ISFIFO(f->mode))
+    tfd = open(f->path, O_RDWR);
 
-	if (S_ISFIFO(f->mode))
-		tfd = open(f->path, O_RDWR);
+fd = open(f->path, f->mode);
 
-	fd = open(f->path, f->mode);
+if (tfd >= 0)
+    close(tfd);
 
-	if (tfd >= 0)
-		close(tfd);
-
-	if (f->temp) {
-		if (--f->temp->users == 0) {
-			if (S_ISDIR(f->mode))
-				rmdir(f->mode);
-			else
-				unlink(f->temp->path);
-		}
-	}
-
+if (f->temp) {
+    if (--f->temp->users == 0) {
+        if (S_ISDIR(f->mode))
+            rmdir(f->path);
+        else
+            unlink(f->temp->path);
+    }
+}
 ```
 
-By the way, we've left behind the scenes all the code required to make
-the `temp_file` data be shared between processes that need one and to
-make the decrementing of `f->temp->users` be SMP-safe.
+Note that making `temp_file` data sharable across processes and ensuring `f->temp->users` is updated safely in an SMP environment requires additional implementation details. We also do not currently handle the rare case where a file/directory is removed and replaced by another object of the same name.
 
-Also note, that we don't handle the case when the file/directory is
-removed and some other file/directory is created under the same name.
-It's a rare case.
+Mount namespaces add another layer of complexity. Two files with the same path may reside in different mount namespaces. We must track the mount point ID:
 
-Now, is that all? No, sorry. A couple of things left. First, Linux has
-a thing called mount namespace. And two files with the same path may
-have been opened in different mount namespaces. So we also need the
-info about what mount point the file belongs to like this:
-
-```C
-
-	struct file {
-		char *path;
-		unsigned mode;
-		struct temp_file *temp;
-		unsigned mnt_id;
-	} *f;
-
+```c
+struct file {
+    char *path;
+    unsigned mode;
+    struct temp_file *temp;
+    unsigned mnt_id;
+} *f;
 ```
 
-and the code to open file would now look like
+The opening logic then uses `open_ns_root()` to access the correct mount namespace:
 
-```C
+```c
+int fd, tfd = -1, ns_fd;
+char *rel_path = f->path + 1;
 
-	int fd, tfd = -1, ns_fd;
-	char *rel_path = f->path + 1;
+ns_fd = open_ns_root(f->mnt_id);
 
-	ns_fd = open_ns_root(f->mnt_id);
+if (f->temp) {
+    if (S_ISDIR(f->mode))
+        mkdirat(ns_fd, rel_path);
+    else
+        linkat(ns_fd, f->temp->path, ns_fd, rel_path);
+}
 
-	if (f->temp) {
-		if (S_ISDIR(f->mode))
-			mkdirat(ns_fd, rel_path);
-		else
-			linkat(ns_fd, f->temp->path, ns_fd, rel_path);
-	}
+if (S_ISFIFO(f->mode))
+    tfd = openat(ns_fd, rel_path, O_RDWR);
 
-	if (S_ISFIFO(f->mode))
-		tfd = openat(ns_fd, rel_path, O_RDWR);
+fd = openat(ns_fd, rel_path, f->mode);
 
-	fd = openat(ns_fd, rel_path, f->mode);
+if (tfd >= 0)
+    close(tfd);
 
-	if (tfd >= 0)
-		close(tfd);
+if (f->temp) {
+    if (--f->temp->users == 0) {
+        if (S_ISDIR(f->mode))
+            unlinkat(ns_fd, rel_path, AT_REMOVEDIR);
+        else
+            unlinkat(ns_fd, f->temp->path, 0);
+    }
+}
 
-	if (f->temp_path) {
-		if (--f->temp->users == 0) {
-			if (S_ISDIR(f->mode))
-				unlinkat(ns_fd, f->mode, AT_REMOVEDIR);
-			else
-				unlinkat(ns_fd, f->temp->path);
-		}
-	}
-
-	close(ns_fd);
-
+close(ns_fd);
 ```
 
-Let's not dive into the details of how the `open_ns_root` looks like.
-Just know, that it opens a file descriptor, that refers to the root
-of the mount namespace that contains a mount point with the id `mnt_id`
-(they cannot be shared, and that's great).
+Finally, open files have attributes like current position and ownership (`fown`) that must be restored. Flags like `O_TRUNC` and `O_CREAT` must also be sanitized.
 
-Pretty complex already, isn't it? Just a couple of final touches left.
-First, opened files typically have a position. Flags we get need to be
-sanitated not to container those that only make sense during open,
-like `O_TRUNC` or `O_CREAT`. And file may have a thing called `fown` managed
-by the `F_SETSIG` and `F_SETOWN` fcntls. All this results in
-
-```C
-
-	struct file {
-		char *path;
-		unsigned mode;
-		struct temp_file *temp;
-		unsigned mnt_id;
-		unsigned long pos;
-		struct fown fown;
-	} *f;
-
+```c
+struct file {
+    char *path;
+    unsigned mode;
+    struct temp_file *temp;
+    unsigned mnt_id;
+    unsigned long pos;
+    struct fown fown;
+} *f;
 ```
 
-and
+```c
+int fd, tfd = -1, ns_fd, open_flags;
+char *rel_path = f->path + 1;
 
-```C
+ns_fd = open_ns_root(f->mnt_id);
 
-	int fd, tfd = -1, ns_fd, open_flags;
-	char *rel_path = f->path + 1;
+if (f->temp) {
+    if (S_ISDIR(f->mode))
+        mkdirat(ns_fd, rel_path);
+    else
+        linkat(ns_fd, f->temp->path, ns_fd, rel_path);
+}
 
-	ns_fd = open_ns_root(f->mnt_id);
+if (S_ISFIFO(f->mode))
+    tfd = openat(ns_fd, rel_path, O_RDWR);
 
-	if (f->temp) {
-		if (S_ISDIR(f->mode))
-			mkdirat(ns_fd, rel_path);
-		else
-			linkat(ns_fd, f->temp->path, ns_fd, rel_path);
-	}
+open_flags = sanitize_open_mode(f->mode);
+fd = openat(ns_fd, rel_path, open_flags);
 
-	if (S_ISFIFO(f->mode))
-		tfd = openat(ns_fd, rel_path, O_RDWR);
+if (tfd >= 0)
+    close(tfd);
 
-	open_flags = sanitize_open_mode(f->mode);
-	fd = openat(ns_fd, rel_path, open_flags);
+if (f->temp) {
+    if (--f->temp->users == 0) {
+        if (S_ISDIR(f->mode))
+            unlinkat(ns_fd, rel_path, AT_REMOVEDIR);
+        else
+            unlinkat(ns_fd, f->temp->path, 0);
+    }
+}
 
-	if (tfd >= 0)
-		close(tfd);
+close(ns_fd);
 
-	if (f->temp_path) {
-		if (--f->temp->users == 0) {
-			if (S_ISDIR(f->mode))
-				unlinkat(ns_fd, f->mode, AT_REMOVEDIR);
-			else
-				unlinkat(ns_fd, f->temp->path);
-		}
-	}
-
-	close(ns_fd);
-
-	fcntl(fd, F_SETSIG, f->fown->sig);
-	fcntl(fd, F_SETOWN, &f->fown->owner);
-	lseek(fd, SEEK_SET, f->pos);
-
+fcntl(fd, F_SETSIG, f->fown.sig);
+fcntl(fd, F_SETOWN, &f->fown.owner);
+lseek(fd, f->pos, SEEK_SET);
 ```
 
-And don't ask for details of the `f->fown` thing. It's tricky, but just
-follows the ABI and therefore boring.
-
-OK, we've finished with the top of the iceberg — opening a file. Why
-top? Becase when opened file should be planted into a process' file
-descriptors table under desired number. You might think that it should be
-as simple as:
-```C
-
-	dup2(fd, desired_fd);
-
-```
-
-but it's not. Here's [how to assign needed file descriptor to a file](how-to-assign-needed-file-descriptor-to-a-file.md).
-
-
+This covers the basics of opening the file. Once opened, it must be assigned to the correct file descriptor number in the process's FDT. While `dup2(fd, desired_fd)` seems simple, the reality is more involved, as explained in [How to assign a needed file descriptor to a file](how-to-assign-needed-file-descriptor-to-a-file.md).

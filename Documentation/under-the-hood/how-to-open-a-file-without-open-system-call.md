@@ -1,49 +1,43 @@
-# How to open a file without open system call
+# How to Open a File Without an `open` System Call
 
-Sometimes CRIU meets an inode object (check [this](dumping-files.md) article for details of what inode is) without a name. This article describes when this happens and what CRIU does in this case.
+CRIU sometimes encounters an inode object without a corresponding name (refer to [this article](dumping-files.md) for details on inodes). This article explains when this occurs and how CRIU handles it.
 
-## When this happens
+## When This Occurs
 
-There are two nasty API calls in the Linux kernel -- the `inotify_init` and the `fanotify_init`. Both take a file path as an argument and screw one up. What they do is find an inode object using this path, then put an events generator on it and then forget the path completely. The result of both calls is a file-descriptor pointing to the created event generator object.
+Two Linux kernel APIs, `inotify_init` and `fanotify_init`, can cause this. Both take a file path as an argument but then internalize it. They identify the inode object associated with the path, set up an event generator on it, and then discard the path. The resulting file descriptor points to the event generator, not the original path.
 
-When CRIU meets the inotify/fanotify (called fsnotify later for convenience) FD it has to find out the file on which the generator sits. But, since the inode's path is lost, this cannot be done in general case.
+When CRIU encounters an `inotify` or `fanotify` (collectively referred to as `fsnotify`) file descriptor, it must identify the file the generator is monitoring. Since the original path is lost, this is generally difficult.
 
-## Chances to get the name back
+## Retrieving the Path
 
-Chances to get the name back exist. To understand when let's dive a little bit more in how Linux manages dentries and inodes.
+In some cases, the path can be recovered by examining how Linux manages dentries and inodes.
 
-### Inodes and dentries
+### Inodes and Dentries
 
-So, every file on disk is represented by an inode object. Inode has an ID (inode number), access rights, owner, link count and some more data. Names are only stored in special files called *directories* -- in directories there's a set of name-to-inode mappings. When accessing a file by its name Linux kernel sequentially reads from disk these mapping tables and for every name found in it creates a dentry object in memory. It's important to know, that dentry is created not only for existing files, but also for non-existing to speed up the ENOENT report for second file lookup. IOW dentries form a cache, which contains records for both present and absent objects on disk.
+Every file on disk is represented by an inode object, which contains an ID (inode number), access rights, owner, link count, and other metadata. Names are stored only in directories as name-to-inode mappings. When a file is accessed by name, the kernel reads these mappings and creates a "dentry" object in memory. Dentries act as a cache for both existing and non-existing files to speed up lookups.
 
-Since the tree of dentries can gorw infinitely Linux sometimes shrinks one, by freeing the unused dentries. The dentry is unused if no other object references one, and a dentry can be referenced by child dentries and by files (as described in [another](dumping-files.md) article).
+To manage memory, the kernel may shrink the dentry cache by freeing unused dentries. A dentry is considered unused if it is not referenced by child dentries or open files.
 
-Having said that, at the time the fsnotify creating happens we have a full dentry chain and the inode sitting in memory. Then the events generator is put on the inode and that's it. Neither inode nor fsnotify object references the dentry, so eventually the whole dentry chain can be shrunk from memory.
+When an `fsnotify` object is created, the kernel has the full dentry chain and the inode in memory. However, since neither the inode nor the `fsnotify` object typically maintains a reference to the dentry, the dentry chain can eventually be freed.
 
-
-So, returning to the "can I get the name back" question. The answer is -- if the dentry cache is still alive -- yes, you can. But CRIU cannot rely on this, since it should also support situations when the dentry cache is not there.
+If the dentry cache is still alive, the path can be retrieved. However, CRIU cannot rely on this, as it must handle situations where the dentry cache has been cleared.
 
 ### Tmpfs
 
-One filesystem, however, behaves friendly to this problem. The tempfs one pins the dentries in memory, since it has no other media on which to store the information about files on it. So for tmpfs the name is always at hands.
+The `tmpfs` filesystem is an exception. Since it exists only in memory and has no other storage medium, it "pins" dentries in memory. For `tmpfs`, the filename is always available.
 
+## Opening a File via `open_by_handle_at`
 
+Linux provides the `open_by_handle_at` system call, originally introduced for userspace NFS servers. This call allows opening an inode using an opaque "handle." This handle is a sequence of bytes that the filesystem uses to locate and open an inode. The kernel can generate a handle for an existing inode object. Since an `fsnotify` object references an inode, CRIU can request its handle. CRIU has even patched the kernel to expose this handle in `/proc/$pid/fdinfo/$fd` for `fsnotify` descriptors.
 
-## Opening a file without open()
-
-Linux provides a way to do this. The way is called `open_by_handle_at` system call. Introduced to make the user-space NFS server work, this call allows to open an inode using a blob called *handle*. The handle is (almost) meaning-less sequence of bytes by which filesystem promises to find the inode and open one. And the handle itself can be generated by the kernel using the inode object. Since fsnotify object references inode we can try to ask the kernel to generate the respective inode's handle. And we did that and patched the kernel to show this handle in the /proc/$pid/fdindo/$fd file for the fsnotify.
-
-So when dumping the fsnotify we read the handle out of proc and save one in the images, and on restore time we call the `open_by_handle_at` with the handle value and get the inode back. Then we need to ask the kernel to put the fsnotify on this inode. To do this CRIU calls fsnotify init call on the /proc/self/fd/$fd path. While resolving the path kernel finds the inode opened previously and restores the handle in the proper place. Thus we fool the kernel and put fsnotify on an inode without even knowing its path.
+During a dump, CRIU reads the handle from `proc` and saves it. During restoration, it calls `open_by_handle_at` to retrieve the inode. CRIU then recreates the `fsnotify` object on this inode by calling the initialization function on the `/proc/self/fd/$fd` path. The kernel resolves this path to the previously opened inode, effectively restoring the `fsnotify` state without needing the original path.
 
 ## [Irmap](irmap.md)
 
-But the problems are still not over. Not all filesystems provide handles. Hopefully yet, but still -- not always we can get a handle out of an inode and an inode out of a handle.
-This is very nasty situation, since Linux kernel provides no other APIs for getting the inode, only open by path and open by handle. With both ways closed we have to make a detour.
+Not all filesystems support file handles. If handles are unavailable, CRIU must use a different approach.
 
-CRIU uses the empiric knowledge where fsnotify-s are typically put by programs (config files and alike) and does filesystem tree scan to find out the name by the inode number. The engine is caller *irmap* which stands for Inode Reverse MAP. The irmap cache recursively scans the tree starting from "known" locations and remembers all the name-inode pairs it meets. If we later try to irmap some inode which was met during the first scan, no additional FS access would occur, irmap would just report the name back.
+CRIU leverages empirical knowledge about where programs typically place `fsnotify` watches (e.g., configuration files) and performs a filesystem tree scan to match inode numbers to paths. This engine is called **irmap** (Inode Reverse MAP). It recursively scans "known" locations and caches name-inode pairs. If a required inode was encountered during the scan, `irmap` reports the name immediately.
 
-### Caching the irmap cache
+### Caching the Irmap
 
-Since this FS scan can be quite long, this is recommended to be done while tasks are not frozen. So the irmap cache fill is also started on the pre-dump operation, when tasks are not frozen. After the scan the cache is stored in the working dir under the irmap-cache.img name. When CRIU's next pre-dump or final dump is performed, the irmap cache is read back and when required the cached entries are re-validated individually, w/o the full FS re-scan.
-
-
+Because filesystem scans can be time-consuming, CRIU starts filling the `irmap` cache during the pre-dump operation while tasks are still running. The cache is saved as `irmap-cache.img`. During subsequent pre-dumps or the final dump, CRIU reads this cache and re-validates individual entries as needed, avoiding a full rescane.

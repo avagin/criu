@@ -1,10 +1,11 @@
-# Service descriptors
+# Service Descriptors
 
-These are the fds that help us to do checkpoint and restore. There must be only files, which are used by criu frequently, and it's difficult to obtain them by another way. The number of service fds on restore is significant, as they make file table grow, so service fds may increase memory usage after restore in comparison to dump. Other common used on restore files should be placed in fdstore instead. Note, that not all members of enum sfd_type from criu/include/servicefd.h have to be there. Some of them must go to fdstore sometimes.
+Service descriptors are file descriptors (FDs) used by CRIU to facilitate the checkpoint and restore processes.
 
-## Restore
--We try to place service fds as low as possible to minimize memory overhead. Per-fdtable variable service_fd_base points to the biggest service fd number. It's being chosen in choose_service_fd_base() in dependence of max file descriptor used by task.
+Only files that are used frequently by CRIU and are difficult to obtain by other means should be maintained as service FDs. Because these FDs cause the file table to grow, they can result in higher memory usage after restoration compared to the initial dump. Other files used during restoration should generally be placed in the `fdstore` instead. Note that not all members of the `sfd_type` enum in `criu/include/servicefd.h` are required to be present at all times; some may be moved to the `fdstore` when appropriate.
 
--Since ordinary files, which are open on restore, may be bigger than service_fd_base, there is code parts where service fds mustn't be modified at all. We mask such areas via sfds_protected variable, and they aborts restore if modifications of sfds are found in such code parts.
+## Restore Process
 
+CRIU attempts to assign service FDs to the lowest possible numbers to minimize memory overhead. The `service_fd_base` variable tracks the highest service FD number and is determined by `choose_service_fd_base()` based on the maximum file descriptor used by the task.
 
+Because standard files opened during restoration may have descriptors higher than `service_fd_base`, certain sections of code are marked where service FDs must not be modified. These areas are protected via the `sfds_protected` variable; if an unauthorized modification to a service FD is detected in these sections, the restoration process is aborted.

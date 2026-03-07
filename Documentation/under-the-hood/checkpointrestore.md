@@ -1,68 +1,68 @@
 # Checkpoint/Restore
 
-This page describes the overall design of how Checkpoint and Restore work in CRIU.
+This page describes the overall design of the Checkpoint and Restore mechanisms in CRIU.
 
 ## Checkpoint
 
-The checkpoint procedure relies heavily on **/proc** file system (it's a general place where criu takes all the information it needs).
-The information gathered from /proc includes:
+The checkpoint procedure relies heavily on the **/proc** filesystem, which is the primary source of information for CRIU.
+The information gathered from `/proc` includes:
 
-- Files descriptors information (via **/proc/$pid/fd** and **/proc/$pid/fdinfo**).
-- Pipes parameters.
+- File descriptor information (via **/proc/$pid/fd** and **/proc/$pid/fdinfo**).
+- Pipe parameters.
 - Memory maps (via **/proc/$pid/maps** and **/proc/$pid/map_files/**).
-- etc.
+- And more.
 
-The process dumper (called a dumper below) does the following steps during the checkpoint stage.
+The process dumper (hereafter referred to as the "dumper") performs the following steps during the checkpoint stage.
 
-### Collect process tree and freeze it
-The **$pid** of a process group leader is obtained from the command line (`--tree` option). By using this **$pid** the dumper walks though **/proc/$pid/task/** directory collecting threads and through the **/proc/$pid/task/$tid/children** to gathers children recursively. While walking tasks are stopped using the `ptrace`'s `PTRACE_SEIZE` command.
+### Collecting and Freezing the Process Tree
+The PID of the process group leader is obtained from the command line (`--tree` option). Using this PID, the dumper traverses the **/proc/$pid/task/** directory to collect threads and **/proc/$pid/task/$tid/children** to gather child processes recursively. During this traversal, tasks are stopped using the `ptrace` `PTRACE_SEIZE` command.
 
--See also: [Freezing the tree](freezing-the-tree.md)*
+*See also: [Freezing the tree](freezing-the-tree.md)*
 
-### Collect tasks' resources and dump them
-At this step CRIU reads all the information (it knows) about collected tasks and writes them to dump files. The resources are obtained via
-1. VMAs areas are parsed from **/proc/$pid/smaps** and mapped files are read from **/proc/$pid/map_files** links
-1. File descriptor numbers are read via **/proc/$pid/fd**
-1. Core parameters of a task (such as registers and friends) are being dumped via ptrace interface and parsing **/proc/$pid/stat** entry.
+### Collecting and Dumping Task Resources
+In this step, CRIU reads all available information about the collected tasks and writes it to dump files. Resources are obtained as follows:
 
-Then CRIU injects a [parasite code](parasite-code.md) into a task via ptrace interface. This is done in two steps -- at first we inject only a few bytes for *mmap* syscall at CS:IP the task has at moment of seizing. Then ptrace allow us to run an injected syscall and we allocate enough memory for a parasite code chunk we need for dumping. After that the parasite code is copied into new place inside dumpee address space and CS:IP set respectively to point to our parasite code.
+1. Virtual Memory Areas (VMAs) are parsed from **/proc/$pid/smaps**, and mapped files are identified via **/proc/$pid/map_files** links.
+1. File descriptor numbers are retrieved from **/proc/$pid/fd**.
+1. Core task parameters, such as registers, are dumped using the `ptrace` interface and by parsing the **/proc/$pid/stat** entry.
 
-From parsite context CRIU does more information such as
+CRIU then injects [parasite code](parasite-code.md) into the task via the `ptrace` interface. This occurs in two stages: first, a few bytes are injected at the task's current `CS:IP` to execute an `mmap` syscall. Once `ptrace` runs this syscall, enough memory is allocated for the full parasite code. The parasite code is then copied into the dumpee's address space, and `CS:IP` is updated to point to it.
+
+From the parasite's context, CRIU gathers additional information, such as:
 1. Credentials
-1. Contents of memory
+1. Memory contents
 
 ### Cleanup
 
-After everything dumped (such as memory pages, which can be written out only from inside dumpee address space) we use ptrace facility again and cure dumpee by dropping out all our parasite code and restoring original code. Then CRIU detaches from tasks and they continue to operate.
+Once all resources (such as memory pages, which can only be written from within the dumpee's address space) have been dumped, CRIU uses the `ptrace` facility again to "cure" the dumpee by removing the parasite code and restoring the original instructions. CRIU then detaches from the tasks, allowing them to resume operation.
 
 ## Restore
 
-The restore procedure (aka restorer) is done by CRIU morphing itself into the tasks it restores. On the top-level it consists of 4 steps
+The restoration procedure (the "restorer") involves CRIU morphing itself into the tasks it is restoring. This process consists of four high-level steps:
 
-### Resolve shared resources
+### Resolving Shared Resources
 
-At this step CRIU reads in image files and finds out which processes share which resources. Later shared resources are restored by some one process and all the others either inherit one on the 2nd stage (like session) or obtain in some other way. The latter is, for example, shared files which are sent with SCM_CREDS messages via unix sockets, or shared memory areas that are restoring via `memfd` file descriptor.
+CRIU reads the image files to identify which processes share specific resources. Shared resources are typically restored by one process; others either inherit them during the second stage (e.g., sessions) or obtain them through other means. Examples include shared files sent via UNIX sockets with `SCM_RIGHTS` messages or shared memory areas restored via `memfd` file descriptors.
 
-### Fork the process tree
+### Forking the Process Tree
 
-At this step CRIU calls fork() many times to re-created the processes needed to be restored. Note, that threads are not restored here, but on the 4th step.
+CRIU calls `fork()` repeatedly to recreate the process tree. Note that threads are not restored at this stage, but rather in the fourth step.
 
-### Restore basic tasks resources
+### Restoring Basic Task Resources
 
-Here CRIU restores all resources but
+In this stage, CRIU restores most resources, excluding:
 
-1. memory mappings exact location
-1. timers
-1. credentials
-1. threads
+1. Exact memory mapping locations
+1. Timers
+1. Credentials
+1. Threads
 
-The restoration of the above four types of resources are delayed till the last stage for the reasons described below. On this stage CRIU opens files, prepares [namespaces](namespaces.md), maps (and fills with data) private memory areas, creates sockets, calls chdir() and chroot() and doing some more.
+The restoration of these four resource types is delayed until the final stage for the reasons described below. During this stage, CRIU opens files, prepares [namespaces](namespaces.md), maps and populates private memory areas, creates sockets, and performs operations like `chdir()` and `chroot()`.
 
-### Switch to restorer context, restore the rest and continue
+### Switching to the Restorer Context, Finalizing Restoration, and Resuming
 
-The reason for restorer blob is simple. Since criu morphs into the target process, it will have to unmap all its memory and put back the target one. While doing so, some code should exist in memory (the code doing the munmap and mmap). Therefore, the restorer blob is introduced. It's a small piece of code, that doesn't intersect with criu mappings AND target mappings. At the end of stage 2 criu jumps into this blob and restores the memory maps.
+The restorer blob is necessary because as CRIU morphs into the target process, it must unmap its own memory and map the target's. Some code must remain in memory to perform these `munmap` and `mmap` operations. The restorer blob is a small piece of code positioned so that it does not intersect with either CRIU's or the target's memory mappings. At the end of the third stage, CRIU jumps into this blob to restore the memory maps.
 
-At the same place we restore timers not to make them fire too early, here we restore credentials to let criu do privileged operations (like fork-with-pid) and threads not to make them suffer from sudden memory layout change.
+In this context, timers are restored (to prevent them from firing prematurely), credentials are set (allowing privileged operations like `fork_with_pid`), and threads are recreated to avoid issues with memory layout changes.
 
--See also: [restorer context](restorer-context.md), [tree after restore](tree-after-restore.md).*
-
+*See also: [restorer context](restorer-context.md), [tree after restore](tree-after-restore.md).*

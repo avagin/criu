@@ -1,48 +1,38 @@
 # TTYs
 
+## Overview
+Terminals (TTYs) are a critical component of how programs interact with users, providing the primary interface for output and user input. For example, when a program is executed from a shell, the shell provides a terminal peer; the program's output is displayed in the shell, where the user can perform further processing (e.g., piping to `grep`).
 
+## Supported Terminal Types
+Linux supports a wide range of terminals, including *Unix98* pseudoterminals (**pty**), *BSD* terminals, and *virtual* terminals (**vt**). CRIU provides comprehensive support for **pty** and sufficient support for **vt**.
 
+"Full support" for **pty** includes saving the complete internal state, including queued data. For **vt**, CRIU provides plain restoration; while this is sufficient for standard terminal operations after restoration, any data queued but not yet delivered will be lost. This is not considered an error, as the terminal transport layer does not guarantee data delivery.
 
-= Overview =
+CRIU supports the following terminal types:
+- Console
+- Current
+- Virtual
+- External
+- Serial
+- Unix98
 
-Terminals are one of the most important parts of how programs interact with users. Usually programs print output into them and read user input from. For example when one executes any program from a shell, the shell provides terminal peer into it, so the program output will be seen in a calling shell and a user can do additional processing (say grepping and etc).
+### Console Terminal
+The **console** terminal is the simplest type. Restoration is performed via a simple `open("/dev/console")`.
 
-## Supported terminal types
+### Current Terminal
+The **current** terminal (`/dev/tty`) is an abstraction representing the terminal currently in use by an application. When opened, the kernel provides a reference to the actual terminal device. It is restored via `open("/dev/tty")` but must be restored last, after all other terminals.
 
-There are wide range of terminals exist in linux world: *unix98* psesudoterminals (**pty**), *bsd* terminals, *virtual* terminals (**vt**) and etc. In CRIU we support the **pty** completely and **vt** in a way full enough for work. By full support we mean complete save of **pty** internal state including queued data. In turn for **vt** only plain restoration supported which means it is complete enough to do a traditional operations with terminals after restore but if there was some data queued and not yet delivered to a terminal user it will be lost. It is worth to mention that such situation should not be treated as any kind of error - the terminal transport layer never ever be one with guaranteed data delivery.
+### Virtual Terminal (vt)
+Virtual terminals correspond to `/dev/ttyN` devices. These are restored using `open("/dev/ttyN")`, where `N` is the terminal number.
 
-Overall CRIU supports the following terminals:
+### External Terminal
+**External** terminals are used when file descriptors are expected to change between checkpoint and restoration and are passed via command-line options. For more details, see [Inheriting FDs on restore](inheriting-fds-on-restore.md). CRIU relies on these descriptors being already open and simply reuses them.
 
-- console
-- current
-- virtual
-- external
-- serial
-- unix98
+### Serial Terminal
+**Serial** terminals are primarily supported for debugging purposes, such as when developers use them to access virtual machines. They are restored using a standard `open()` call.
 
-### Console terminal
-
--*console** terminal is the most simple one. Its restore is just literally `open(/dev/console)`.
-
-### Current terminal
-
--*current** terminal is rather an abstraction over real terminal an application uses. Upon its opening the kernel simply provides back the reference to the real one thus the same way as for **console** its restore is just `open(/dev/tty)` with one exception - it must be restored last, ie after all other terminals are restored.
-
-### Virtual terminal
-
--*vt** stands for *ttyN* devices for which restore we simply do `open(/dev/ttyN)`, where N is a number.
-
-### External terminal
-
--*external** terminals stands for cases when file descriptors known to be changing between checkpoint/restore cycles and passed from command line options, see [Inheriting FDs on restore](inheriting-fds-on-restore.md) for details. For this kind of terminals we are relying on the file descriptors to be already opened and passed, so on restore we simply reuse them.
-
-### Serial terminal
-
--*serial** terminals are supported for debug purpose mostly, in particular some developers pass through into virtual machine with this terminals. Its restore as simple as plain `open()` call.
-
-### Unix98 terminal
-
--*pty** terminals are most commonly used over all other kinds. The **pty** represent a pair of peers: upon `open(/dev/ptmx)` the kernel automatically create `/dev/pts/N` slave peer, where N is a numeric index of the pair opened. Thus on restore we simply need *ptmx* device and give process master and slave descriptors.
+### Unix98 Terminal (pty)
+**pty** terminals are the most common type. They consist of a pair of peers: opening `/dev/ptmx` causes the kernel to automatically create a corresponding `/dev/pts/N` slave peer. During restoration, CRIU opens the `ptmx` device and provides the resulting master and slave descriptors to the process.
 
 ## See also
 - [External files](external-files.md)

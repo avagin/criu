@@ -1,25 +1,19 @@
-# Vdso
+# vDSO
 
-### Overview
+## Overview
+**vDSO** (virtual Dynamic Shared Object) is a small shared library that the kernel automatically maps into the address space of every userspace program. It provides highly optimized versions of frequently used system calls—such as `gettimeofday` and `getcpu`—that can be executed without the overhead of a full context switch. Most applications access these via **libc** rather than calling them directly.
 
--*vDSO** stands for [*virtual dynamic shared object*](http://man7.org/linux/man-pages/man7/vdso.7.html) and basically is a shared library exported by kernel into every userspace program. It usually exports a few frequently used functions (such as gettimeofday, getcpu and etc) and userspace applications don't call them directly but make use of **libc** instead.
+## The Challenge
+While the kernel maintains backward compatibility for vDSO functions, the internal structure and memory layout of the vDSO can change between kernel versions. This poses a significant problem for CRIU: if an application is migrated to a host running a different kernel, the vDSO image captured during the dump may be incompatible with the new kernel's internals.
 
-### A problem
+## Call Proxification
+To address this, CRIU uses a technique called **call proxification**. During restoration, CRIU redirects calls from the original (dumped) vDSO to the version provided by the current kernel. This process involves several steps:
 
-While the kernel guarantees backwards compatibility (i.e. helper functions won't suddenly disappear), the internal structure of the **vDSO** itself may vary. Userspace programs won't notice such changes but it brings a huge problem to CRIU. The **vDSO** structure is highly coupled with the kernel internals. If an application is being migrated to a new kernel release (with a brand new **vDSO**) the old **vDSO** (which is stored in the application's memory) is no longer usable.
+1. CRIU analyzes the vDSO provided by the restoration host's kernel, parsing its symbols, sections, and entry points.
+2. During the restoration of the dumped vDSO memory area, CRIU patches the function entry points with redirection instructions (e.g., a `jmp` instruction on x86) that point to the corresponding functions in the new vDSO.
 
-### Calls proxification
+This allows the application to continue using its existing vDSO entry points while actually executing the code compatible with the current kernel. If CRIU detects that the dump and restoration kernels are identical, proxification is skipped.
 
-To solve this problem CRIU does that named call proxification, where all functions from the original **vDSO** code are redirected to a new one provided by the kernel where application is restored. This done in a several steps on restore:
-
-1. Scan runtime environment for current **vDSO** and parse its structure (size, sections, symbols, etc)
-1. On restore of dumped **vDSO** memory area we patch function entry points so that they are redirected to current **vDSO** (for x86 architecture is simply a `jmp` instruction)
-
-After that an restored application can continue using original **vDSO** helpers without problems.
-
-In case if an application is dumped and restored on same kernel CRIU detects that **vDSO** structure has not be changed and doesn't use calls proxification.
-
-### Unsolved proxification problems
-
-1. If an application in very unlikely case is Checkpointed over first bytes of vdso entry *and* vdso is different on the destination migration node, those might be the bytes that are being patched during proxification. If it's on vdso just after those entry-bytes, the stale data from vvar is taken (might be just fine afterall).
-
+## Proxification Challenges
+- In very rare cases, a process might be checkpointed exactly while executing the first few bytes of a vDSO function. If these bytes are the ones being patched for proxification, it could lead to inconsistent state.
+- If the instruction pointer is immediately after these patched entry bytes, the function may attempt to use stale data from the `vvar` page, although this is typically handled by the kernel.

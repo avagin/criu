@@ -1,13 +1,9 @@
 # Tun-Tap
 
-Tun-Tap devices are used by e.g. OpenVPN software. CRIU has support for them.
+Tun-Tap devices, often used by software like OpenVPN, are supported by CRIU.
 
 ## Devices
-
-The netdevice entry sits in `netdev-ID.img` image file and has optional `tun` field.
+The network device entry is stored in the `netdev-ID.img` image file and includes an optional `tun` field.
 
 ## Files
-
-Other than this there's always a reg-file entry in the [images](images.md) for tun deivce. In addition to this there's an entry in the `tunfile` image. The device-to-file mapping is performed by device name.
-
-
+For every TUN device, there is a corresponding `reg-file` entry in the [images](images.md). Additionally, an entry is created in the `tunfile` image. CRIU performs device-to-file mapping based on the device name.

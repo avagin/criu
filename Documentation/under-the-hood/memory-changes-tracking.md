@@ -1,52 +1,51 @@
-# Memory changes tracking
+# Memory Changes Tracking
 
-CRIU can detect what memory pages a task (or tasks) has changed since some moment of time. This page describes why this is required, how it works and how to use it.
+CRIU can detect which memory pages a task (or tasks) has changed since a specific point in time. This page describes why this is required, how it works, and how to use it.
 
-## Why do we need to track memory changed
+## Why Track Memory Changes?
 
-There are several scenarios where detecting what parts of memory has changed is required:
+Several scenarios require detecting which parts of memory have changed:
 
-**[Incremental dumps](incremental-dumps.md)**
-  When you take a series of dumps from a process tree, it is a very good optimization not to dump *all* the memory every time, but get only those memory pages that has changed since previous dump
+**[Incremental Dumps](incremental-dumps.md)**
+When taking a series of dumps from a process tree, it is a significant optimization to avoid dumping all memory every time. Instead, only pages that have changed since the previous dump are captured.
 
-**Smaller freeze time for big applications**
-  When a task uses a LOT of memory, dumping it may take time and during all this time this task should be frozen. To reduce the freeze time we can
-  * get memory from task and start writing it in images
-  * freeze task and get only changed memory from it
+**Reduced Freeze Time for Large Applications**
+When a task uses a vast amount of memory, dumping it can be time-consuming, and the task must remain frozen during the process. To reduce freeze time, CRIU can:
+1. Capture memory from the task and begin writing it to images while the task is still running.
+1. Briefly freeze the task to capture only the pages that changed during the initial write.
 
-**[Live migration](live-migration.md)**
-  When doing live migration, a lot of time is used by the procedure of copying tasks' memory to the destination host. Note that the processes are frozen during that time. Acting like in the previous example also reduces the freeze time, i.e. the live migration becomes more live.
+**[Live Migration](live-migration.md)**
+During live migration, much of the time is spent copying task memory to the destination host. Processes are typically frozen during this period. Using memory tracking reduces this "downtime," making the migration more seamless.
 
-## How we track memory changes
+## How Memory Changes Are Tracked
 
-In order to find out which memory pages have changed, we [patched](http://lwn.net/Articles/546966/) the kernel. Tracking the memory changes consists of two steps:
+To identify changed memory pages, CRIU uses a kernel feature (originally [patched](http://lwn.net/Articles/546966/) into the kernel). Tracking consists of two steps:
 
-- ask the kernel to keep track of memory changes (by writing 4 into `/proc/$pid/clear_refs` file for each $pid we are interested in).
+1. Request that the kernel track memory changes by writing `4` into the `/proc/$pid/clear_refs` file for each process of interest.
+1. After a period of time, retrieve the list of modified pages by reading `/proc/$pid/pagemap` and checking the "soft-dirty" bit in the entries.
 
-and, after a while,
+During the first step, the kernel remaps the task's mappings as read-only. If the task subsequently attempts to write to a page, a page fault occurs, and the kernel records the modification. Reading the `pagemap` file reveals these recorded changes.
 
-- get the list of modified pages of a process by reading its `/proc/$pid/pagemap` file and looking at so called *soft-dirty* bit in the pagemap entries.
+## Using Memory Tracking with CRIU
 
-During the first step, kernel will re-map all the tasks' mapping in read-only manner. If a task then tries to write into any of its pages, a page fault will occur, and the kernel will note which page is being written to. Reading the `pagemap` file reveals this information.
+First, verify that the feature is supported by running:
 
-## How to use this with CRIU
+```bash
+criu check --feature mem_dirty_track
+```
 
-First of all, the
+Memory change tracking was initially merged into Linux kernel v3.11 and refined until v3.18 (see [Upstream kernel commits](upstream-kernel-commits.md) for details).
 
- # criu check --feature mem_dirty_track
+Command-line options for this functionality include:
 
-command should say the feature is supported. The memory changes tracking was initially merged into Linux kernel v3.11, and was further polished until v3.18 (see [Upstream kernel commits](upstream-kernel-commits.md) for details).
+**`--prev-images-dir`**
+Provides the path to images from a previous `dump` or `pre-dump`. CRIU will then attempt to dump only the pages modified since that previous action.
 
-There are several command line options to use the functionality:
-
-**`--prev-images-dir` option**
-  This option is used to provide the path where images from a previous `dump` or `pre-dump` (see below) action reside. If possible, CRIU will dump only the memory pages that have been modified since that time.
-
-**`--track-mem` option**
-  This option makes CRIU to reset memory changes tracker. If done, the next dump `--prev-images-dir` will have chances to successfully find not changed pages.
+**`--track-mem`**
+Causes CRIU to reset the memory change tracker. This ensures that the next dump using `--prev-images-dir` can successfully identify unchanged pages.
 
 **`pre-dump` action**
-  This action dumps only part of the information about processes and does that by keeping tasks frozen for the shortest possible time. The images generated by pre-dump cannot and should not be used for restore. After this action the proper `dump` should be performed with properly configured `--prev-images-dir` path.
+This action dumps only a portion of the process information, keeping tasks frozen for the shortest possible time. Images generated by a `pre-dump` cannot be used for restoration; a subsequent `dump` must be performed using the `--prev-images-dir` option.
 
 ## See also
 - [Live migration](live-migration.md)
@@ -57,6 +56,3 @@ There are several command line options to use the functionality:
 
 ## External links
 - http://lwn.net/Articles/546966/
-
-
-
