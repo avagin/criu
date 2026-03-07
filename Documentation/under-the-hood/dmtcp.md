@@ -1,13 +1,26 @@
-# DMTCP
+# DMTCP vs. CRIU
 
-<noinclude>
-This article explains the differences between CRIU and DMTCP.
-</noinclude>
+This article explains the fundamental differences between CRIU and DMTCP (Distributed MultiThreaded Checkpointing), focusing on their architectural approaches to process capture and restoration.
 
-DMTCP implements checkpoint/restore at the library level. This means that to checkpoint/restore an application, it must be launched with the DMTCP library dynamically linked from the start. When launched this way, the DMTCP library intercepts various library calls, builds a shadow database of information about the process's internals, and then forwards requests to `glibc` or the kernel. The gathered information is used to create an application image.
+## Architectural Approach
 
-With this approach, only applications known to run successfully with the DMTCP libraries can be dumped. Furthermore, DMTCP does not provide proxies for all kernel APIs (for example, `inotify()` is currently unsupported). Another implication is the potential performance overhead caused by proxying requests.
+### DMTCP: Library-Level Interception
+DMTCP implements checkpoint/restore at the **userspace library level**. To use it, an application must be launched with the DMTCP library dynamically linked (`LD_PRELOAD`).
+*   **Mechanism**: The library intercepts library calls (e.g., `glibc` wrappers for syscalls), builds an internal shadow database of the process state, and then forwards requests to the kernel.
+*   **Implications**: This approach can introduce performance overhead due to proxying. Only applications compatible with the DMTCP library can be reliably dumped. Furthermore, DMTCP may not support all kernel APIs; for instance, complex features like `inotify` or specific socket types may lack sufficient proxies.
 
-Restoring a process set is also complex, as it often requires restoring objects with predefined IDs that the kernel may not allow userspace to set. For example, the kernel traditionally does not allow forking a process with a specific PID. To work around this, DMTCP "fools" the process by intercepting `getpid()` and providing a fake PID value. This behavior can be dangerous, as the application might see incorrect information in the `/proc` filesystem if it attempts to access files via its PID.
+### CRIU: Kernel-Level Integration
+CRIU, by contrast, operates primarily from **outside the process** using standard kernel interfaces (extended where necessary for C/R).
+*   **Mechanism**: CRIU uses tools like `ptrace`, `/proc`, and specialized system calls (e.g., `kcmp`, `map_files`) to transparently capture the process state without requiring pre-loaded libraries.
+*   **Implications**: It can checkpoint and restore virtually any application, provided the kernel supports the required features. It requires a relatively modern kernel version but offers much deeper integration with system resources like namespaces and cgroups.
 
-CRIU, by contrast, does not require any libraries to be pre-loaded. It can checkpoint and restore arbitrary applications as long as the kernel provides the necessary facilities. Since support for some CRIU features was added to the kernel relatively recently, a modern kernel version is typically required.
+## PID Handling and Virtualization
+
+Restoring a process tree often requires restoring specific Process IDs (PIDs).
+
+*   **DMTCP "Fake" PIDs**: Because the kernel does not traditionally allow userspace to request a specific PID during `fork()`, DMTCP "fools" the application. It intercepts the `getpid()` call and returns a fake value that matches the original PID. This is highly dangerous, as the application may see inconsistent information in the `/proc` filesystem (where directories are named by the *real* PID).
+*   **CRIU Real PIDs**: CRIU restores the **actual PID** of the process. It achieves this by using the `ns_last_pid` interface or the modern `clone3` system call with a specified PID. This ensures that the restored process has the exact same identity as the original, with no inconsistencies in `/proc` or other kernel interfaces.
+
+## Summary
+
+DMTCP is often easier to deploy on older kernels since it doesn't require specific kernel support, but it suffers from the inherent limitations and risks of userspace interception. CRIU is the more robust and transparent solution for modern Linux systems, offering faithful restoration of the entire process environment.
