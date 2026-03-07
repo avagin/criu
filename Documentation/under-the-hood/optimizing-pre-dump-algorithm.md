@@ -1,68 +1,35 @@
-# Optimizing the Pre-dump Algorithm
+# Optimized Pre-dump Algorithm
 
-This article describes the implementation of an optimized pre-dumping algorithm in CRIU. This project was completed as part of the [GSoC 2019 program](https://summerofcode.withgoogle.com/projects/#6174473131130880).
+Pre-dumping is the process of capturing dirty memory pages while an application continues to run, aiming to minimize the final "freeze time" during live migration. CRIU provides two primary modes for pre-dumping: `read` and `splice`.
 
-## Problems with the Existing Pre-dump
+## Traditional vs. Optimized Pre-dump
 
-Previously, during a pre-dump, the target process had to remain frozen until all memory pages were drained into pipes. These pages were only written to image files at the end of the pre-dump. This approach had two major drawbacks:
-1. The target process remained frozen for a significant duration.
-2. The pipes created significant memory pressure. If memory usage during the pre-dump approached the system's total capacity, it risked triggering out-of-memory (OOM) failures, as pipe pages are non-reclaimable.
+### The `read` Mode (Traditional)
+In this mode, CRIU uses the `process_vm_readv()` system call to read memory from the target process. 
+*   **Workflow**: Tasks are briefly frozen to identify dirty pages and reset the soft-dirty bit, then resumed. CRIU then reads the pages from the running process's address space.
+*   **Challenge**: Reading memory while a process is running can lead to minor inconsistencies if the process modifies a page *while* it is being read. Furthermore, `process_vm_readv()` requires the target process to be alive and its memory mappings to remain stable during the read.
 
-## The Solution
+### The `splice` Mode (Optimized & Default)
+The `splice` mode (enabled via `--pre-dump-mode=splice`) uses a zero-copy "gift" mechanism to further reduce freeze time and improve reliability.
 
- The optimized implementation addresses these two issues. Now, the target process is only frozen until its memory mappings are collected. Once collected, the process is unfrozen and resumes execution. The draining of pages from the process occurs while the process is running, using the [`process_vm_readv`](http://man7.org/linux/man-pages/man2/process_vm_readv.2.html) system call to copy data into a userspace buffer. 
+#### How `splice` Mode Works:
+1.  **Brief Freeze**: CRIU seizes the tasks and injects the parasite code.
+2.  **vmsplice "Gifting"**: The parasite identifies dirty pages and calls `vmsplice()` with the `SPLICE_F_GIFT` flag. This flag tells the kernel that the process is "giving" these pages to a pipe.
+3.  **Immediate Resume**: Once the `vmsplice()` calls are complete (which is extremely fast as no data is actually copied), the parasite is removed, and the tasks are resumed immediately.
+4.  **Parallel Draining**: While the tasks are running, the main CRIU process "drains" the data from the pipes and writes it to the image files or sends it to the page server.
 
-Because page draining and process execution happen simultaneously, the process might modify its memory mappings (e.g., unmapping a region) after CRIU has collected them. This race condition must be handled on the fly to allow `process_vm_readv` to complete the transfer.
+#### Why `splice` is Better:
+*   **Consistency via COW**: The `SPLICE_F_GIFT` flag ensures that if the process modifies a "gifted" page after resuming, the kernel performs a **Copy-on-Write (COW)**. The pipe buffer continues to hold the *original* version of the page as it existed at the moment of the `vmsplice()` call, ensuring a perfectly consistent snapshot of that page.
+*   **Minimized Downtime**: The "freeze" duration is reduced to just the time needed for the parasite to execute the `vmsplice()` system calls, rather than the time needed to transfer gigabytes of memory data over the network or to disk.
 
-## Design Considerations
+## Usage
 
-The following sections discuss how to handle "faulty" locations within an `iovec` that prevent `process_vm_readv` from processing the entire vector in a single call.
+The optimized `splice` mode is the default in modern CRIU. It can be explicitly requested using the `--pre-dump-mode` option:
+```bash
+criu pre-dump --pre-dump-mode splice ...
+```
 
-**Note**: For simplicity, the following discussion uses "page granularity." `length_in_bytes` represents the page count, and the syscall's return value reflects the number of pages successfully read.
-
-Consider the memory layout of a target process:
-
-![File:opt_img1.png](File:opt_img1.png)
-
-A single `iov` is represented as `{starting_address, page_count}`. For the layout above, the `iovec` would be: `{A, 1}, {B, 1}, {C, 4}`.
-
-While this `iovec` is static once generated, the target process may unmap or change the protection of these regions while `process_vm_readv` is active.
-
-### Case 1: The first region is unmapped
-If region `A` is unmapped, `{A, 1}` becomes a faulty `iov`.
-
-![File:opt_img2.png](File:opt_img2.png)
-
-`process_vm_readv` will return `-1`. By incrementing the start pointer, the next call will process `{B, 1}, {C, 4}` and successfully copy 5 pages.
-
-### Case 2: A middle region is unmapped
-If region `B` is unmapped, `{B, 1}` becomes faulty.
-
-![File:opt_img3.png](File:opt_img3.png)
-
-`process_vm_readv` will return `1`, indicating page `A` was successfully copied before the syscall encountered the unmapped region `B`. CRIU then increments the pointer past `B` and resumes with region `C`.
-
-### Case 3: Partial unmapping of a large region
-If a large region (e.g., `C`) is partially unmapped, `process_vm_readv` cannot process the faulty `iov` as a whole. CRIU must process these regions part-by-part.
-
-**Part 3.1: The first page of a region is unmapped**
-![File:opt_img4.png](File:opt_img4.png)
-`process_vm_readv` returns `2` (pages `A` and `B` copied). CRIU identifies that `iov-C` is larger than one page and introduces a "dummy-iov" `{C+1, 3}` to attempt to copy the remaining pages of the region.
-
-**Part 3.2: A page in the middle of a region is unmapped**
-![File:opt_img5.png](File:opt_img5.png)
-`process_vm_readv` returns `4` (A, B, and the first two pages of C copied). CRIU calculates the `partial_read_byte` count and creates a dummy-iov `{C+3, 1}` to skip the faulty page and copy the remainder of region `C`.
-
-## Limitations
-
-Only memory regions with `PROT_READ` protection can be pre-dumped. `process_vm_readv` cannot access regions lacking this flag. Non-readable regions are deferred to the final dump stage. If a process has a large number of such pages, the benefits of this optimized pre-dump are reduced.
-
-## Invocation
-
-The `--pre-dump-mode` option allows users to select the algorithm. 
-- `splice`: Traditional parasite-based pre-dumping (default).
-- `read`: Optimized pre-dumping using `process_vm_readv`.
-
-## Future Optimization
-
-Processing partially read `iov`s can become expensive if the region is very large and CRIU must iterate page-by-page to find the next valid mapping.
+## See also
+* [Memory Changes Tracking](memory-changes-tracking.md)
+* [Memory Dumping and Restoring](memory-dumping-and-restoring.md)
+* [Iterative Migration](iterative-migration.md)
