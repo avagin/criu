@@ -1,35 +1,44 @@
-# Final States
+# Process Tree Final States
 
-The "final state" refers to the status of a process tree after a CRIU dump or restore operation.
+This document describes the possible states a process tree can end up in after a successful CRIU **dump** or **restore** operation.
 
-There are three possible final states:
-- **Running**: Processes continue execution as usual.
-- **Stopped**: Processes are halted using `SIGSTOP`.
-- **Dead**: Processes are terminated using `SIGKILL`.
+## Supported Final States
 
-## Changing the Default Final States
+CRIU supports three primary final states for the process tree:
 
-The following command-line options can be used with `criu dump` and `criu restore` to modify the final state:
+1.  **Running (`TASK_ALIVE`)**: The processes continue execution as normal.
+2.  **Stopped (`TASK_STOPPED`)**: The processes are left in a stopped state (equivalent to receiving `SIGSTOP`).
+3.  **Dead (`TASK_DEAD`)**: The processes are terminated (equivalent to receiving `SIGKILL`).
 
-- `--leave-stopped`
-- `--leave-running`
+## Controlling the Final State
 
-## criu dump
+You can specify the desired final state using the following command-line options:
 
-By default, the final state after a `criu dump` is **dead**, meaning CRIU terminates the process tree immediately after dumping it.
+*   `--leave-running`: Forces the process tree to continue running after the operation.
+*   `--leave-stopped`: Forces the process tree to remain stopped after the operation.
 
-This default behavior is intentional. If processes were left running, they might change the filesystem (e.g., deleting a file) or networking state (e.g., closing a TCP connection). Such changes would make it impossible to restore the process tree from the dump later, as the required resources would no longer be in the state captured during the dump.
+### Default Behavior for `criu dump`
 
-However, if a process tree does not destroy critical resources, it can be left running using the `--leave-running` option. Note that even in this case, the running processes might modify state (like file contents) in a way that is logically incompatible with a future restoration from that dump.
+By default, `criu dump` terminates the process tree (**Dead**).
 
-Leaving a process tree **stopped** is often useful for debugging CRIU. If a dump was not entirely accurate, the traces can be investigated while the processes are in a stopped state.
+**Rationale**: Leaving a process tree running after a full dump is risky. If the processes continue to run, they will likely modify the filesystem, network state, or shared memory. These changes can make the captured image inconsistent or impossible to restore later, as the system state will no longer match the process's internal state at the moment of the dump.
 
-Note: Currently, the `--leave-stopped` and `--leave-running` options are ignored for the `predump` command, which naturally requires the process tree to remain running.
+*   **Exceptions**: The `pre-dump` command always enforces the **Running** state, as its purpose is to capture memory changes while the application continues to operate.
 
-## criu restore
+### Default Behavior for `criu restore`
 
-By default, the final state after a restore is **running**, as users typically want to resume execution immediately. The `--leave-stopped` option can be used to leave the restored process tree in a stopped state.
+By default, `criu restore` resumes the process tree (**Running**).
 
-## Resuming from a Stopped State
+**Rationale**: The primary goal of restoration is typically to resume the application's work immediately.
 
-If a process tree was left in a *stopped* state after a dump or restore, you can resume its execution (changing its state to *running*) using the [pstree_cont.py](https://github.com/xemul/criu-scripts/blob/master/pstree_cont.py) script. Its only argument is the PID of the root process of the tree.
+*   **Debugging**: Using `--leave-stopped` during restoration can be extremely useful for debugging. It allows you to inspect the restored process tree (e.g., via `/proc` or a debugger) before it begins executing any code.
+
+## Resuming a Stopped Tree
+
+If a process tree was left in the **Stopped** state (either by dump or restore), you can resume its execution by sending a `SIGCONT` signal to all processes in the tree.
+
+For complex process trees, the [pstree_cont.py](https://github.com/checkpoint-restore/criu-scripts/blob/master/pstree_cont.py) script (available in the `criu-scripts` repository) can be used to safely resume the entire hierarchy by targeting the root PID.
+
+## See also
+* [Checkpoint/Restore Architecture](checkpointrestore.md)
+* [Freezing the Tree](freezing-the-tree.md)
