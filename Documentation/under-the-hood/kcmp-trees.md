@@ -1,40 +1,29 @@
-# Kcmp trees
+# Kcmp Trees
 
 ## Overview
 
-Usually we dump not just a single process but a set of them, where every process may be sharing some resources with other processes.
-Thus we need somehow to distinguish which resources are shared and which are not.
+When checkpointing a group of processes, many of them may share resources. CRIU must distinguish between resources that are shared and those that are unique to a process.
 
-For this sake [kcmp](http://man7.org/linux/man-pages/man2/kcmp.2.html) system call has been introduced to Linux kernel.
-It takes two processes and compare a resource asked, returning result similar to well known
-[strcmp](http://man7.org/linux/man-pages/man3/strcmp.3.html) call. This allows CRIU to track resources with a sorting algorithm.
+To achieve this, the [`kcmp`](http://man7.org/linux/man-pages/man2/kcmp.2.html) system call was introduced to the Linux kernel. It compares a specific resource between two processes and returns a result similar to [`strcmp`](http://man7.org/linux/man-pages/man3/strcmp.3.html). This allows CRIU to efficiently track shared resources using a sorting algorithm.
 
 ### API
 
-CRIU gather files, filesystems, vitrual memory descriptors, signal handlers and file descriptors associated with a process
-each into Kcmp-tree. Thus at moment we are carrying five Kcmp-trees. Each declared with `DECLARE_KCMP_TREE` helper.
-For example
+CRIU organizes files, filesystems, virtual memory descriptors, signal handlers, and file descriptors into separate "Kcmp trees." Currently, CRIU maintains five such trees, each declared using the `DECLARE_KCMP_TREE` helper. For example:
 
-```
+```c
 DECLARE_KCMP_TREE(vm_tree, KCMP_VM);
 ```
 
-Each tree internally represented as [red-black](http://en.wikipedia.org/wiki/Red%E2%80%93black_tree) tree.
+Internally, each tree is implemented as a [red-black tree](http://en.wikipedia.org/wiki/Red%E2%80%93black_tree).
 
-When CRIU gathers process resources it check if a resource is already sitting inside of a tree calling
-`kid_generate_gen()` helper. If a resource is not in a tree - it pushed into a tree
-and a caller obtains new abstract ID which may be used inside CRIU images, otherwise the helper
-returns zero notifying that this kind of resource already known to CRIU and has been handled earlier.
+As CRIU gathers process resources, it uses the `kid_generate_gen()` helper to check if a resource already exists in the tree. If the resource is new, it is added to the tree, and the caller receives a new abstract ID for use in CRIU images. If the resource is already known, the helper returns zero, indicating it has already been handled.
 
-This feature is quite important to eliminate duplication of entries inside CRIU dump images, because
-two processes might share a lot of resources and dumping them multiple times would cause very serious
-performance issue.
+This mechanism is critical for preventing duplicate entries in dump images, which would otherwise lead to significant performance issues.
 
-### Two trees
+### Two-Tree Strategy
 
-In order to minimize the number of `kcmp` calls we use two IDs for an object -- so called *gen_id* and the *ID* itself.
+To minimize the number of expensive `kcmp` calls, CRIU uses two identifiers for each object: a **gen_id** and the **ID** itself.
 
-The gen_id is and ID that is created based on some visible attributes of an object. E.g. for a file it's generated out of the inode number, device and position. Having two gen_id-s different we can say that the objects differ to. E.g. file with different inodes are different. But two equal gen_id-s may refer to different files too. So to check *this* we call `kcmp`.
+The **gen_id** is generated from visible attributes of an object. For a file, it might be derived from the inode number, device, and position. If two objects have different `gen_id`s, they are guaranteed to be different. However, two identical `gen_id`s do not guarantee that the objects are the same.
 
-For faster lookup we store objects in two trees. First RB-tree is the sorted by gen_id-s tree. When we fail to find an element in a tree we assume that the object we check is the new one. When we *find* an element in the tree we need to go on and call `kcmp`. But since one gen_id leaf may refer to several elements *and* kernel reports equals/greater/less from `kcmp` we create the 2nd tree under the gen_id leaf -- the sorted by ID tree where the comparison function is the `kcmp`.
-
+To handle this efficiently, objects are stored in two layers of trees. The first is a red-black tree sorted by `gen_id`. If an object is not found here, it is considered new. If a match is found, CRIU must then call `kcmp` to confirm equality. Because one `gen_id` might correspond to multiple distinct objects, a second tree is maintained under each `gen_id` leaf, sorted by the results of the `kcmp` calls.

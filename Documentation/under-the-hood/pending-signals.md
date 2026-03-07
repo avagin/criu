@@ -1,10 +1,12 @@
-# Pending signals
+# Pending Signals
 
 ### Introduction
-A process can block a set of signals and all signals will wait in two kernel queues. One queue is shared between threads and the other is private for a thread. Signals in a queue are called pending signals. Each signal has a siginfo, it’s a small message. Several types of siginfo-s exist.
+A process can block a set of signals, causing them to wait in two kernel queues: one shared between threads and another private to each thread. Signals in these queues are referred to as "pending signals." Each signal includes a `siginfo` message, and several different types of `siginfo` exist.
 
-### What do we need to dump pending signals?
+### Dumping Pending Signals
 
-We need to get the siginfo for each signal on dump, and then return it back on restore. It looks simple, doesn’t it? I thought so, before I started. The first problem is that the kernel doesn’t report complete siginfo-s in user-space. In a signal handler the kernel strips SI_CODE from siginfo. When a siginfo is received from signalfd, it has a different format with fixed sizes of fields. The interface of signalfd was extended. If a signalfd is created with the flag SFD_RAW, it returns siginfo in a raw format. We need to choose a queue, so two more flags SFD_GROUP and SFD_PRIVATE were added.
-Ok, signals can be dumped. Now we can think how to restore them. rt_sigqueueinfo looks suitable for that, but it can’t send siginfo with a positive si_code, because these codes are reserved for the kernel. In the real world each person has right to do anything with himself, so I think a process should able to send any siginfo to itself.
+Dumping pending signals requires capturing the `siginfo` for each signal during a dump and then restoring it later. While this sounds simple, several challenges exist. First, the kernel traditionally does not report complete `siginfo` structures to userspace; for example, it often strips the `SI_CODE` field in signal handlers. Additionally, `siginfo` received via a `signalfd` uses a different format with fixed-size fields.
 
+To address this, the `signalfd` interface was extended. When created with the `SFD_RAW` flag, `signalfd` returns `siginfo` in its raw format. Furthermore, the `SFD_GROUP` and `SFD_PRIVATE` flags were added to allow selecting the specific queue to dump.
+
+Once signals are captured, they must be restored. While `rt_sigqueueinfo` is suitable for this, it traditionally cannot send `siginfo` with a positive `si_code`, as those values are reserved for the kernel. However, since a process should have the right to manage its own state, it should be able to send any `siginfo` to itself during restoration.

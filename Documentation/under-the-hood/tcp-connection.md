@@ -1,81 +1,53 @@
-# TCP connection
+# TCP Connection
 
-This page describes how we handle established TCP connections.
+This page describes how CRIU handles established TCP connections.
 
-## TCP repair mode in kernel
+## TCP Repair Mode in the Kernel
 
-The `TCP_REPAIR` socket option was added to the kernel 3.5 to help with C/R for TCP sockets.
+The `TCP_REPAIR` socket option was added to the Linux kernel in version 3.5 to facilitate checkpoint/restore for TCP sockets.
 
-When this option is used, the socket is switched into a special mode, in which any action performed on it
-does not result in anything defined by an appropriate protocol actions, but rather directly puts the socket
-into the state that the socket is expected to be in at the end of a successfully finished operation.
+When this option is enabled, the socket enters a special mode where actions performed on it do not trigger standard protocol behaviors. Instead, they directly transition the socket into the expected state as if the operation had successfully completed.
 
-For example, calling `connect()` on a repaired socket just changes its state to `ESTABLISHED`,
-with the peer address set as requested.
-The `bind()` call forcibly binds the socket to a given address (ignoring any potential conflicts).
-The `close()` call closes the socket without any transient `FIN_WAIT`/`TIME_WAIT`/etc states,
-socket is silently killed.
+For example:
+- Calling `connect()` on a socket in repair mode simply changes its state to `ESTABLISHED` with the specified peer address.
+- Calling `bind()` forcibly binds the socket to the given address, ignoring potential conflicts.
+- Calling `close()` silently terminates the socket without undergoing `FIN_WAIT`, `TIME_WAIT`, or other transient states.
 
 ### Sequences
+To correctly restore a connection, CRIU must also restore the TCP sequence numbers. This is achieved using the `TCP_REPAIR_QUEUE` and `TCP_QUEUE_SEQ` options. `TCP_REPAIR_QUEUE` selects either the input or output queue for repair, and `TCP_QUEUE_SEQ` gets or sets the sequence number. Note that sequence numbers can only be set on a closed socket.
 
-To restore the connection properly, bind() and connect() is not enough. One also needs to restore the
-TCP sequence numbers. To do so, the `TCP_REPAIR_QUEUE` and `TCP_QUEUE_SEQ` options were introduced.
-
-The former one selects which queue (input or output) will be repaired and the latter gets/sets the sequence. Note
-setting the sequence is only possible on CLOSE-d socket.
-
-### Packets in queue
-
-When set the queue to repair as described above, one can call recv or send syscalls on a repaired socket. Both calls
-result on peeking or poking data from/to the respective queue. This sounds funny, but yes, for repaired socket one
-can receve the outgoing and send the incoming queues. Using the `MSG_PEEK` flag for `recv()` is required.
+### Packets in Queue
+While in repair mode, standard `recv` and `send` system calls can be used to peek or poke data directly from/to the selected queue. This allows CRIU to capture the state of outgoing and incoming packet queues. The `MSG_PEEK` flag is required for `recv()` calls.
 
 ### Options
+Four primary options are negotiated during the TCP connection stage:
+- `mss_clamp`: The maximum segment size the peer can accept.
+- `snd_scale`: The window scaling factor.
+- `sack`: Whether selective acknowledgments are permitted.
+- `tstamp`: Whether timestamps are supported.
 
-There are 4 options that are negotiated by the socket at the connecting stage. These are
+These can be retrieved via `getsockopt()` and restored using the `TCP_REPAIR_OPTIONS` socket option.
 
-- mss_clamp -- the maximum size of the segment peer is ready to accept
-- snd _scale -- the scale factor for a window
-- sack -- whether selective acks are permitted or not
-- tstamp -- whether timestamps on packets are supported
+## Timestamps
+As per RFC 7323, the sender's timestamp clock provides monotonic, non-decreasing values for segments. The Linux kernel uses the `jiffies` counter as the TCP timestamp. CRIU uses the `TCP_TIMESTAMP` option to compensate for differences in `jiffies` counters when a connection is migrated to a different host. During a dump, CRIU records the current timestamp and, during restoration, sets it as the new starting point.
 
-All four can be read with `getsockopt()` calls to a socket and in order to restore them the `TCP_REPAIR_OPTIONS` sockoption is introduced.
+## Checkpoint and Restore of TCP Connections
 
-## Timestamp
-"The sender's timestamp clock is used as a source of monotonic non-decreasing values to stamp the segments"(rfc7323). The Linux kernel uses the jiffies counter as the tcp timestamp.
+Using these socket options, CRIU can read the socket state and restore it, allowing the protocol to resume the data sequence seamlessly.
 
-`#define tcp_time_stamp          ((__u32)(jiffies))`
+Crucially, while the socket is closed between the dump and restoration, the connection must be "locked." This prevents packets from the peer from reaching the networking stack and causing the kernel to send a reset (RST). This is typically achieved using a netfilter rule to drop incoming packets from the peer. This rule must remain in place from the end of the dump until the restoration is complete. The locking method can be configured using the `--network-lock` option.
 
-We add the `TCP_TIMESTAMP` options to be able to compensate a difference between jiffies counters, when a connection is migrated on another host. When a connection is dumped, criu calls `getsockopt(TCP_TIMESTAMP)` to get a current timestamp, then on restore it calls `setsockopt(TCP_TIMESTAMP)` to set this timestamp as a starting point.
+During restoration, the IP address used by the original connection must be available. While this is automatic if restoring on the same host, it must be manually handled for live migrations. Consequently, the `--tcp-established` option must be explicitly used to indicate the caller is aware of the transitional netfilter state.
 
-## Checkpoint and restore TCP connection
-
-With the above sockoptions dumping and restoring TCP connection becomes possible. The criu just reads the socket
-state and restores it back letting the protocol resurrect the data sequence.
-
-One thing to note here — while the socket is closed between dump and restore the connection should be "locked", i.e.
-no packets from peer should enter the stack, otherwise the RST will be sent by a kernel. In order to do so a simple
-netfilter rule is configured that drops all the packets from peer to a socket we're dealing with. This rule sits
-in the host netfilter tables after the criu dump command finishes and it should be there when you issue the
-criu restore one. The locking method can be specified using the {{opt|--network-lock}} option.
-
-Another thing to note is -- on restore there should be available the IP address, that was used by the connection.
-This is automatically so if restore happens on the same box as dump. In case of hand-made live migration the
-IP address should be copied too.
-
-That said, the command line option {{opt|--tcp-established}} should be used when calling criu to explicitly state, that the
-caller is aware of this "transitional" state of the netfilter.
-
-In case the target process lives in NET namespace the connection locking happens the other way. Instead of
-per-connection iptables rules the "network-lock"/"network-unlock" [action scripts](action-scripts.md) are called so that the user
-could isolate the whole netns from network. Typically this is done by downing the respective veth pair end.
+If the target process resides in a network namespace, connection locking is handled via `network-lock` and `network-unlock` [action scripts](action-scripts.md), typically by bringing down the respective `veth` pair.
 
 ## States
-### TCP_SYN_SENT
-There is only one difference with TCP_ESTABLISHED, we have to restore a socket and disable the repair mode before calling `connect()`. The kernel will send a one syn-sent packet with the same initial sequence number and sets the TCP_SYN_SENT state for the socket.
 
-### Half-closed sockets
-A socket is half-closed when it sent or received a fin packet. These sockets are in one for these states: TCP_FIN_WAIT1, TCP_FIN_WAIT2, TCP_CLOSING, TCP_LAST_ACL, TCP_CLOSE_WAIT. To restore these states, we restore a socket into the TCP_ESTABLISHED state and then we call shutfown(SHUT_WR), if a socket has sent a fin packet and we send a fake fin packet, if a socket has received it before. For example, if we want to restore the TCP_FIN_WAIT1 state, we have to call shutfown(SHUT_WR) and we can send a fake ack to the fin packet to restore the TCP_FIN_WAIT2 state.
+### TCP_SYN_SENT
+To restore this state, CRIU restores the socket and disables repair mode before calling `connect()`. The kernel then sends a single `SYN` packet with the original sequence number and transitions the socket to the `TCP_SYN_SENT` state.
+
+### Half-Closed Sockets
+A socket is considered half-closed if it has sent or received a `FIN` packet (states include `TCP_FIN_WAIT1`, `TCP_FIN_WAIT2`, `TCP_CLOSING`, `TCP_LAST_ACK`, and `TCP_CLOSE_WAIT`). To restore these, CRIU first restores the socket to the `TCP_ESTABLISHED` state. If the socket had sent a `FIN`, CRIU calls `shutdown(SHUT_WR)`. If it had received a `FIN`, CRIU sends a "fake" `FIN` packet. For example, to restore `TCP_FIN_WAIT2`, CRIU calls `shutdown(SHUT_WR)` and then processes a fake acknowledgment for the `FIN`.
 
 ## See also
 - [Simple TCP pair](simple-tcp-pair.md)
@@ -84,6 +56,3 @@ A socket is half-closed when it sent or received a fin packet. These sockets are
 
 ## External links
 - http://lwn.net/Articles/495304/
-
-
-

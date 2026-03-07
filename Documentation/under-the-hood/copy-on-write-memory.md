@@ -1,37 +1,30 @@
-# Copy-on-write memory
+# Copy-on-Write Memory
 
 ## Problem
-Private anonymous mappings are tricky. They are declared to belong to a single process only and contain *its* data, but the Linux kernel optimizes the case when task calls fork() and creates a copy of itself. In this case all private anonymous mappings are "shared" between the parent and the child, but when either of them tries to modify the memory, the respective page is duplicated and the changes occur in the modifier's copy only.
+Private anonymous mappings present unique challenges. While they are intended to belong to a single process, the Linux kernel optimizes `fork()` by sharing these mappings between the parent and child. When either process modifies the memory, the kernel duplicates the respective page so that changes only affect the modifier's copy. This is known as Copy-on-Write (COW).
 
-When taking a dump of a process tree, it's totally correct to copy contents of all the anonymous private mappings independently and restore them in the same way -- just mmap and put the memory in there. But with this approach we effectively do the described memory duplication and thus increase memory usage by checkpointed and restore application.
+When dumping a process tree, it is technically correct to copy the contents of all private anonymous mappings independently and restore them—effectively just calling `mmap()` and populating the memory. However, this approach causes memory duplication, increasing the memory footprint of the restored application compared to the original.
 
-To fix this, criu in version 0.3 and above does special tricks.
+To address this, CRIU (version 0.3 and above) employs specialized techniques to maintain COW integrity.
 
-## How restore works to keep COW intact
-We have different ideas how to restore COW (Copy-on-write)<ref>[wikipedia:Copy-on-write](wikipediacopy-on-write.md)</ref> memory. In a moment we even thought to use KSM (Kernel Shared Memory)<ref>[wikipedia:Kernel SamePage Merging (KSM)](wikipediakernel-samepage-merging-ksm.md)</ref> for that. As result we found a good way for restoring COW memory (I guess). All VMA (Virtual Memory Area)s are restored in the same way as they were created. Here are two questions:
+## How Restoration Maintains COW Integrity
+We explored several ideas for restoring COW memory, including the use of Kernel SamePage Merging (KSM). Ultimately, we developed a robust method where Virtual Memory Areas (VMAs) are restored in the same way they were originally created. This involves addressing two key questions:
 
 1. Which VMAs should be inherited?
-1. How to avoid intersections with criu VMAs?
+1. How can we avoid intersections with CRIU's own VMAs?
 
-The first question is not resolved completely. Now a VMA is inherited if a parent has a VMA with the same start and end addresses. This covers 99% of cases, but it doesn't work if a VMA was moved.
+The first question is handled by inheriting a VMA if the parent has a VMA with identical start and end addresses. This covers the vast majority of cases, though it does not currently account for VMAs that have been moved.
 
-The second question is more interesting. Currently criu reserves continuous space for all private VMAs, then restores all VMAs one by one in this space. Inherited VMAs are moved from a parent space. All VMAs are sorted by start addresses.
+To address the second question, CRIU reserves continuous space for all private VMAs and restores them one by one. Inherited VMAs are moved from the parent's address space. All VMAs are sorted by their start addresses.
 
 ![File:cow.png](File:cow.png)
 
-In “restorer” all criu’s VMAs are unmapped and private VMAs are space apart. The complexity of this algorithm is linear. Now it looks simple, but I spent a few hours to find it.
+In the "restorer" phase, all of CRIU's own VMAs are unmapped, and private VMAs are correctly spaced. This algorithm has linear complexity. While it may seem simple now, arriving at this design took significant effort.
 
-{{Out|“Complexity is easy; simplicity is difficult. -Georgy Shpagin”}}
+> "Complexity is easy; simplicity is difficult." — Georgy Shpagin
 
-{{Out|“Everything should be made as simple as possible, but not more simpler. - Albert Einstein”}}
+> "Everything should be made as simple as possible, but not simpler." — Albert Einstein
 
-All VMAs and their contents are restored before forking children, so here is one more item. A parent can change some pages after forking a child, so such pages should be dropped from the child's VMA. For solving this problem bitmaps are used to mark touched pages and madvise() is used to remove extra pages.
+Since all VMAs and their contents are restored before forking child processes, a parent might modify pages after a child is forked. To ensure correctness, these modified pages must be dropped from the child's VMA. CRIU uses bitmaps to track touched pages and employs `madvise()` to remove the redundant pages.
 
-One more case is not handled now. COW memory are not restored if a process is reparented to init.
-
-## References
-
-
-{{Like}}
-
-
+One case currently not handled is COW memory restoration when a process is reparented to `init`.

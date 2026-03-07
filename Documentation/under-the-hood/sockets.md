@@ -1,19 +1,16 @@
 # Sockets
 
-## Unix sockets initial support
+## UNIX Sockets Initial Support
 
-Currently we support Unix socket of all kinds, UDP both IPv4 and IPv6, TCP in Listen and (!) [Established states](tcp-connection.md) and Netlink ones.
+CRIU currently supports all types of UNIX sockets, both IPv4 and IPv6 UDP sockets, Netlink sockets, and TCP sockets in both Listen and [Established](tcp-connection.md) states.
 
-The cpt part uses the sock_diag engine to collect extended information about socket, then CRIU uses the files dumping engine to get access to sockets state.
+During a checkpoint, CRIU uses the `sock_diag` engine to collect extended socket information, which the file dumping engine then uses to capture the socket state.
 
-The restore part of Unix sockets is the most tricky part. Listen sockets are just restored, this is simple.
-Connected sockets are restored like this:
+Restoring UNIX sockets is particularly complex. While restoring listening sockets is straightforward, connected sockets are restored using the following procedure:
 
-1. One end establishes a listening anon socket at the desired descriptor;
-1. The other end just creates a socket at the desired descriptor;
-1. All sockets, that are to be connect()-ed call connect. Unix sockets do not block connect() till the accept() time and thus we continue with...
-1. ... all listening sockets call accept() and ... dup2 the new fd into the accepting end.
+1. One endpoint establishes a listening anonymous socket at the target descriptor.
+1. The other endpoint creates a socket at its target descriptor.
+1. The endpoint to be connected calls `connect()`. Since UNIX sockets do not block `connect()` until `accept()` is called, the process continues.
+1. All listening sockets then call `accept()`, and the resulting file descriptor is `dup2`'d into the accepting end.
 
-There's a problem with this approach -- socket names are not preserved, but looking into our OpenVZ implementation I think this is OK for existing apps.
-
-
+One limitation of this approach is that socket names may not be preserved. However, based on experience with the OpenVZ implementation, this is generally acceptable for most applications.
