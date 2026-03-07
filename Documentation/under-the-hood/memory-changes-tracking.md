@@ -1,58 +1,45 @@
 # Memory Changes Tracking
 
-CRIU can detect which memory pages a task (or tasks) has changed since a specific point in time. This page describes why this is required, how it works, and how to use it.
+Memory changes tracking (also known as "dirty memory tracking") is a critical feature in CRIU that enables efficient **live migration** with minimal downtime. By identifying and capturing only the memory pages that have been modified since a previous snapshot, CRIU can perform iterative dumps while the application continues to run.
 
-## Why Track Memory Changes?
+## The Problem: Memory Dump Latency
 
-Several scenarios require detecting which parts of memory have changed:
+During a standard checkpoint, CRIU freezes the process tree and dumps its entire memory state to disk. For memory-intensive applications (like large databases), this process can take several seconds, during which the application is completely unresponsive. This "freeze time" is directly proportional to the amount of memory used by the application.
 
-**[Incremental Dumps](incremental-dumps.md)**
-When taking a series of dumps from a process tree, it is a significant optimization to avoid dumping all memory every time. Instead, only pages that have changed since the previous dump are captured.
+## The Solution: Iterative Dumps
 
-**Reduced Freeze Time for Large Applications**
-When a task uses a vast amount of memory, dumping it can be time-consuming, and the task must remain frozen during the process. To reduce freeze time, CRIU can:
-1. Capture memory from the task and begin writing it to images while the task is still running.
-1. Briefly freeze the task to capture only the pages that changed during the initial write.
+To minimize freeze time, CRIU supports an iterative migration scheme:
+1.  **Initial Pre-dump**: Capture a full snapshot of the application's memory while it is still running.
+2.  **Subsequent Pre-dumps**: Periodically capture only those pages that have been modified (made "dirty") since the last pre-dump.
+3.  **Final Dump**: Freeze the processes and capture the final set of dirty pages. Since most memory was already transferred in previous steps, the final freeze time is significantly reduced.
 
-**[Live Migration](live-migration.md)**
-During live migration, much of the time is spent copying task memory to the destination host. Processes are typically frozen during this period. Using memory tracking reduces this "downtime," making the migration more seamless.
+## Kernel Mechanisms for Tracking
 
-## How Memory Changes Are Tracked
+CRIU relies on two primary kernel mechanisms to track dirty pages:
 
-To identify changed memory pages, CRIU uses a kernel feature (originally [patched](http://lwn.net/Articles/546966/) into the kernel). Tracking consists of two steps:
+### 1. The Soft-Dirty Bit
+Linux maintains a "soft-dirty" bit for each Page Table Entry (PTE). 
+*   **Resetting**: CRIU enables tracking by writing "4" to `/proc/$pid/clear_refs`, which clears the soft-dirty bit for all pages in the task's address space.
+*   **Tracking**: Any subsequent write to a page causes the kernel to set its soft-dirty bit.
+*   **Reading**: CRIU identifies dirty pages by reading the bit from the process's `/proc/$pid/pagemap` interface.
 
-1. Request that the kernel track memory changes by writing `4` into the `/proc/$pid/clear_refs` file for each process of interest.
-1. After a period of time, retrieve the list of modified pages by reading `/proc/$pid/pagemap` and checking the "soft-dirty" bit in the entries.
+### 2. ioctl(PAGEMAP_SCAN)
+Reading the entire `/proc/$pid/pagemap` file can be slow for very large address spaces. Modern kernels (v6.7+) support the `PAGEMAP_SCAN` ioctl, which allows CRIU to:
+*   **Efficient Scanning**: Identify dirty pages across a large address space in a single kernel call.
+*   **Filtering**: Directly filter for specific page categories (e.g., only dirty and present pages).
+*   **Atomic Reset**: Optionally clear the soft-dirty bit while scanning, ensuring no writes are missed between scanning and resetting.
 
-During the first step, the kernel remaps the task's mappings as read-only. If the task subsequently attempts to write to a page, a page fault occurs, and the kernel records the modification. Reading the `pagemap` file reveals these recorded changes.
+CRIU automatically detects and uses `PAGEMAP_SCAN` if available, falling back to manual `/proc` parsing on older kernels.
 
-## Using Memory Tracking with CRIU
+## Implementation in CRIU
 
-First, verify that the feature is supported by running:
+Iterative migration is managed through the `pre-dump` command:
 
-```bash
-criu check --feature mem_dirty_track
-```
-
-Memory change tracking was initially merged into Linux kernel v3.11 and refined until v3.18 (see [Upstream kernel commits](upstream-kernel-commits.md) for details).
-
-Command-line options for this functionality include:
-
-**`--prev-images-dir`**
-Provides the path to images from a previous `dump` or `pre-dump`. CRIU will then attempt to dump only the pages modified since that previous action.
-
-**`--track-mem`**
-Causes CRIU to reset the memory change tracker. This ensures that the next dump using `--prev-images-dir` can successfully identify unchanged pages.
-
-**`pre-dump` action**
-This action dumps only a portion of the process information, keeping tasks frozen for the shortest possible time. Images generated by a `pre-dump` cannot be used for restoration; a subsequent `dump` must be performed using the `--prev-images-dir` option.
+1.  **Chained Images**: Each pre-dump creates a set of image files in a new directory. These directories are linked together using the `--prev-images-dir` option.
+2.  **Consolidated Restore**: During restoration, CRIU traverses the chain of images from newest to oldest. For any given memory address, it restores the most recent version of the page found in the image stack.
+3.  **Page Server**: To avoid writing iterative dumps to disk, they can be sent over the network to a **page server** on the destination host.
 
 ## See also
-- [Live migration](live-migration.md)
-- [Incremental dumps](incremental-dumps.md)
-- [Memory dumping and restoring#Advanced C/R](memory-dumping-and-restoring.md#advanced-cr)
-- [Directories](directories.md)
-- [Memory pre dump](memory-pre-dump.md)
-
-## External links
-- http://lwn.net/Articles/546966/
+* [Iterative Migration](iterative-migration.md)
+* [Memory Images Deduplication](memory-images-deduplication.md)
+* [Page Server](page-server.md)
