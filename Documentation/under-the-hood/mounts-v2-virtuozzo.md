@@ -1,76 +1,42 @@
-# Mounts-v2-Virtuozzo
+# Mount V2: Detailed Algorithm
 
-CRIU Mounts-v2 Algorithm (Virtuozzo version)
+The Mount V2 engine (originally developed by Virtuozzo and later merged into upstream CRIU) is designed to resolve complex issues with restoring sharing groups, over-mounted files, and cross-namespace bind mounts. This document provides a technical breakdown of its operation.
 
-This algorithm is designed to resolve issues with restoring sharing groups, over-mounted files, mounts with namespace tags, and other minor issues.
+## 1. Mount Image Processing Stage
 
-### 1. Mount Image Read Stage (`read_mnt_ns_img_v2`)
-- Read `mount_infos` from images for each mount namespace into lists.
-- Build mount trees for each namespace.
-- Group mounts by superblock equality into "bind" lists.
-- **Prepare Sharing Groups**:
-    - Group mounts into shared groups based on `master_id` and `shared_id` equality.
-    - Organize shared groups into a tree where `parent->shared_id == child->master_id`.
-    - If two groups have the same `master_id`, make them siblings.
-- **Set Up "Internal Yards"**:
-    - Use a writable namespace root to create `/internal-yard-XXXXXX`.
-    - This is used for the mounting stage after forking tasks.
-- **Prepare Nested PID Namespace procfses**:
-    - Copy namespace tags across bind lists.
-    - Create helpers for descendants of nested PID namespace `procfses` in the internal yard.
-- **Prepare "Root Yard"**:
-    - Create a helper mount at `/tmp/.criu.mntns.XXXXXX/`.
-    - Merge mount trees from all namespaces as subdirectories of the root yard.
+During initialization, CRIU processes the mount images for all namespaces to build an internal model of the filesystem state:
+- **Hierarchy Construction**: Build a per-namespace mount tree based on parent IDs.
+- **Bind Grouping**: Group mounts by superblock equality into "bind" lists to identify shared underlying filesystems.
+- **Sharing Groups**: Organize shared and slave groups into a tree structure (e.g., where a parent's `shared_id` matches a child's `master_id`).
+- **The Root Yard**: Create a helper mount (`root_yard_mp`) at a temporary location (e.g., `/tmp/.criu.mntns.XXXXXX/`). All mount trees from all namespaces are initially merged as subdirectories of this "root yard."
 
-### 2. First Mounting Stage (Before forking processes)
-Executed from the init task in the "service" mount namespace (`prepare_mnt_ns_v2`):
-- Create and mount the "root yard".
-- Replace mounts for the post-fork stage by inserting internal yards and removing nested PID namespace `procfses`.
-- **Walk the Merged Mount Tree**:
-    - Mount all mounts "plain" and "private".
-    - Check if a mount can be created (e.g., overlay, root, external, bind).
-    - Create plain mount points (detecting file vs. directory via `stat`).
-    - Bind mounts to the already mounted superblock or external sources.
-    - Handle internal yards by mounting `tmpfs` and creating child mount points.
-- This stage allows for "cross-namespace" bind mounts by maintaining all mounts within a single service namespace.
+## 2. Pre-Fork Mounting Stage
 
-### 3. Second Mounting Stage ("Plain" to "Tree" transition)
-- For each restored mount namespace:
-    - Perform `unshare(CLONE_NEWNS)`.
-    - Move mounts from "plain" locations into their final tree positions.
-    - Open and save file descriptors for the mount points (`mp_fd`) and the mounts themselves (`mnt_fd`).
-    - Perform `pivot_root()` to the namespace's root, leaving only the intended mounts.
-- Extract internal yards and restore `procfses`.
-- Remove temporary sources of deleted mounts.
+This stage is executed from the init task in a dedicated "service" mount namespace before the target process tree is forked:
+1.  **Plain Mounting**: CRIU walks the merged mount tree and creates all mounts in a "plain" (unattached) and "private" state.
+2.  **Source Resolution**: For each mount, CRIU identifies its source (a real filesystem, a bind mount from another already-mounted superblock, or an external source).
+3.  **Cross-Namespace Handling**: By maintaining all mounts within a single service namespace during this stage, CRIU can easily handle bind mounts that cross namespace boundaries.
 
-### 4. Forking Stage
-- Fork all processes in tree order.
-- Recreate PID namespaces.
-- Enter the correct mount namespace.
-- Map files from the mounted filesystem to restore COW mappings.
-- Fork children.
+## 3. Propagation and Shared Group Restoration
 
-### 5. Third Mounting Stage (After forking processes)
-Executed from the main CRIU task (`fini_restore_mntns_v2`):
-- Enter the container's user namespace.
-- For each mount namespace:
-    - Fix up nested PID namespace `procfses` by entering the tagged PID namespace and mounting `procfs`.
-    - Walk the mount tree and bind any remaining mounts from internal yard helpers.
-    - Open final `mnt_fd` and `mp_fd` descriptors.
-    - Unmount and remove internal yards.
+CRIU restores complex propagation relationships using modern kernel APIs:
+- **Slavery and Sharing**: For each sharing group, CRIU identifies the "master" mount. It uses the `move_mount()` system call with the `MOVE_MOUNT_SET_GROUP` flag (or the legacy `MS_SET_GROUP` mechanism) to establish slave/shared relationships precisely as they existed during the dump.
+- **Settings Replication**: Once the sharing state is established for the primary mount in a group, all other members of the group inherit these settings.
 
-### 6. Final Stage
-- **Restore Sharing Groups**:
-    - Use `mnt_fd` to access mounts.
-    - Walk sharing group trees (parents before their children).
-    - For the first mount in a group:
-        - If it is a slave, find its parent group or external source and copy sharing via `MS_SET_GROUP`.
-        - If it is shared, establish the shared group.
-    - For other mounts in the group, copy the sharing settings from the first mount.
+## 4. Namespace Transition and Final Positioning
 
----
+For each target mount namespace being restored:
+1.  **Unshare**: CRIU calls `unshare(CLONE_NEWNS)` to create a fresh, empty mount namespace.
+2.  **Tree Positioning**: Move the "plain" mounts from the root yard into their final hierarchical positions within the new namespace using `move_mount()`.
+3.  **Pivot Root**: Execute `pivot_root()` to switch to the new namespace root, effectively hiding the temporary "yard" and finalizing the mount hierarchy.
 
-### Links
-- **Main Implementation**: [Virtuozzo CRIU commits](https://src.openvz.org/projects/OVZ/repos/criu/commits?until=v3.12.3.12)
-- **Delayed Proc Support**: [Virtuozzo CRIU commits](https://src.openvz.org/projects/OVZ/repos/criu/commits?until=v3.12.5.13)
-- **Kernel Patch for `MS_SET_GROUP`**: [Linux Kernel Mailing List](https://lore.kernel.org/lkml/1485214628-23812-1-git-send-email-avagin@openvz.org/)
+## 5. Post-Fork Fixups
+
+Certain mounts cannot be fully restored until the process tree is established:
+- **Delayed Procfs**: `proc` mounts for nested PID namespaces must wait until the target PID namespace is created. CRIU enters these namespaces after forking to perform the final mounts.
+- **Internal Yards**: In some cases, temporary `tmpfs` mounts ("internal yards") are used within a namespace to hold mounts that must be moved or adjusted after the process tree is fully alive.
+
+## See also
+* [Mount V2 Overview](mount-v2.md)
+* [Mount Points](mount-points.md)
+* [Checkpoint/Restore Architecture](checkpointrestore.md)
