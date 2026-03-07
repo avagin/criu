@@ -1,35 +1,44 @@
-# FDInfo Engine
+# File Restoration Engine (fdinfo)
 
-## Masters and Slaves
-1. A file may be referenced by multiple file descriptors, which may belong to a single process or several different processes.
-1. A group of descriptors referring to the same file is considered "shared." One descriptor is designated the **master**, while the others are **slaves**.
-1. Every descriptor is represented by a `struct fdinfo_list_entry` (fle).
-1. One process opens the master `fle` of a file, while other processes sharing the file obtain it using `SCM_RIGHTS`. See `send_fds()` and `receive_fds()` for details.
+CRIU uses a sophisticated state machine to restore file descriptors (FDs) across a process tree, handling shared files, complex dependencies, and inter-process synchronization.
 
-## Per-Process File Restore
-Every file type is described by a `struct file_desc`. We sequentially call the `file_desc::ops::open(struct file_desc *d, int *new_fd)` method for every master file of a process until all masters are restored. The `open` methods can return three values:
-- ` 0`: Restoration of the master file has successfully completed.
-- ` 1`: Restoration is in progress or cannot yet start because of dependencies on other files; the method will be called again.
-- `-1`: Restoration failed.
+## Master and Slave Descriptors
 
-When a file is first opened, the `open` method must return the file descriptor value in the `new_fd` argument. This allows the core code to send this master to other processes so they can reopen it as a slave as soon as possible. Note that returning a non-negative `new_fd` does not necessarily mean the master is fully restored. The `open()` callback may return a non-negative `new_fd` while still returning `1` to indicate that work remains.
+In the Linux kernel, multiple FDs can refer to the same underlying "File Description." CRIU mirrors this by categorizing FDs into **Masters** and **Slaves**:
 
-**Example: Restoring a connected UNIX socket**
-1. Open a socket, write its file descriptor to `new_fd`, and return `1`.
-1. Check if the peer socket is open and bound. If not, return `1` and retry later.
-1. Connect to the peer and return `0`.
+1.  **Master**: For each unique file object, one FD is designated as the master. This process is responsible for the actual `open()`, `socket()`, or `pipe()` system call that recreates the object.
+2.  **Slaves**: All other FDs referring to the same object are slaves. They do not perform the creation call themselves; instead, they receive the file descriptor from the master.
+3.  **Transport (SCM_RIGHTS)**: CRIU uses Unix domain sockets and the `SCM_RIGHTS` mechanism to "send" file descriptors from the master process to slave processes.
 
-The peer that performs the `bind()` must notify the waiting socket once it is ready:
-1. `bind(<peer name>)`
-1. `set_fds_event(<socket pid>)`
+## Per-Process Restore Loop
 
-## Dependencies
-1. A slave TTY can only be created after its respective master peer is restored. Currently, we wait until all masters are restored.
-1. The controlling terminal (CTTY) must be created after all other TTYs are restored. See `tty_deps_restored()` for details on TTY dependencies.
-1. Epoll instances can be created at any time, but an FD can only be added to its polling list after the corresponding `fle` is completely restored. The exception is an epoll instance listening to another epoll instance; in this case, we only wait until the listened `fle` is created. See `epoll_not_ready_tfd()`.
-1. A UNIX socket must wait for its peer before connecting. See `peer_is_not_prepared()` for details.
-1. TCP sockets use a counter for address usage.
-1. When implementing new relationships between `fle` stages, ensure you do not introduce circular dependencies.
+Each task in the process tree executes a loop (`open_fdinfos`) to restore its descriptors. The core of this loop is the `file_desc_ops->open()` method.
 
-## Notes
-1. Pipes (and FIFOs), UNIX sockets, and TTYs generate two FDs in their `->open` callbacks. The second FD may conflict with another FD the task is restoring, and this second FD may need to be sent to another task.
+### The `open()` State Machine
+The `open()` method for a master file can return one of three values:
+*   **0 (Success)**: The file is fully restored.
+*   **1 (In Progress)**: The file has been opened (or the process has started opening it), but it cannot be completed yet due to a dependency on another file. The loop will call this method again in the next iteration.
+*   **-1 (Failure)**: An error occurred, and restoration must abort.
+
+### Early FD Distribution
+To maximize parallelism, a master can return a valid FD in the `new_fd` argument even if it returns `1` (In Progress). This allows CRIU to immediately distribute the FD to all slave processes via `SCM_RIGHTS`, even before the master has finished its own restoration steps (e.g., a connected Unix socket waiting for its peer).
+
+## Inter-Process Synchronization
+
+CRIU uses **futexes** and a specialized event mechanism to coordinate between processes:
+*   **set_fds_event(pid)**: Signals a task that a file it was waiting for (as a slave) is now available or that a dependency has changed.
+*   **wait_fds_event()**: Causes a task to sleep until it receives a notification.
+*   **FLE Stages**: Each descriptor entry (`struct fdinfo_list_entry` or `fle`) transitions through stages: `INITIALIZED` -> `OPEN` -> `RESTORED`.
+
+## Key Dependencies
+
+The engine must resolve complex dependencies between different file types:
+1.  **TTYs**: A slave TTY can only be fully restored after its master peer is active.
+2.  **Unix Sockets**: A connected socket must wait for its peer to `bind()` to its address before it can `connect()`.
+3.  **Epoll**: An epoll FD can be created immediately, but adding FDs to its interest list must wait until those FDs are themselves restored.
+4.  **Pipes and Socketpairs**: These calls create two FDs at once. One is treated as the primary master, and the second is distributed to the appropriate task (which might be the same task or a different one).
+
+## Technical Notes
+
+*   **Service FDs**: CRIU maintains its own internal FDs (for images, logs, etc.) in a "protected" range to avoid conflicts with the application's FDs during restoration.
+*   **Ordering**: Descriptors are generally restored in ascending order of their FD number to improve efficiency, though dependencies can override this order.
