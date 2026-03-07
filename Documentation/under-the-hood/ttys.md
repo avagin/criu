@@ -1,38 +1,41 @@
-# TTYs
+# TTY (Teletype) Support
 
-## Overview
-Terminals (TTYs) are a critical component of how programs interact with users, providing the primary interface for output and user input. For example, when a program is executed from a shell, the shell provides a terminal peer; the program's output is displayed in the shell, where the user can perform further processing (e.g., piping to `grep`).
+CRIU provides support for checkpointing and restoring various types of Linux terminals (TTYs), with a primary focus on **Unix98 Pseudoterminals (PTYs)**.
 
-## Supported Terminal Types
-Linux supports a wide range of terminals, including *Unix98* pseudoterminals (**pty**), *BSD* terminals, and *virtual* terminals (**vt**). CRIU provides comprehensive support for **pty** and sufficient support for **vt**.
+## Key Information Captured
 
-"Full support" for **pty** includes saving the complete internal state, including queued data. For **vt**, CRIU provides plain restoration; while this is sufficient for standard terminal operations after restoration, any data queued but not yet delivered will be lost. This is not considered an error, as the terminal transport layer does not guarantee data delivery.
+For each TTY instance, CRIU captures a comprehensive set of kernel metadata:
+1.  **Identity**: The TTY type (PTY, Console, Serial, or Virtual Terminal), subtype (Master or Slave), and its unique kernel index.
+2.  **Configuration**: Detailed `termios` settings (baud rate, parity, control characters) and window size parameters (`winsize`).
+3.  **Ownership and Permissions**: The original UID/GID and mode of the TTY device node.
+4.  **Process Context**: Controlling terminal status, Session ID (SID), and Foreground Process Group (PGRP).
+5.  **Extended State**: Lock status (`TIOCGLCKTRMIOS`), exclusive mode settings, and packet mode (`TIOCPKT`) flags.
 
-CRIU supports the following terminal types:
-- Console
-- Current
-- Virtual
-- External
-- Serial
-- Unix98
+## The PTY Index Challenge
 
-### Console Terminal
-The **console** terminal is the simplest type. Restoration is performed via a simple `open("/dev/console")`.
+A major challenge in restoring PTYs is that the Linux kernel assigns indices (e.g., the `N` in `/dev/pts/N`) sequentially when `/dev/ptmx` is opened. Standard userspace APIs do not allow requesting a specific index.
 
-### Current Terminal
-The **current** terminal (`/dev/tty`) is an abstraction representing the terminal currently in use by an application. When opened, the kernel provides a reference to the actual terminal device. It is restored via `open("/dev/tty")` but must be restored last, after all other terminals.
+### The "Sequential Opening" Strategy
+To ensure each PTY is restored with its original index, CRIU employs a specialized "brute-force" technique:
+1.  **Looping Open**: CRIU enters a loop, repeatedly calling `open("/dev/ptmx")`.
+2.  **Index Verification**: After each open, it queries the assigned index using the `TIOCGPTN` ioctl.
+3.  **Consuming Indices**: If the assigned index is lower than the target index, CRIU **keeps the file descriptor open**. This prevents the kernel from reassigning that index.
+4.  **Target Match**: Once the kernel assigns the correct original index, CRIU uses that descriptor as the restored master PTY.
+5.  **Cleanup**: All "placeholder" descriptors opened during the loop are then closed, freeing those indices for the rest of the system.
 
-### Virtual Terminal (vt)
-Virtual terminals correspond to `/dev/ttyN` devices. These are restored using `open("/dev/ttyN")`, where `N` is the terminal number.
+## Restoration Workflow
 
-### External Terminal
-**External** terminals are used when file descriptors are expected to change between checkpoint and restoration and are passed via command-line options. For more details, see [Inheriting FDs on restore](inheriting-fds-on-restore.md). CRIU relies on these descriptors being already open and simply reuses them.
+1.  **Master Peer Reconstruction**: A designated process recreates the master PTY using the sequential opening strategy.
+2.  **Slave Peer Attachment**: Slave processes open the corresponding `/dev/pts/N` devices. Because the master was created with the correct index, these slaves automatically link to the correct peer.
+3.  **State Application**: Termios, window sizes, and device ownership are applied to the newly opened descriptors.
+4.  **Controlling Terminal Re-binding**: CRIU re-establishes the relationship between each process and its controlling terminal using the `TIOCSCTTY` ioctl.
 
-### Serial Terminal
-**Serial** terminals are primarily supported for debugging purposes, such as when developers use them to access virtual machines. They are restored using a standard `open()` call.
+## Current Limitations
 
-### Unix98 Terminal (pty)
-**pty** terminals are the most common type. They consist of a pair of peers: opening `/dev/ptmx` causes the kernel to automatically create a corresponding `/dev/pts/N` slave peer. During restoration, CRIU opens the `ptmx` device and provides the resulting master and slave descriptors to the process.
+*   **Buffered Data**: Captured TTY input and output queues (data that was sent but not yet read) are currently not fully restored. CRIU ensures the *interface* is restored, but the application may see a reset of buffered streams.
+*   **Legacy BSD PTYs**: Support for older BSD-style PTYs is not implemented, as the modern Linux kernel does not provide the necessary introspection to reliably pair these devices.
 
 ## See also
-- [External files](external-files.md)
+* [Checkpoint/Restore Architecture](checkpointrestore.md)
+* [Descriptor Assignment](how-to-assign-needed-file-descriptor-to-a-file.md)
+* [Kerndat Feature Detection](kerndat.md)
