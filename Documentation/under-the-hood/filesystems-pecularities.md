@@ -1,34 +1,40 @@
-# Filesystem Peculiarities
+# Filesystem Peculiarities in CRIU
 
-"All filesystems are equal, but some filesystems are more equal than others."
+While Linux aims for a uniform filesystem interface, several filesystems have unique behaviors ("peculiarities") that require specialized handling in CRIU to ensure accurate checkpointing and restoration.
 
-This page describes how different filesystems affect the CRIU dump and restore processes.
+## BTRFS: Virtual Device Numbers
 
-## BTRFS
+When you `stat()` a file on BTRFS, the kernel often reports a **virtual device ID** (`st_dev`) that is unique to that specific subvolume or snapshot. However, other kernel interfaces, such as `/proc/$pid/mountinfo` or the `sock_diag` subsystem, may report the **physical device ID**.
 
-When calling `stat()` on a file, we can determine the device it resides on by checking the `st_dev` value. However, the kernel exposes device values in several other places, such as `/proc/$pid/mounts`, `/proc/$pid/mountinfo`, and `/proc/$pid/smaps`. Additionally, the `sock-diag` subsystem reveals the device and inode for bound UNIX sockets.
+**Problem**: CRIU cannot rely on simple `st_dev` comparisons to identify which mount a file belongs to, as the virtual and physical IDs will mismatch.
 
-BTRFS is problematic because it replaces the real device number with a virtual one in the `stat()` system call. This virtual device number cannot be compared to device numbers obtained from other sources, as they will always differ.
+**Solution**: CRIU performs userspace path-to-device resolution. It analyzes `/proc/$pid/mountinfo` to build a mapping between virtual and physical IDs, allowing it to correctly resolve file locations. See `mount.c:phys_stat_resolve_dev()`.
 
-To address this, CRIU performs path-to-device resolution in userspace by analyzing information from `/proc/$pid/mountinfo`. This logic is implemented in `mount.c:phys_stat_resolve_dev()`.
+**Workaround**: In some environments (like Podman), disabling Copy-on-Write for the container storage (`chattr +C`) can mitigate some BTRFS-related complexities.
 
-### BTRFS Workaround
-One possible workaround for using BTRFS with CRIU is to disable Copy-on-Write (COW). For example, to use Podman's checkpoint/restore support on BTRFS, you can use: `chattr +C /var/lib/containers`.
+## NFS: "Silly Rename" and Unlinked Files
 
-## NFS
+NFS handles unlinked but open files differently than local filesystems. When a file is unlinked while still open, the NFS client performs a **"Silly Rename"**, renaming the file to something like `.nfsXXX` instead of truly removing it.
 
-In Linux, files have an `st_nlink` attribute representing the number of names (hard links) pointing to the file. When a file is unlinked, this counter is decremented; if it reaches zero, the file can be physically removed from the disk. However, if a process still holds the file open, physical removal is delayed until the file is closed.
+**Problem**: CRIU's standard logic for detecting unlinked files (checking if `st_nlink == 0`) fails on NFS because the "silly renamed" file still has a link count of 1.
 
-NFS handles this differently. If an NFS client sent the final `unlink` request, the server would immediately delete the file, unaware that the client still has it open. To prevent this, the client marks the file for deletion upon closing and renames it to a special name (e.g., `.nfsXXX`). This is known as "NFS silly rename."
+**Solution**: CRIU explicitly checks if a file resides on an NFS mount. If it does, it examines the filename for the `.nfs` prefix. If both conditions match, CRIU treats the file as "opened and unlinked," capturing its contents into the image as a **ghost file**. See `files-reg.c:nfs_silly_rename()`.
 
-How does this affect CRIU? As discussed in [How hard is it to open a file?](how-hard-is-it-to-open-a-file.md), CRIU must be able to dump and restore open but unlinked files. Normally, CRIU identifies these and stores their content in images. On NFS, however, unlinked files do not appear to have an `nlink` count of zero because of the silly rename.
+## OverlayFS: Path Inconsistencies and Link-Remap
 
-To handle this, CRIU checks if a file resides on NFS (via `statfs`). If it does, CRIU checks if the filename follows the silly-rename pattern. If both are true, the file is treated as "open and unlinked." This logic is in `files-reg.c:nfs_silly_rename()`.
+OverlayFS, the standard for modern container engines, has several known issues:
 
-## AUFS
+1.  **Path Mismatches (Pre-v4.2)**: On older kernels, `/proc/$pid/fd/` and `/proc/$pid/fdinfo/` could report paths that did not include the OverlayFS mountpoint. CRIU detects OverlayFS mounts and manually corrects these paths using information from the mount table.
+2.  **linkat() Failures**: In OverlayFS, the `linkat()` system call fails with `ENOENT` if the file being linked resides on a **lower layer** (read-only layer) and has been unlinked from the upper layer.
+    *   **CRIU Response**: When a "link-remap" (linking a deleted file back to the filesystem) fails on OverlayFS, CRIU automatically falls back to dumping the file as a **ghost file** (copying its contents into the image).
 
-AUFS is not in the upstream kernel, but it is used by Docker and supported by CRIU.
+## AUFS: Branch Path Leakage (Legacy)
 
-This filesystem has a known issue: when a file is executed (`execv`), the mappings in `/proc/$pid/maps` or `/proc/$pid/smaps` may show "wrong" paths. AUFS combines multiple subdirectories (branches) into one. A file accessed via an AUFS path actually resides in one of these branches. In certain cases, `/proc` shows the path within the branch rather than the AUFS path.
+AUFS (mostly superseded by OverlayFS) has a bug where `/proc/$pid/maps` reveals the path of a file within its internal **branch** directory instead of its visible path within the AUFS mount.
 
-This is problematic because CRIU needs the AUFS path to properly restore the file. To fix this, CRIU identifies AUFS mounts, reads branch information from `sysfs`, and "fixes" the paths by mapping branch-specific paths back to their AUFS equivalents. This logic is in `sysfs_parse.c:fixup_aufs_vma_fd`.
+**Solution**: CRIU identifies AUFS mounts, reads the branch configuration from `sysfs`, and "fixes" the paths in the memory map to ensure the file can be correctly located during restoration. See `sysfs_parse.c:fixup_aufs_vma_fd`.
+
+## See also
+* [How Hard is it to Open a File?](how-hard-is-it-to-open-a-file.md)
+* [Invisible Files](invisible-files.md)
+* [Mount Points](mount-points.md)
