@@ -1,87 +1,54 @@
-# Dumping Files
+# Dumping File Descriptors
 
-This page describes how CRIU dumps information about open files.
+This document explains the internal mechanisms CRIU uses to capture the state of opened file descriptors (FDs).
 
-## Files, Descriptors, and Inodes in Linux
+## Linux File Objects: Inodes, Dentries, and Files
 
-When a task opens a file, the Linux kernel constructs a chain of three objects to manage it:
+In the Linux kernel, an opened file is represented by a chain of three distinct objects:
 
-**Inode**
-The Inode describes the file itself, including metadata (owner, type, size) and the actual data (the bytes on disk).
+1.  **Inode**: Contains metadata (owner, type, size) and pointers to the actual data on disk.
+2.  **Dentry (Directory Entry)**: A helper object used to resolve file paths. An inode can have multiple dentries if hard links exist.
+3.  **File (or "File Description")**: Represents an active handle to a dentry/inode pair. It maintains state such as the current file position (`pos`) and access flags.
 
-**Dentry (Directory Entry)**
-A helper object the kernel uses to resolve a file path to an Inode. If a file has hard links, one Inode will have multiple Dentries.
+Crucially, **file descriptors** are per-task integers that point to these shared "File" objects. When a task calls `fork()`, the child's FDs point to the same "File" objects as the parent's.
 
-**File**
-The File object describes how a task interacts with an open Dentry-Inode pair (e.g., current offset, access mode).
+## How CRIU Collects FD Information
 
-**File Descriptor**
-This is a number in the task's file descriptor table (FDT) that references a specific File object.
+Dumping FDs requires CRIU to collect state from both the kernel's `/proc` filesystem and the file objects themselves.
 
-After an `open()` (or similar) system call, this chain exists in memory:
+### 1. Identifying Open FDs
+CRIU reads `/proc/$pid/fd/` and `/proc/$pid/fdinfo/` to determine which FD numbers are currently open and to retrieve their basic properties (position and flags).
 
-![File:Dumping_files-001.svg](File:Dumping_files-001.svg)
+### 2. Retrieving File Objects (SCM_RIGHTS)
+To perform deeper inspection (like `fstat` or `ioctl`), CRIU needs a local copy of the file descriptor. It achieves this by:
+*   Injecting **parasite code** into the target task.
+*   Commanding the parasite to send the FDs to the CRIU coordinator via a Unix domain socket using the `SCM_RIGHTS` mechanism.
 
-A File object can be referenced by more than one FDT. For example, when a task calls `fork()`, the child receives a new FDT that references the same File objects as the parent, making them shared objects.
+### 3. Detecting Shared Files (gen_id and kcmp)
+To minimize image size and avoid redundant dumps, CRIU must identify if FDs in different tasks (or even the same task) point to the same underlying "File" object. It uses a two-stage optimization:
+1.  **gen_id**: CRIU calculates a "generation ID" based on the file's device ID, inode number, and current position. If two FDs have different `gen_id`s, they are guaranteed to be different.
+2.  **kcmp**: If `gen_id`s match, CRIU uses the `kcmp()` system call (with the `KCMP_FILE` flag) to definitively determine if the two descriptors refer to the same kernel "File" object.
 
-![File:Dumping_files-002.svg](File:Dumping_files-002.svg)
+## Image Storage
 
-Inodes are also noteworthy. In Linux, file descriptors can be obtained through `open()`, `pipe()`, `socket()`, and various Linux-specific calls like `epoll_create` or `signalfd`. In all these cases, the kernel creates the File-Dentry-Inode chain, but the type of Inode differs based on the call. CRIU understands these distinctions and handles them accordingly.
+CRIU stores FD information in a two-tier structure:
 
-## How Information About Opened Files is Stored in CRIU
+### The `fdinfo-$id.img` Image
+This per-task image maps task-specific FD numbers to global **File IDs**. Each entry contains:
+*   `fd`: The numeric descriptor in the task.
+*   `id`: A unique identifier for the underlying file object.
 
-CRIU uses several image files to store information about open files.
+### Specialized File Images
+The actual state of the file objects is stored in specialized images based on their type:
+*   `reg-files.img`: Regular files (includes the path).
+*   `pipes.img`: Pipes and FIFOs.
+*   `unixsk.img` / `inetsk.img`: Sockets.
+*   `signalfd.img`, `eventfd.img`, `epoll.img`, etc.
 
-### File Descriptors
+This separation allows CRIU to efficiently handle shared files: multiple `fdinfo` entries can point to a single entry in a specialized file image.
 
-The first image is `fdinfo-$id.img`, which contains information about a process's FDT. Entries include two critical fields: `fd` (the descriptor number) and `id` (an identifier for the File-Inode pair).
+## See also
 
-### Files and Inodes
-
-To simplify matters, CRIU treats the File-Dentry-Inode triplet as a single object. Separate images are used for each Inode type:
-
-- `reg-files.img`: Regular files (created via `open()`).
-- `unixsk.img`: UNIX sockets.
-- `pipes.img`: Pipes.
-- `inetsk.img`: IP sockets (TCP and UDP).
-- `signalfd.img`: Signal file descriptors.
-- And others.
-
-A full list of generated image files is available in [Images](images.md).
-
-Each image stores the appropriate state for the File and Inode. Dentry information, specifically the file path, is primarily preserved for regular files.
-
-## How CRIU Gathers Information for Dumping
-
-During the dump process, CRIU must determine:
-
-1. The FD numbers owned by tasks.
-1. Which File objects are shared between task FDTs.
-1. The types of Inodes involved.
-1. The internal state of File and Inode objects.
-
-### FD Numbers
-
-This is straightforward: reading the `/proc/$pid/fd` or `/proc/$pid/fdinfo` directories reveals the required numbers.
-
-### File Sharing
-
-To determine if two FDs across different tasks refer to the same File object, CRIU uses the `kcmp` system call.
-
-### Determining Inode Type
-
-In most cases, the Inode type can be identified by calling `stat()` on the descriptor. CRIU achieves this by asking the [parasite code](parasite-code.md) to send the files back via a UNIX socket using `SCM_RIGHTS`. CRIU then calls `fstat()` on these files and checks the `st_mode` field.
-
-For certain specialized files (e.g., `signalfd`, `inotify`), the mode field may be zero. In these cases, CRIU reads the `/proc/$pid/fd/$fd/` link; the link target uniquely identifies the Inode type.
-
-### State of File and Inode
-
-From the File object, CRIU primarily needs the access mode and the current position. Both are available in `/proc/$pid/fdinfo/$fd/`, and the position can also be retrieved via `lseek()`.
-
-Gathering Inode-specific state depends on the type. CRIU uses several sources:
-
-1. Data from `/proc/$pid/fdinfo/$fd/`.
-1. The target of the `/proc/$pid/fd/$fd/` link.
-1. Inode-specific `ioctl()` calls.
-1. Direct data retrieval (e.g., using `recv` with `MSG_PEEK` for socket queues or `tee` for pipes/FIFOs).
-1. `sock_diag` modules for detailed socket information.
+* [Kcmp Trees](kcmp-trees.md)
+* [Parasite Code](parasite-code.md)
+* [Invisible Files](invisible-files.md)
