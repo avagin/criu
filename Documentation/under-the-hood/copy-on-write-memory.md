@@ -1,30 +1,42 @@
-# Copy-on-Write Memory
+# Copy-on-Write (COW) Memory Restoration
 
-## Problem
-Private anonymous mappings present unique challenges. While they are intended to belong to a single process, the Linux kernel optimizes `fork()` by sharing these mappings between the parent and child. When either process modifies the memory, the kernel duplicates the respective page so that changes only affect the modifier's copy. This is known as Copy-on-Write (COW).
+CRIU employs a specialized multi-stage process to preserve Copy-on-Write (COW) sharing of private anonymous memory mappings during restoration. This prevents the memory duplication that would occur if each process's memory were restored independently, thereby significantly reducing the memory footprint of the restored process tree.
 
-When dumping a process tree, it is technically correct to copy the contents of all private anonymous mappings independently and restore them—effectively just calling `mmap()` and populating the memory. However, this approach causes memory duplication, increasing the memory footprint of the restored application compared to the original.
+## The Problem
 
-To address this, CRIU (version 0.3 and above) employs specialized techniques to maintain COW integrity.
+When a process calls `fork()`, the Linux kernel optimizes memory usage by sharing private anonymous mappings between the parent and child. Physical pages are only duplicated (COW) when one of the processes modifies them. 
 
-## How Restoration Maintains COW Integrity
-We explored several ideas for restoring COW memory, including the use of Kernel SamePage Merging (KSM). Ultimately, we developed a robust method where Virtual Memory Areas (VMAs) are restored in the same way they were originally created. This involves addressing two key questions:
+Traditional checkpointing captures each process's memory separately. If restored naively (by mapping and filling each VMA individually), the kernel would allocate separate physical pages for the parent and child, even for pages that were originally shared. This leads to a massive increase in physical memory usage upon restoration.
 
-1. Which VMAs should be inherited?
-1. How can we avoid intersections with CRIU's own VMAs?
+## CRIU's COW Restoration Strategy
 
-The first question is handled by inheriting a VMA if the parent has a VMA with identical start and end addresses. This covers the vast majority of cases, though it does not currently account for VMAs that have been moved.
+To keep COW mappings intact, CRIU performs restoration in a way that mimics the original `fork()` behavior.
 
-To address the second question, CRIU reserves continuous space for all private VMAs and restores them one by one. Inherited VMAs are moved from the parent's address space. All VMAs are sorted by their start addresses.
+### 1. Identifying COW Candidates
+Before forking the process tree, CRIU analyzes the memory maps of all tasks:
+*   It compares each task's VMAs with those of its parent.
+*   Two VMAs are identified as COW candidates if they have identical start/end addresses, the same protection flags (e.g., `PROT_READ`, `PROT_WRITE`), and belong to the same executable.
+*   This mapping is stored internally, marking which VMAs are "inherited" from a parent.
 
-![File:cow.png](File:cow.png)
+### 2. Pre-mapping and Filling
+During restoration, processes are created in a specific order:
+1.  **Root VMA Population**: If a VMA is the "root" of a COW set (it is not inherited), the restoring task maps it and fills it with data from the image files.
+2.  **Inheritance via Fork**: When a task forks a child, the child automatically inherits the parent's memory mappings via the standard kernel COW mechanism.
+3.  **Content Verification**: The child then iterates through its own memory images:
+    *   It compares the page contents in the image with the data already present in its inherited memory (which it got from the parent).
+    *   If the contents match exactly, the physical page remains shared with the parent.
+    *   If they differ (meaning the page was modified in either process after the original fork), the child overwrites the page with the data from its image, triggering a kernel COW event for that specific page.
 
-In the "restorer" phase, all of CRIU's own VMAs are unmapped, and private VMAs are correctly spaced. This algorithm has linear complexity. While it may seem simple now, arriving at this design took significant effort.
+### 3. Cleaning Up (madvise)
+A parent may contain pages that were unmapped or modified in the child process. To ensure the child's memory layout is perfectly accurate:
+*   CRIU maintains a bitmap of pages touched during the content verification stage.
+*   After all pages are processed, CRIU uses `madvise(MADV_DONTNEED)` on any pages that exist in the inherited VMA but were not present in the child's dump images. This effectively "punches holes" in the child's VMA to match its original state while preserving the sharing of other pages.
 
-> "Complexity is easy; simplicity is difficult." — Georgy Shpagin
+## Current Limitations
 
-> "Everything should be made as simple as possible, but not simpler." — Albert Einstein
+*   **Reparenting to Init**: If a process was reparented to the system `init` (PID 1) and that `init` process is not part of the checkpointed process tree, CRIU cannot identify the parent's VMAs, and COW sharing will not be restored for that process.
+*   **VMA Movement**: If a VMA was moved (e.g., via `mremap`) after the original `fork()`, CRIU's current address-based matching algorithm will fail to identify it as a COW candidate.
 
-Since all VMAs and their contents are restored before forking child processes, a parent might modify pages after a child is forked. To ensure correctness, these modified pages must be dropped from the child's VMA. CRIU uses bitmaps to track touched pages and employs `madvise()` to remove the redundant pages.
-
-One case currently not handled is COW memory restoration when a process is reparented to `init`.
+## See Also
+* [Memory Dumping and Restoring](memory-dumping-and-restoring.md)
+* [Restorer Context](restorer-context.md)
