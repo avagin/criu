@@ -1,19 +1,43 @@
-# Irmap
+# Irmap (Inode Reverse Mapping)
+
+Irmap is CRIU's engine for resolving an `(inode, device)` pair back into a filesystem path. This is primarily required for restoring **fsnotify** (inotify and fanotify) instances, which internally reference inodes but do not preserve the paths used to create them.
 
 ## The Problem
 
-How can we retrieve a file's path given its inode number and device? This challenge arises when dumping notification objects like `inotify` or `fanotify`. These are established on an inode (initially identified by a path), after which the kernel "forgets" the original path string.
+When an application creates an inotify watch, the kernel resolves the path to an inode and attaches the watch to it. The original path string is then discarded by the kernel. During a checkpoint, CRIU can see which inode is being watched but needs a valid path to recreate that watch during restoration.
 
-CRIU leverages empirical knowledge of where these notifications are typically placed (such as configuration files) and performs a filesystem tree scan to find the path associated with a specific inode number. This engine is called **irmap** (Inode Reverse MAP). The `irmap` cache recursively scans the filesystem starting from "known" locations and records name-inode pairs. If a required inode was encountered during the scan, `irmap` retrieves the path immediately without further filesystem access.
+## How Irmap Works
 
-## Caching the Irmap
+Irmap uses a combination of predefined hints and brute-force scanning to build a reverse mapping cache.
 
-Because filesystem scans can be time-consuming, CRIU performs this process while tasks are still running. The `irmap` cache filling begins during the pre-dump operation. The resulting cache is stored in the working directory as `irmap-cache.img`. During subsequent pre-dumps or the final dump, CRIU reads this cache and re-validates individual entries as needed, avoiding a full rescane.
+### 1. Heuristic Hints
+CRIU starts by scanning "known" locations where applications typically place watches, such as:
+- `/etc` (configuration files)
+- `/var/log` (log monitoring)
+- `/var/spool`
+- D-Bus and Polkit service paths (`/usr/share/dbus-1/services`, etc.)
+- `/lib/udev`
+- The root directory (`/`)
 
-## Other Solutions?
+### 2. User-Defined Scan Paths
+Users can provide additional directories to scan via the command line to help CRIU find application-specific files more quickly:
+```bash
+criu dump --irmap-scan-path /path/to/my/app ...
+```
+These paths are prioritized and scanned before the default hints.
 
-Currently, no other reliable APIs exist for this purpose.
+### 3. Caching and Pre-dump
+Scanning large filesystems can be slow and resource-intensive. To mitigate this:
+- **irmap-cache.img**: Scan results are stored in this image file within the images directory.
+- **Pre-dump Optimization**: CRIU can perform the irmap scan during a `pre-dump` while the application is still running. This populates the cache early, significantly reducing the time the application must remain frozen during the final dump.
+- **Validation**: On subsequent runs, CRIU loads the cache and re-validates entries individually (checking if the inode/device still matches the path) rather than performing a full re-scan.
 
-## OverlayFS
+## Support for Filesystems
 
-[Irmap does not currently work on OverlayFS](https://github.com/checkpoint-restore/criu/issues/136).
+*   **Standard Filesystems**: Works well on most local filesystems (ext4, xfs, etc.).
+*   **Tmpfs**: Paths are generally available via `/proc` and don't strictly require Irmap, though it can still be used.
+*   **OverlayFS**: Irmap has historically had difficulties with OverlayFS due to how inodes are reported across different layers. In modern kernels, **open_by_handle_at** (leveraging file handles exposed in `/proc/$pid/fdinfo`) is the preferred and more reliable alternative to Irmap.
+
+## See also
+* [FSNotify](fsnotify.md)
+* [Re-opening nameless files](how-to-open-a-file-without-open-system-call.md)
