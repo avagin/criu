@@ -1,99 +1,69 @@
-# Memory dumping and restoring
+# Memory Dumping and Restoring
 
-This article describes how CRIU dumps and restores processes' memory. For memory image file formats, see [memory dumps](memory-dumps.md).
+This article describes how CRIU dumps and restores process memory. For memory image file formats, see [Memory dumps](memory-dumps.md).
 
-## Basic C/R
+## Basic Checkpoint/Restore
 
 ### Dumping
 
-Currently memory dumping depends on 3 big technologies:
+Memory dumping currently relies on three key technologies:
 
-- /proc/pid/smaps file and /proc/pid/map_files/ directory with links are used to determine
--* memory areas in use by task
--* mapped files (if any)
--* shared memory "identifier" to resolve the MAP_SHARED areas
-- /proc/pid/pagemap file that reveals important flags
--* *present* indicates that the physical page is there. Non-present pages are not dumped.
--* *anonymoys* for the MAP_FILE | MAP_PRIVATE mapping indicate that the page in question is already COW-ed from the file's. Not-anonymous pages are not dumped as they are still in sync with the file
--* *soft-dirty* bit is used by [memory changes tracking](memory-changes-tracking.md)
-- Ptrace SEIZE, used to grab pages from task's VM into a pipe (with vmsplice)
+- The `/proc/$pid/smaps` file and `/proc/$pid/map_files/` directory are used to determine:
+    - Memory areas currently in use by a task.
+    - Mapped files (if any).
+    - Shared memory identifiers used to resolve `MAP_SHARED` areas.
+- The `/proc/$pid/pagemap` file provides critical flags:
+    - **Present**: Indicates the physical page is in memory. Only present pages are dumped.
+    - **Anonymous**: For `MAP_FILE | MAP_PRIVATE` mappings, this indicates the page has been modified (COW) from the original file. Unmodified pages are not dumped as they can be recovered from the file.
+    - **Soft-dirty**: Used for [memory changes tracking](memory-changes-tracking.md).
+- `ptrace SEIZE` is used to extract pages from a task's virtual memory into a pipe using `vmsplice`.
 
-The last step deserves a more detailed explanation. In order to drain memory from a task, we first generate the bitmap of pages needed to be dumped (using the smaps, map_files and [pagemap cache](pagemap-cache.md) filled from proc). Next, we create a set of pipes to put pages into. Then we infect the process with [parasite code](parasite-code.md), which, in turn, gets the pipes and `vmsplice`s the required pages into it. Finally, we `splice` the pages from pipes into [image files](memory-dumps.md).
+The final step warrants a more detailed explanation. To drain memory from a task, CRIU first generates a bitmap of pages to be dumped (using `smaps`, `map_files`, and the [pagemap cache](pagemap-cache.md)). Next, a set of pipes is created. CRIU then injects [parasite code](parasite-code.md) into the process, which uses `vmsplice` to move the required pages into the pipes. Finally, CRIU `splice`s the pages from the pipes into [image files](memory-dumps.md).
 
 ### Restoring
 
-Restoring is pretty straightforward. During restore, CRIU morphs itself into a target task. Two things worth mentioning before diving into explanation of steps.
+During restoration, CRIU morphs itself into the target task. Two points are worth noting:
 
-**[COW](cow.md)**
-  Anonymous private mappings might have pages shared between tasks till they get COW-ed. To restore this CRIU pre-restores those pages before forking the child processes and `mremap`-s them in the [final stage](restorer-context.md).
+**[Copy-on-Write (COW)](cow.md)**
+Anonymous private mappings may have pages shared between tasks until they are modified. To restore this, CRIU pre-restores these pages before forking child processes and uses `mremap` in the [final stage](restorer-context.md).
 
-**[Shared memory](shared-memory.md)**
-  Those areas are implemented in the kernel by supporting a pseudo file on a hidden tmpfs mount. So on restore we just determine who will create the shared are and who will attach to it (see the [postulates](postulates.md)). Then the creator `mmap`-s the region and the others open the /proc/pid/map_files/ link. However, on the recent kernels, we use the new `memfd` system call that does similar thing but works for user namespaces. Briefly -- creator creates the memfd, all the others get one via /proc/pid/fd link which is not that strict as compared to the map_files.
+**[Shared Memory](shared-memory.md)**
+Shared regions are implemented in the kernel via a pseudo-file on a hidden `tmpfs` mount. During restoration, CRIU determines which process will create the shared area and which will attach to it (see [Postulates](postulates.md)). The creator `mmap`s the region, and others open it via the `/proc/$pid/map_files/` link. On modern kernels, the `memfd` system call is used for similar functionality within user namespaces.
 
-Having said that, the restore of memory is done in the following steps:
+The memory restoration process follows these steps:
 
-**Open images and read in VMAs**
-  Open all the mm.img, read mappings in, resolve shared memory segments and check whether we need to special-care mapped files.
+1. **Opening Images and Reading VMAs**: Open `mm.img`, read mappings, resolve shared memory segments, and identify mapped files requiring special handling.
+1. **Forking and Pre-mmapping**: Each task pre-maps private anonymous areas and populates them with pages from the images. The task then forks a child, which performs the same operations. This ensures that COW areas correctly share pages, as `fork()` is the standard mechanism for the Linux kernel to establish this sharing.
+1. **Opening File Mappings**: After forking, CRIU identifies `MAP_FILE` VMAs and uses the [files](files.md) engine to open them.
+1. **Opening Shared Mappings**: CRIU creates file descriptors for shared anonymous VMAs.
+1. **Entering the [Restorer Context](restorer-context.md)**: CRIU strips away its own original mappings, preparing the virtual memory for the restored mappings.
+1. **Restoring Mappings**: Anonymous private mappings are `mremap`ed from pre-mapped areas, while file mappings and anonymous shared mappings are created via `mmap`.
 
-**Fork and pre-mmap**
-  Each task pre-mmaps private anonymous areas and populates them with pages (from pagemap/pages images). Then task forks the child which does the same. It is done in such way in order to make COWed areas actually share the pages they should. On fork() the shared pages become actually shared, as currently this is the only way to make Linux kernel do this.
+### Non-linear Mappings
 
-**Open file mappings**
-  Soon after fork we check which VMA-s are MAP_FILE ones and request the [files](files.md) engine to open them.
+CRIU does not currently support non-linear mappings; the dump will fail if they are encountered.
 
-**Open shared mappings**
-  At almost the same place we create an FD for shared anonymous VMA-s.
+## Advanced Checkpoint/Restore
 
-**Dive into [restorer context](restorer-context.md)**
-  At this stage we strip off all the old CRIU mappings thus making the VM be ready for restored mappings.
+For scenarios like remote dumping, stackable images, and incremental dumps, CRIU supports sophisticated memory policies beyond a simple "dump all/restore all." Several command-line options are available:
 
-**Restore mappings in their places**
-  Anonymous private mappings are `mremap`-ed from the pre-mapped areas one-by-one, file mappings are created with `mmap` system call. Anonymous shared mappings are also just mmaped.
+- `dump` action
+- `pre-dump` action
+- `--track-mem`
+- `--prev-images-dir`
+- `--leave-running`
+- `--page-server`
 
-### Non linear mappings
+The `pre-dump` action automatically enables `--track-mem` and `--leave-running`. While a `pre-dump` captures only memory, a full `dump` captures the entire state, including files and sockets. Common combinations include:
 
-Currently we don't support non-linear mappings (so dump fails if such mappings are found).
+- **`dump`**: Dumps everything and terminates the tasks.
+- **`dump --leave-running`**: Dumps everything and allows tasks to continue execution.
+- **`dump --track-mem --leave-running --prev-images-dir <path>`**: Dumps only pages modified since the previous dump in `<path>`, while leaving tasks running.
+- **`pre-dump`**: Dumps memory only, enables tracking, and leaves tasks running.
+- **`pre-dump --prev-images-dir <path>`**: Performs an incremental memory dump.
+- **`dump --page-server`**: Sends pages directly to a [page server](page-server.md) (e.g., for [disk-less migration](disk-less-migration.md)).
 
-## Advanced C/R
-
-For things as remote dump, stackable images, and incremental dumps, CRIU supports a more sophisticated memory C/R policies rather than "dump all -- restore all" one. There are several CLI knobs that can be used.
-
-- dump action
-- pre-dump action
-- --track-mem option
--* --prev-images-dir option
-- --leave-running option
-- --page-server option
-
-Let's see what all of this means.
-
-First of all, the pre-dump action always turns on the `--track-mem` and the `--leave-running` options even if they are not specified in the command line. Next, the pre-dump action dumps *only* the memory, while the dump one dumps all the state including open files, sockets and other stuff. Having said that, let's see all the possible combinations and what they result in.
-
-**dump**
-  Without any options, dump everything and kill the dumped tasks.
-
-**dump --track-mem**
-  Dump everything, turn on memory changes tracking, and kill tasks after this. As you might have noticed, this is pretty useless combination of options!
-
-**dump --leave-running**
-  Dump everything, and leave the tasks running after dump.
-
-**dump --track-mem --leave-running**
-  Same as above, but turn on memory changes tracking.
-
-**dump --track-mem --leave-running --prev-images-dir <path>**
-  Same as above, but during dump also check whether the page in question is present in parent, and skip dumping it this time.
-
-**pre-dump**
-  Only dump memory, turn on memory changes tracking and leave the tasks running.
-
-**pre-dump --prev-images-dir <path>**
-  Same as above, but check for pages present in parent and skip them.
-
-**<pre->dump <options> --page-server**
-  Send the pages to the page server (e.g. for [disk-less migration](disk-less-migration.md)). See [page server](page-server.md) for more details.
-
-## Messing with image files
+## Image File Workflow
 
 ![File:Criu-memory-wflow.png](File:Criu-memory-wflow.png)
 
@@ -107,7 +77,3 @@ First of all, the pre-dump action always turns on the `--track-mem` and the `--l
 - [Postulates](postulates.md)
 - [Disk-less migration](disk-less-migration.md)
 - [Page server](page-server.md)
-
-
-
-

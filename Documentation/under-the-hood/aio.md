@@ -1,12 +1,9 @@
 # AIO
 
-To C/R AIO we need to mess with tree things:
+To C/R AIO, we need to address three things:
 
-1. AIO ring
+1. The AIO ring
 1. Completed events in the ring
-1. In-flight events out there
+1. In-flight events
 
-The latter thing is still not supported :(
-
-
-
+In-flight events are not yet supported. :(

@@ -1,43 +1,44 @@
-# Restorer context
+# Restorer Context
 
-This page describes what this context is and why we need one.
+This page explains the restorer context and its role in the restoration process.
 
-## What is it?
+## What is the Restorer Context?
 
-The restorer context is the last stage of the [restore](checkpointrestore.md) process. It differs from the regular CRIU's (process) context like the [parasite code](parasite-code.md) does -- it doesn't have any libraries, it is PIE-compiled and can only work on fixed amount of memory. In this context CRIU restores
+The restorer context is the final stage of the [restoration](checkpointrestore.md) process. It is a specialized environment, similar to the [parasite code](parasite-code.md), that is compiled as a Position-Independent Executable (PIE) and operates without standard libraries. In this context, CRIU finalizes the restoration of:
 
-1. memory
-1. timers
-1. credentials
-1. threads
+1. Memory mappings
+1. Timers
+1. Credentials
+1. Threads
 
-## Why separate context?
+## Why is a Separate Context Necessary?
 
-The reasoning for this is simple -- when CRIU comes to the state when it needs to restore process' memory, it should unmap all the old mappings and map the new ones. But since CRIU process would do this operation on itself, once the old code is unmapped CRIU will seg-fault right on the exit from the `munmap()` system call. Also this code should be get over-mmaped by the mapping is restores. So we need some code that would do this. And this other code should "sit" in two address spaces simultaneously -- in the CRIU's one and in the target one.
+A separate context is required because CRIU must eventually unmap its own memory mappings to make room for the target process's memory. Since CRIU is performing these operations on itself, it would segfault immediately upon exiting a `munmap()` call that removes its own code. To avoid this, a small "restorer blob" is used. This code is positioned in a memory "hole" that does not overlap with either CRIU's current mappings or the target process's intended mappings, allowing it to exist in both address spaces simultaneously.
 
-The switch to this context is done in several steps.
+The transition to this context involves several steps:
 
-First, we collect the data needed by the restorer code and puts all it into one sequential memory area. Then, knowing the data size and the restorer code size, we find the appropriate hole in the intersection of CRIU's and target mappings. Then we mmap() this region, mremap() the data into it, put the restorer blob nearby, fix the pointers (see below) and call assember's "jump" instruction to get there.
+1. CRIU collects all data needed by the restorer and places it into a single sequential memory area.
+1. CRIU identifies a suitable memory hole for the restorer code and data.
+1. CRIU maps this region, moves the data into it, and places the restorer blob nearby.
+1. Pointers within the restorer data are adjusted to be valid within the restorer's context.
+1. CRIU executes an assembly "jump" instruction to transfer control to the restorer blob.
 
-Now what "fix the pointers" mean. When we collected data for CRIU we addressed the objects in this are using pointers valid in CRIU address space. When we will jump into restorer code pointers in there should "know" where the respective objects are. So knowing where from the restorer counts pointers and the structure of the restorer data, we alter them respectively.
+## What is Restored in This Context?
 
-## What is restored there and why
+### Memory
+Memory is restored here to avoid the self-unmapping issue mentioned above. At this stage, CRIU:
+- Moves anonymous VMAs from their temporary locations to their final addresses using `mremap()`.
+- Maps file-backed VMAs using `mmap()`.
 
-So, memory is restored here for the reasons described above. Note, that here CRIU does two things only
+### Timers
+Timers are armed at the very last moment to ensure they do not fire prematurely while processes are still being synchronized during restoration.
 
-1. Move anonymous VMAs to proper places
-1. Map new file VMAs
+### Credentials
+Credentials are restored here to allow CRIU to perform its final privileged operations, such as `chdir()` or `chroot()`, just before the process resumes.
 
-The anonymous memory is mmaped and filled with data earlier, in restorer it's only mremap()-ed into proper addressed. The files mapping are just mmap()-ed, as data in them sits in files :)
-
-Timers are restore here, since CRIU processes can wait for each other for some time while restoring and not to lose timer ticks there, we delay timers arming this the last moment.
-
-Credentials are restored here to allow CRIU perform privileged operations such as fork-with-pid or chroot().
-
-Threads are restored here for simplicity. If we restored them before, we'd have to "park" them while we change the memory layout. Instead of doing this, we first toss the memory around, then create threads.
+### Threads
+Threads are restored in this final stage for simplicity. Restoring them earlier would require "parking" them during complex memory layout changes. Instead, CRIU completes the memory transition first and then recreates the threads.
 
 ## See also
 - [Code blobs](code-blobs.md)
 - [Compel](compel.md)
-
-
