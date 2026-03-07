@@ -1,80 +1,38 @@
 # PID Restoration
 
-## ns_last_pid
-To restore PIDs, CRIU uses `/proc/sys/kernel/ns_last_pid`, which has been available in the kernel since version 3.3. This feature requires `CONFIG_CHECKPOINT_RESTORE` to be enabled, which is the case for the vast majority of Linux distributions. The `ns_last_pid` file contains the last PID assigned by the kernel. When the kernel needs to assign a new PID, it retrieves the value from `ns_last_pid` and assigns `ns_last_pid + 1`. To restore a specific PID, CRIU locks `ns_last_pid`, writes `PID - 1` to it, and then calls `clone()`.
+A critical requirement for successful checkpoint/restore is ensuring that each process and thread is restored with its original **Process ID (PID)** and **Thread ID (TID)**. Applications frequently rely on these IDs for inter-process communication, signal delivery, and as keys for shared resources (such as System V IPC).
 
-## Example
-The following C program demonstrates how to set a specific PID for a forked child process.
+## Restoration Mechanisms
 
-**BEWARE**: This program requires root privileges. The authors take no responsibility for the impact of this code on your system (though it has been tested).
+CRIU employs two primary methods to request specific PIDs from the Linux kernel during restoration.
 
-```c
-#include <sys/stat.h>
-#include <sys/file.h>
-#include <fcntl.h>
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-#include <unistd.h>
+### 1. The Legacy Interface: `ns_last_pid`
+On older kernels, Linux does not provide a direct way to request a specific PID during a `fork()` or `clone()` call. Instead, CRIU uses the `/proc/sys/kernel/ns_last_pid` interface:
+1.  CRIU acquires a global lock (`lock_last_pid`) to minimize the chance of other processes interfering.
+2.  It writes `N-1` to `/proc/sys/kernel/ns_last_pid`.
+3.  It calls `fork()`.
+4.  The kernel assigns the next available PID, which should be `N`.
 
-int main(int argc, char *argv[])
-{
-    int fd, pid;
-    char buf[32];
+**Limitations**:
+*   **Race Conditions**: Other processes on the system (outside of CRIU's control) might fork and "steal" the intended PID between the write and the fork.
+*   **Performance**: Repeatedly writing to the `/proc` filesystem and calling `fork()` is slow, especially for large process trees.
+*   **Nesting Complexity**: Handling nested PID namespaces with this interface requires recursively entering namespaces and managing the legacy interface at each level.
 
-    if (argc != 2) {
-        fprintf(stderr, "Usage: %s <desired_pid>\n", argv[0]);
-        return 1;
-    }
+### 2. The Modern Interface: `clone3()` with `set_tid`
+Introduced in Linux kernel v5.5, the `clone3()` system call provides a much more robust and efficient mechanism via the `set_tid` array in the `clone_args` structure.
+*   **Atomic Assignment**: CRIU explicitly specifies the desired PID directly during the creation call.
+*   **No Races**: The PID assignment is atomic with process creation, eliminating the risk of PID theft.
+*   **Efficiency**: Offers significant performance improvements, particularly during the restoration of large, multi-threaded applications.
+*   **Full Hierarchy Support**: CRIU can pass an array of PIDs to `set_tid`, allowing it to simultaneously set the process's identity in all nested PID namespaces.
 
-    printf("Opening ns_last_pid...\n");
-    fd = open("/proc/sys/kernel/ns_last_pid", O_RDWR);
-    if (fd < 0) {
-        perror("Can't open ns_last_pid");
-        return 1;
-    }
-    printf("Done\n");
+## Implementation in CRIU
 
-    printf("Locking ns_last_pid...\n");
-    if (flock(fd, LOCK_EX)) {
-        close(fd);
-        perror("Can't lock ns_last_pid");
-        return 1;
-    }
-    printf("Done\n");
+CRIU includes architecture-specific assembly wrappers (`RUN_CLONE3_RESTORE_FN`) to safely execute these calls during the critical restoration phase. 
 
-    pid = atoi(argv[1]);
-    snprintf(buf, sizeof(buf), "%d", pid - 1);
+*   **Automatic Selection**: CRIU automatically detects the presence of `clone3()` and `set_tid` support during the [Kerndat](kerndat.md) phase. If the modern interface is available, it is prioritized.
+*   **Thread Restoration**: Individual threads are restored using the same mechanisms, ensuring that their TIDs match the original state.
 
-    printf("Writing pid-1 (%d) to ns_last_pid...\n", pid - 1);
-    if (write(fd, buf, strlen(buf)) != (ssize_t)strlen(buf)) {
-        perror("Can't write to ns_last_pid");
-        flock(fd, LOCK_UN);
-        close(fd);
-        return 1;
-    }
-    printf("Done\n");
-
-    printf("Forking...\n");
-    int new_pid = fork();
-    if (new_pid == 0) {
-        printf("I'm the child! My PID is %d\n", getpid());
-        exit(0);
-    } else if (new_pid == pid) {
-        printf("I'm the parent. My child received the correct PID (%d)!\n", new_pid);
-    } else {
-        printf("PID %d does not match expected PID %d\n", new_pid, pid);
-    }
-    printf("Done\n");
-
-    printf("Cleaning up...\n");
-    if (flock(fd, LOCK_UN)) {
-        perror("Can't unlock");
-    }
-
-    close(fd);
-    printf("Done\n");
-
-    return 0;
-}
-```
+## See also
+* [Checkpoint/Restore Architecture](checkpointrestore.md)
+* [Kerndat](kerndat.md)
+* [Restorer Context](restorer-context.md)
