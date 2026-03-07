@@ -1,27 +1,37 @@
-# Freezing the Tree
+# Freezing the Process Tree
 
-## Introduction
+Before CRIU can begin checkpointing, it must ensure that the entire process tree is completely "immobilized." This prevents tasks from changing their state (e.g., opening files, creating children, or receiving network packets) while the snapshot is being taken. This freezing process must be transparent to the application, meaning it should not observe any disruption or unexpected signals.
 
-Before we can begin checkpointing processes, we must ensure they cannot change their state. This includes not only preventing them from opening new files or sockets or changing sessions but also stopping them from producing new child processes that might escape the dumping procedure. In other words, the process tree and the individual processes within it must be "immobilized" during the dump. While this sounds trivial in theory, it is challenging in practice. The checkpoint is intended to be transparent to the application, meaning the application should not perceive any change in its state transitions. While processes are traditionally stopped using `SIGSTOP`, doing so can disturb the process state.
-
-There are two primary ways to transparently stop a process tree:
-
-- Capturing them with `ptrace`.
-- Freezing them using the [freezer cgroup](https://www.kernel.org/doc/Documentation/cgroup-v1/freezer-subsystem.txt).
+CRIU employs two primary methods to achieve this:
 
 ## Capturing with ptrace
 
-(Section content to be added)
+The most common method for freezing a tree is using the Linux `ptrace` interface. Unlike traditional debuggers that might send disruptive signals like `SIGSTOP`, CRIU uses a more modern, non-invasive approach:
 
-## Using freezer cgroup
+1.  **SEIZE**: CRIU calls `ptrace(PTRACE_SEIZE, pid, ...)` for every task in the tree. This "attaches" to the process without stopping it or delivering any signals.
+2.  **INTERRUPT**: Once seized, CRIU sends a `ptrace(PTRACE_INTERRUPT, pid, ...)` command. This causes the kernel to stop the task at the next possible opportunity (typically upon entering or exiting a syscall or being preempted).
+3.  **WAIT**: CRIU then waits for the task to enter the `TRAP_STOP` state. This state is invisible to the task's own signal handling logic, ensuring transparency.
 
-(Section content to be added)
+By seizing every task in the tree, CRIU ensures that no task can resume execution or fork new children during the dump.
+
+## Using Freezer CGroups
+
+For large process trees or environments where `ptrace` might be restricted or inefficient, CRIU can use the Linux **Freezer CGroup**. This allows the kernel to freeze an entire group of processes in a single, atomic operation.
+
+CRIU supports both versions of the freezer:
+
+### CGroup v1 Freezer
+*   **Mechanism**: CRIU identifies the freezer cgroup containing the process tree and writes `FROZEN` to the `freezer.state` file.
+*   **Handling Inconsistency**: Historically, the v1 freezer could be unreliable, sometimes getting stuck in a `FREEZING` state. CRIU includes "kludges" to handle this, such as periodically retrying the freeze command or briefly thawing and re-freezing the group to kick the kernel's internal state machine.
+
+### CGroup v2 Freezer
+*   **Mechanism**: In the unified cgroup v2 hierarchy, CRIU writes `1` to the `cgroup.freeze` file.
+*   **Verification**: It then monitors the `cgroup.events` file, waiting for the `frozen 1` event to signal that all processes in the sub-hierarchy have successfully stopped.
+
+**Note**: Even when using a freezer cgroup, CRIU still attaches to the tasks via `ptrace` after they are frozen. This is necessary to perform internal inspections, such as extracting register states and injecting parasite code.
 
 ## See also
 
-- [Tree after restore](tree-after-restore.md)
-- [Checkpoint/Restore](checkpointrestore.md)
-
-## External links
-
-- https://www.kernel.org/doc/Documentation/cgroup-v1/freezer-subsystem.txt
+* [Checkpoint/Restore Architecture](checkpointrestore.md)
+* [Process Tree Final States](final-states.md)
+* [Parasite Code](parasite-code.md)
