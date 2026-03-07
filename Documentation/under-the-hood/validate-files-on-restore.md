@@ -1,64 +1,43 @@
-# Validating Files on Restore
+# File Validation on Restore
 
-This article describes how CRIU ensures it restores the correct set of files and how this validation is implemented. This project was completed as part of the [GSoC 2020 program](https://summerofcode.withgoogle.com/projects/#5773537320632320).
+CRIU can verify that regular files and shared libraries being restored on the destination host are identical to the ones captured during the checkpoint. This is a critical security and stability feature, as mismatching libraries (e.g., a different version of `libc.so`) can lead to immediate application crashes or subtle data corruption due to changed offsets and symbols.
 
-**Note**: This feature is currently maintained in a [pull request](https://github.com/checkpoint-restore/criu/pull/1148) and has not yet been merged into the main CRIU repository.
+## How File Validation Works
 
-## Previous Implementation
-Because CRIU does not include the full contents of files (except for ghost files) in its dump images, it must validate that the files present during restoration are identical to those captured during the dump. This is particularly important for ELF files to prevent restoring incompatible versions of executables or libraries. Previously, CRIU only stored and compared the file size, which is a relatively weak check.
+File validation is managed via the `--file-validation` option. CRIU automatically captures metadata for all regular, file-backed mappings during the dump and stores it in the image files.
 
-## Current Implementation
-The current implementation uses the file size check as an initial filter. If the size does not match, restoration is aborted immediately. If the size matches, CRIU proceeds with more rigorous validation methods.
+### Supported Validation Methods
 
-### Checksum Method
-The strongest check is calculating a checksum for the entire file. However, this can be performance-intensive for large files. As a compromise, CRIU can be configured to calculate checksums for specific portions of a file.
+CRIU supports two primary methods for validating files:
 
-### Build-ID Method
-The second method uses the Build-ID, a "strongly unique embedded identifier" found in many ELF files.
+#### 1. Build-ID (Default)
+Most modern Linux executables and shared libraries include a **GNU Build-ID**—a unique, compiler-generated hash stored in a dedicated ELF note section (`NT_GNU_BUILD_ID`).
+*   **Dumping**: CRIU identifies ELF files by checking their magic numbers. For each ELF file, it maps at most the first **1 MB** of the file (defined as `BUILD_ID_MAP_SIZE`) and extracts the Build-ID hash.
+*   **Restoring**: During restoration, CRIU performs the same extraction on the file residing on the target host. If the resulting hash does not match the one stored in the image, CRIU aborts the restoration to prevent corruption.
+*   **Fallback**: If a file is not an ELF or lacks a Build-ID, CRIU automatically falls back to validating the file by its size.
 
-## Build-ID Details
-If present, the Build-ID is stored in an `NT_GNU_BUILD_ID` note within a `PT_NOTE` program header. After `mmap`-ing the file, CRIU verifies the ELF magic number and determines if it is a 32-bit or 64-bit file to use the appropriate data structures from `elf.h`. 
+#### 2. File Size (`filesize`)
+A simpler and faster validation method that only compares the total size of the file in bytes.
+*   **Advantage**: Minimal overhead as it only requires a `stat()` call.
+*   **Disadvantage**: Less reliable than Build-ID, as different versions of a file can occasionally have identical sizes.
 
-CRIU then iterates through the program headers (located at the `phoff` offset) to find the `PT_NOTE` section. Within that section (at `p_offset`), it searches for the Build-ID note.
+## Usage and Configuration
 
-## Checksum Details
-CRIU uses CRC32C (utilizing the Castagnoli polynomial `0x82F63B78`) for checksum calculation. The file is mapped in 10 MB increments, and the checksum is calculated based on the configuration:
-- Entire file.
-- First `N` bytes.
-- Every `N`-th byte.
+File validation is enabled by default using the `buildid` method. You can explicitly configure the behavior using the `--file-validation` flag:
 
-The `N` parameter defaults to 1024. The iterator logic in `criu/files-reg.c` (`checksum_iterator_init`, `next`, and `stop`) manages which bytes are processed. If an iterator moves outside the currently mapped region, CRIU maps the next required segment.
+```bash
+# Explicitly use Build-ID validation
+criu restore --file-validation buildid ...
 
-## Configuration and Fallbacks
-The Build-ID method is the default because it is highly reliable and less resource-intensive than a full checksum. The `--file-validation` option allows users to customize this behavior:
-- `--file-validation buildid`: Uses Build-ID (default).
-- `--file-validation checksum-full`: Checksums the entire file.
-- `--file-validation checksum`: Checksums the first `N` bytes (use `--checksum-parameter` to set `N`).
-- `--file-validation checksum-period`: Checksums every `N`-th byte.
-- `--file-validation filesize`: Uses only the file size check (fastest).
+# Use only file size validation
+criu restore --file-validation filesize ...
+```
 
-If the Build-ID method is selected but the file lacks a Build-ID, CRIU falls back to checksumming the first 1024 bytes. Conversely, if the checksum method is inconclusive, it falls back to Build-ID. If both fail, CRIU relies on the file size and issues a warning.
+## Security and Integrity
 
-## Performance Impact
-The following values represent the average time to complete ZDTM tests across multiple runs, indicating the general overhead of each method. Tests were performed on an undervolted i5 4800H using `tmpfs` to eliminate disk latency.
+File validation ensures that the restored process tree runs against the same binary environment it was captured in. This prevents "library injection" scenarios where an attacker might try to force a restored process to run against malicious versions of its original dependencies. It also ensures that internal pointers (such as function addresses) remain valid, as they are often tied to specific library versions.
 
-**Test: `zdtm/transition/shmem`**
-| Method | Time | Increase |
-| :--- | :--- | :--- |
-| File Size | 3.782s | - |
-| Build-ID | 4.153s | ~9% |
-| Checksum (First 1024) | 4.465s | ~18% |
-| Checksum (Entire File) | 4.722s | ~24% |
-| Checksum (Every 1024th) | 4.498s | ~19% |
-
-**Test: `zdtm/static/maps04`**
-| Method | Time | Increase |
-| :--- | :--- | :--- |
-| File Size | 35.317s | - |
-| Build-ID | 35.720s | ~1% |
-| Checksum (First 1024) | 35.919s | ~2% |
-| Checksum (Entire File) | 36.679s | ~4% |
-| Checksum (Every 1024th) | 36.476s | ~3% |
-
-## Future Work
-- Implementing a lookup table to further accelerate CRC32C calculations.
+## See also
+* [Dumping File Descriptors](dumping-files.md)
+* [Checkpoint/Restore Architecture](checkpointrestore.md)
+* [Filesystem Peculiarities](filesystems-pecularities.md)
