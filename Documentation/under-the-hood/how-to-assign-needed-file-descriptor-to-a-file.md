@@ -1,146 +1,55 @@
-# How to Assign a Needed File Descriptor to a File
+# Assigning Descriptors and Sharing Files
 
-Suppose we have [opened a file](how-hard-is-it-to-open-a-file.md) and want it to have a specific descriptor number rather than the one assigned by the kernel.
+Once a file is [opened during restoration](how-hard-is-it-to-open-a-file.md), it often needs to be moved to a specific numeric file descriptor (FD) and potentially shared with other tasks in the process tree. This document explains how CRIU coordinates this process.
 
-Given:
-```c
-struct fd {
-    struct file *file;
-    int tgt_fd;
-} *fd;
-```
+## The Basic Mechanism: `dup2`
 
-And after calling:
-```c
-int fd_opened;
-fd_opened = open_a_file(fd->file);
-```
-
-We can use the `dup2()` system call to assign the opened file to the target descriptor number:
+In Linux, the `dup2(oldfd, newfd)` system call is the standard way to assign a file to a specific descriptor number. CRIU uses this to move a newly opened file from its temporary descriptor (assigned by the kernel) to the target descriptor expected by the application.
 
 ```c
-int fd_opened;
-fd_opened = open_a_file(fd->file);
-dup2(fd_opened, fd->tgt_fd);
-close(fd_opened);
+int fd = open_a_file(f->file);
+dup2(fd, f->target_fd);
+close(fd);
 ```
 
-In some cases, a single file might be opened multiple times within a task (e.g., a shell where `/dev/tty` might be mapped to descriptors 0, 1, and 2). We can handle this by extending the `struct fd`:
+## Handling Multiple Descriptors for One File
 
-```c
-struct fd {
-    struct file *file;
-    int n_fds;
-    int *tgt_fds;
-} *fd;
-```
+A single task may have multiple FDs referring to the same kernel "File Description" (e.g., a shell where FD 0, 1, and 2 all point to the same TTY). CRIU handles this by identifying the unique file object, opening it once, and then calling `dup2()` for every target FD slot the application expects.
 
-The updated restoration logic:
+## Sharing Files Across the Process Tree
 
-```c
-int fd_opened, i;
-fd_opened = open_a_file(fd->file);
-for (i = 0; i < fd->n_fds; i++)
-    dup2(fd_opened, fd->tgt_fds[i]);
-close(fd_opened);
-```
+Files are frequently shared between processes. While these files were originally inherited via `fork()`, CRIU must often distribute them between processes that do not have a direct parent-child relationship during the restore phase.
 
-Files shared between different tasks are also common (e.g., after a `fork()`). If a file is shared between two processes where neither is an ancestor of the other, CRIU handles this by [sending file descriptors](http://linux.die.net/man/3/cmsg) between processes.
+### Master and Slave Descriptors
+For every unique file object in a checkpoint:
+1.  **The Master**: One task is designated as the "master" for that file. It is responsible for the actual system call that recreates the object (e.g., `open()`, `socket()`, or `pipe()`).
+2.  **The Slaves**: All other tasks that share the same file are "slaves." They do not create the file themselves.
 
-This adds complexity to our structures:
+### Transport via SCM_RIGHTS
+CRIU uses Unix domain sockets to "send" descriptors from the master process to slave processes using the `SCM_RIGHTS` mechanism.
 
-```c
-struct pid_fd {
-    int pid;
-    int fd;
-};
+**The Workflow:**
+1.  **Master Opens**: The master task creates the file object.
+2.  **Master Sends**: The master sends the resulting file descriptor to each slave task over a dedicated transport socket.
+3.  **Slave Receives**: The slave task waits on its transport socket, receives the FD, and uses `dup2()` to plant it into the correct numeric slot.
 
-struct fd {
-    struct file *file;
-    int n_fds;
-    struct pid_fd *tgt_fds;
-} *fd;
-```
+## Solving the Coordination Problem
 
-The logic now involves two parts: one process that opens the file and sends it to others, and other processes that receive it.
+Distributing thousands of descriptors across a complex process tree requires careful management to avoid deadlocks and descriptor collisions.
 
-```c
-int fd_opened, i, pid = getpid(), sk;
-sk = create_socket();
+### 1. Transport Sockets
+CRIU creates abstract Unix sockets for each process to receive descriptors. The names are uniquely generated using the PID and a `criu_run_id` (e.g., `\0x/crtools-fd-123-abcdef`) to ensure that multiple simultaneous CRIU runs on the same host do not interfere with each other.
 
-if (pid == file_opener(fd)) {
-    fd_opened = open_a_file(fd->file);
+### 2. Deterministic "Master" Selection
+To prevent circular dependencies (e.g., Task A waiting for Task B while B waits for A), CRIU uses a deterministic priority system to select the master. Typically, the task with the highest priority—usually the one closest to the root of the tree or with the lowest PID—is chosen to open and distribute the file.
 
-    for (i = 0; i < fd->n_fds; i++) {
-        if (fd->tgt_fds[i].pid == pid)
-            dup2(fd_opened, fd->tgt_fds[i].fd);
-        else
-            send_fd(fd_opened, fd->tgt_fds[i], sk);
-    }
-    close(fd_opened);
-} else {
-    for (i = 0; i < fd->n_fds; i++) {
-        if (fd->tgt_fds[i].pid != pid)
-            continue;
+### 3. Descriptor Collisions
+A task's target FDs may conflict with the internal "service" FDs CRIU uses for images, logs, or transport sockets. CRIU resolves this by:
+*   **Service FD Range**: Restricting CRIU's own FDs to a specific range.
+*   **Dynamic Relocation**: If a target FD slot is occupied by an active service FD, CRIU moves the service FD to a new, free slot using `dup()` before planting the application's FD.
 
-        fd_opened = recv_fd(sk);
-        dup2(fd_opened, fd->tgt_fds[i].fd);
-        close(fd_opened);			
-    }
-}
-close(sk);
-```
+## Complex Dependencies
 
-All `tgt_fds` belonging to a task are opened by another task and sent to the owner in the order they appear in the array. The receiver processes them in the same order, ensuring files are placed into the correct descriptors.
+Some file types have inherent dependencies. For instance, an `epoll` descriptor cannot be fully restored until the files it monitors are already opened and their numeric descriptors are known. CRIU's file restoration engine handles this via a multi-pass state machine, where some files are opened but their full restoration is deferred until their dependencies are satisfied.
 
-However, the logic above has some flaws:
-
-1.  **Transport Coordination**: `send_fd` and `recv_fd` cannot reliably use a single shared socket for all tasks. A descriptor intended for a specific PID must reach that task. CRIU creates dedicated sockets for receiving descriptors, often named uniquely like `criu-fd-transport-%pid-%fd`.
-2.  **Descriptor Overwriting**: When the opener calls `dup2()`, it might overwrite the transport socket descriptor (`sk`). To avoid this, `sk` can be moved to a free descriptor using `dup()`.
-
-Revised logic:
-
-```c
-int fd_opened, i, pid = getpid(), sk;
-
-if (pid == file_opener(fd)) {
-    sk = create_socket();
-    fd_opened = open_a_file(fd->file);
-
-    for (i = 0; i < fd->n_fds; i++) {
-        if (fd->tgt_fds[i].pid == pid) {
-            if (sk == fd->tgt_fds[i].fd)
-                sk = dup(sk);
-            dup2(fd_opened, fd->tgt_fds[i].fd);
-        } else {
-            send_fd(fd_opened, fd->tgt_fds[i], sk);
-        }
-    }
-    close(fd_opened);
-    close(sk);
-} else {
-    for (i = 0; i < fd->n_fds; i++) {
-        if (fd->tgt_fds[i].pid != pid)
-            continue;
-
-        sk = create_socket();
-        dup2(sk, fd->tgt_fds[i].fd);
-    }
-
-    for (i = 0; i < fd->n_fds; i++) {
-        if (fd->tgt_fds[i].pid != pid)
-            continue;
-
-        fd_opened = recv_fd(fd->tgt_fds[i].fd);
-        dup2(fd_opened, fd->tgt_fds[i].fd);
-        close(fd_opened);
-    }
-}
-```
-
-Additional Considerations:
-
-- **Synchronization**: The opener must ensure that all transport sockets are ready before sending descriptors.
-- **Deadlock Prevention**: To avoid deadlocks during synchronization, the task with the smallest PID is chosen to open a shared file, and descriptors are sent "upwards" through the process tree.
-- **Complexity of `open_a_file()`**: Opening a file is not always about a path; it could involve pipes, sockets, or other specialized objects.
-- **Dependencies**: Files can depend on one another. For example, an `eventpoll` descriptor might monitor other descriptors. If the `eventpoll` is opened before its monitored descriptors, it will fail.
+*See also: [File Restoration Engine (fdinfo)](fdinfo-engine.md)*
