@@ -1,44 +1,34 @@
 # Restorer Context
 
-This page explains the restorer context and its role in the restoration process.
+The **Restorer Context** refers to the final stage of the restoration process, where a CRIU process "morphs" itself into the target application. This critical transition is performed by a specialized [PIE](code-blobs.md) blob known as the **Restorer PIE**.
 
-## What is the Restorer Context?
+## Why a Dedicated Context is Necessary
 
-The restorer context is the final stage of the [restoration](checkpointrestore.md) process. It is a specialized environment, similar to the [parasite code](parasite-code.md), that is compiled as a Position-Independent Executable (PIE) and operates without standard libraries. In this context, CRIU finalizes the restoration of:
+During the final stage of restoration, CRIU must accomplish two conflicting goals:
+1.  **Memory Swapping**: It must unmap all of CRIU's own code, stack, and data to completely clear the address space for the application.
+2.  **Memory Re-mapping**: It must map the application's original memory regions (VMAs) back into their exact original addresses.
 
-1. Memory mappings
-1. Timers
-1. Credentials
-1. Threads
+While these operations are occurring, some code must remain in the address space to execute the necessary `munmap()` and `mmap()` system calls. The Restorer PIE is designed to reside in a temporary "safe hole" in the address space—a range that does not conflict with either CRIU's temporary mappings or the application's final layout.
 
-## Why is a Separate Context Necessary?
+## The Restoration Workflow
 
-A separate context is required because CRIU must eventually unmap its own memory mappings to make room for the target process's memory. Since CRIU is performing these operations on itself, it would segfault immediately upon exiting a `munmap()` call that removes its own code. To avoid this, a small "restorer blob" is used. This code is positioned in a memory "hole" that does not overlap with either CRIU's current mappings or the target process's intended mappings, allowing it to exist in both address spaces simultaneously.
+1.  **Preparation**: The root CRIU process identifies the restorer code and prepares it for distribution.
+2.  **Forking**: The process tree is recreated. Since the restorer code is mapped in the root task before forking, all child processes share the same physical memory for the restorer via standard Copy-on-Write (COW).
+3.  **Safe Hole Detection**: Each restored process scans its target memory layout (from the `mm.img` file) to find a contiguous area large enough to hold the restorer code and its stack.
+4.  **Remapping**: Each process uses `mremap()` to move the shared restorer blob to its specific safe hole.
+5.  **Execution Jump**: The process jumps from the main CRIU code into the restorer PIE.
+6.  **Cleanup and Reconstruction**: The restorer PIE unmaps CRIU, recreates the application's original mappings, and populates them with data from the image files.
+7.  **Final Transition (Sigreturn)**: The very last step is calling `sigreturn()`. The restorer prepares a special signal frame on the stack containing the application's original register state (including the instruction pointer). The kernel then loads this state, effectively resuming the application from the exact point of the checkpoint.
 
-The transition to this context involves several steps:
+## Technical Characteristics
 
-1. CRIU collects all data needed by the restorer and places it into a single sequential memory area.
-1. CRIU identifies a suitable memory hole for the restorer code and data.
-1. CRIU maps this region, moves the data into it, and places the restorer blob nearby.
-1. Pointers within the restorer data are adjusted to be valid within the restorer's context.
-1. CRIU executes an assembly "jump" instruction to transfer control to the restorer blob.
+### Freestanding PIE
+Because the restorer runs in an environment where standard libraries have been unmapped, it is a **freestanding** Position-Independent Executable. It contains its own minimal assembly-level system call wrappers and does not depend on `glibc` or any external runtime.
 
-## What is Restored in This Context?
-
-### Memory
-Memory is restored here to avoid the self-unmapping issue mentioned above. At this stage, CRIU:
-- Moves anonymous VMAs from their temporary locations to their final addresses using `mremap()`.
-- Maps file-backed VMAs using `mmap()`.
-
-### Timers
-Timers are armed at the very last moment to ensure they do not fire prematurely while processes are still being synchronized during restoration.
-
-### Credentials
-Credentials are restored here to allow CRIU to perform its final privileged operations, such as `chdir()` or `chroot()`, just before the process resumes.
-
-### Threads
-Threads are restored in this final stage for simplicity. Restoring them earlier would require "parking" them during complex memory layout changes. Instead, CRIU completes the memory transition first and then recreates the threads.
+### Conflict Avoidance
+The algorithm for finding the "safe hole" is architecture-specific. It must account for various kernel-mapped regions like the vDSO, the stack, and potential guard pages to ensure that the restorer code never overlaps with memory that the application needs.
 
 ## See also
-- [Code blobs](code-blobs.md)
-- [Compel](compel.md)
+* [Code Blobs](code-blobs.md)
+* [Checkpoint/Restore Architecture](checkpointrestore.md)
+* [Memory Dumping and Restoring](memory-dumping-and-restoring.md)
