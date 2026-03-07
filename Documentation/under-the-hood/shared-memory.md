@@ -1,41 +1,38 @@
 # Shared Memory
 
-Every process has one or more memory mappings representing regions of virtual memory. Some mappings are shared among multiple processes; these are referred to as shared anonymous (non-file-based) memory mappings. This article describes the intricacies of handling these mappings in CRIU.
+CRIU provides comprehensive support for capturing and reconstructing the various ways processes share memory in Linux. This includes anonymous shared regions, file-backed shared mappings, and System V IPC segments.
 
-## Checkpoint
+## Types of Shared Memory
 
-During a checkpoint, CRIU identifies all shared mappings to ensure they are captured correctly.
+CRIU categorizes shared memory into three primary types, each with a dedicated restoration strategy:
 
-CRIU calls `fstatat()` on each entry found in `/proc/$PID/map_files/` and records the *device:inode* pair returned. If multiple processes share the same *device:inode* pair, the mapping is marked as shared. This works because the kernel creates a hidden `tmpfs` file for shared anonymous mappings that is accessible via the `map_files` entry.
+### 1. Shared Anonymous Mappings
+Created via `mmap(..., MAP_SHARED | MAP_ANONYMOUS, ...)`, these regions have no persistent backing file on disk but are shared between a parent and its children after a `fork()`, or between unrelated processes that inherit the mapping.
 
-Dumping a shared mapping involves two steps:
-1. Writing an entry into the process's `mm.img` file.
-1. Storing the actual memory contents in `pagemap-shmem.img` and `pages.img`. (See [Memory dumps](memory-dumps.md) for details).
+*   **Identification**: CRIU identifies these regions by parsing `/proc/$pid/maps`. For shared anonymous regions, the kernel assigns a unique **internal inode number** (often appearing in the `inode` column of maps). CRIU uses this inode number as a `shmid` to group and identify identical mappings across the entire process tree.
+*   **Restoration via memfd**: During restoration, CRIU uses the `memfd_create()` system call to create an anonymous, RAM-backed file.
+    *   One process (the designated "master" for that specific `shmid`) creates the `memfd`, populates it with the memory contents captured in `pages-shmem.img`, and maps it.
+    *   All other processes that shared the original region map the same `memfd` file descriptor, ensuring that any subsequent writes are visible to all participants, just as they were before the checkpoint.
 
-If different processes map different portions of a shared memory segment, CRIU collects the offsets and lengths from all involved processes to determine the total segment size and then aggregates the content.
+### 2. Shared File Mappings
+Created via `mmap(..., MAP_SHARED, fd, ...)`, these regions are backed by a regular file on the filesystem.
 
-## Restore
+*   **Mechanism**: CRIU records the file's unique identity (device and inode), the offset within the file, and the mapping length.
+*   **Restoration**: Each process re-opens the original file (or a restored version of it) and calls `mmap()` with the `MAP_SHARED` flag. The Linux kernel's standard page cache mechanism automatically handles the sharing and synchronization between processes.
 
-During restoration, CRIU uses the information gathered during the checkpoint to recreate the shared mappings.
+### 3. System V IPC Shared Memory
+Managed via the legacy `shmget()` and `shmat()` APIs, these segments are part of the kernel's IPC subsystem.
 
-Among the processes sharing a mapping, the one with the lowest PID (see [Postulates](postulates.md)) is designated the **creator**. The creator's responsibility is to obtain a file descriptor for the mapping, restore the data, and signal the other processes when it is ready. Other processes wait for this signal.
+*   **Mechanism**: CRIU captures the segment's metadata (key, ID, permissions, size) and its full data contents during the dump.
+*   **Restoration**: CRIU recreates the IPC segments using `shmget()` with the original parameters and repopulates the data. The restored processes then attach to these segments using `shmat()`, ensuring that IPC-based communication continues seamlessly.
 
-To obtain a file descriptor:
-- If `memfd_create()` is available (Linux kernel v3.17+), it is used to create the mapping, followed by `ftruncate()` to set the correct size.
-- If `memfd_create()` is unavailable, the creator calls `mmap()` to create the mapping and then opens the corresponding file in `/proc/self/map_files/` to obtain a descriptor. Note that `map_files` is unavailable for processes in user namespaces due to security restrictions.
+## Advanced Coordination Features
 
-Once the creator has the descriptor, it maps the region, copies the data from the dump using `memcpy()`, and then unmaps the region while keeping the descriptor open. It then uses `futex(FUTEX_WAKE)` to notify the waiting processes.
-
-Other processes wait via `futex(FUTEX_WAIT)`, then open the creator's `/proc/$CREATOR_PID/fd/$FD` file to retrieve the shared descriptor. Finally, all processes (including the creator) call `mmap()` to establish their specific mapping of the segment and then close the shared descriptor.
-
-## Change Tracking
-
-For [iterative migration](iterative-migration.md), it is useful to track memory changes. Since CRIU v2.5, change tracking is supported for shared memory as well as anonymous memory. CRIU achieves this by scanning the pagemaps of all shared memory segment owners and performing a logical AND on the collected soft-dirty bits. This tracking also enables [memory images deduplication](memory-images-deduplication.md) for shared segments.
-
-## Dumping Present Pages
-
-When capturing shared memory, CRIU only dumps pages that are actually present or swapped, rather than the entire segment. This is done by checking the corresponding bits in the owners' pagemap entries. Additionally, a shared memory page may exist in the kernel but not be mapped to any specific process. CRIU identifies these pages using `mincore()` on the shared memory segment and ANDs this with the per-process bitmaps.
+CRIU leverages modern kernel features to handle complex sharing accurately:
+*   **kcmp**: Used to definitively verify if two memory mappings in different processes refer to the same underlying kernel object (via `KCMP_VM`), ensuring that shared resources are only dumped once.
+*   **Futex Synchronization**: During restoration, CRIU uses futexes to coordinate between the "master" process (which populates shared memory) and "slave" processes, ensuring that no process starts execution until the shared memory state is fully consistent.
 
 ## See also
-- [Memory dumping and restoring](memory-dumping-and-restoring.md)
-- [Memory images deduplication](memory-images-deduplication.md)
+* [Checkpoint/Restore Architecture](checkpointrestore.md)
+* [Memory Dumping and Restoring](memory-dumping-and-restoring.md)
+* [Kcmp Trees](kcmp-trees.md)
