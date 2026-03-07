@@ -1,63 +1,56 @@
 # CGroups
 
-This page describes how CRIU manages control groups (cgroups).
+CRIU provides comprehensive support for checkpointing and restoring Control Groups (CGroups) for both cgroup v1 and cgroup v2.
 
 ## Overview
 
-C/R of cgroup information involves three components:
+When managing CGroups, CRIU handles three main aspects:
+1.  **Process Placement**: The specific cgroup sets (a list of controller/path pairs) that each task in the process tree belongs to.
+2.  **Hierarchy and Properties**: The existing cgroup directory tree, its permissions, and various control properties (e.g., CPU shares, memory limits).
+3.  **Namespace Boundaries**: Support for CGroup namespaces (`CLONE_NEWCGROUP`), ensuring that the restored tasks have the same view of the cgroup hierarchy.
 
-1. The groups where tasks reside.
-1. The groups that exist and are visible to tasks.
-1. Mountpoints of the "cgroup" filesystem.
+## Default Behavior
 
-CRIU has supported this information since version 1.3-rc1. Here is how it works.
+By default, CRIU manages cgroups in **soft mode** (`--manage-cgroups=soft`). In this mode:
+*   CRIU automatically dumps process cgroup memberships.
+*   Upon restoration, it attempts to recreate the cgroup hierarchy and restore properties for cgroups that it created.
+*   If a cgroup already exists, CRIU avoids overwriting its properties to prevent interference with other tasks on the system.
 
-## CGroups tasks live in
+## CGroup V2 Support
 
-CRIU defines a "set" of cgroups. A set is a per-controller list of paths where a task resides. If the paths to groups for two tasks differ by at least one controller, they are considered to reside in different sets.
+CRIU fully supports the unified cgroup v2 hierarchy. Key features include:
+*   **Global Properties**: Restoration of global v2 attributes such as `cgroup.subtree_control`, `cgroup.max.descendants`, and `cgroup.max.depth`.
+*   **Process Migration**: Moving tasks between v2 cgroups using `cgroup.procs` (or `cgroup.threads` for threaded controllers).
+*   **Freezer**: Integrated support for the cgroup v2 freezer mechanism (`cgroup.freeze`).
 
-For every set, CRIU generates an ID, which is then stored in the task's `core.tc.cg_set` image. The set in which CRIU resides during dump is also generated and saved in the inventory image. The set in which the root task resides is also special—every other set (except CRIU's own) is checked to ensure it contains only subdirectories of the respective root task's set. Otherwise, the dump fails.
+## CGroup Namespaces
 
-On restore, each task is moved into its respective set. If a task's set coincides with CRIU's, the task is not moved and remains in whatever cgroups CRIU restore was started in.
+CRIU leverages cgroup namespaces to accurately restore a container's view of the cgroup tree. During restoration:
+1.  It identifies the cgroup namespace boundary (the path prefix) for each controller.
+2.  It moves the root task into the appropriate cgroup relative to the host.
+3.  It calls `unshare(CLONE_NEWCGROUP)` to pin the root of the cgroup namespace to that location, matching the original environment.
 
-## CGroups that are visible to tasks
+## Mountpoints of the "cgroup" Filesystem
 
-In addition to cgroups containing tasks, there may be other groups where no tasks reside. To capture these, CRIU identifies the root set and saves the entire cgroup tree starting from it. This information is stored in the `cgroup.controllers` image. In the same image, CRIU saves the properties of the cgroups (i.e., values read from cgroup configuration files). Note that since CRIU starts from the root set and scans the directory tree, all paths in this section are subdirectories of the root set.
+CRIU supports dumping and restoring cgroup filesystem mountpoints. However, a significant limitation exists regarding bind-mounted subgroups:
 
-To have CRIU handle this information during dump and restore, specify the `--manage-cgroups` option.
+**Root Mount Requirement**: By default, CRIU expects to find the "root" mount of a cgroup controller (where the mount root is `/`) within the dumped mount namespace.
+*   If a container has only bind-mounted **subgroups** (e.g., `/sys/fs/cgroup/memory/my-container` is bind-mounted to `/sys/fs/cgroup/memory`) without a corresponding root mount of that controller being visible, CRIU may fail the dump.
+*   This is because CRIU needs to identify the full path of the cgroup relative to the hierarchy root to accurately reconstruct it.
 
-## Dumping more cgroups than are visible
+To overcome this, such mounts must often be treated as **external mounts** (`--external mnt[...]`) or the full hierarchy must be made visible to CRIU during the dump.
 
-In some cases, it can be useful to dump a specific cgroup subtree, regardless of which cgroups the container's tasks are in. For example, systemd-based containers like Ubuntu 16.04 will put all of their tasks in one of `/init.scope`, `/system.slice/...`, or `/user.slice/...`. By default, CRIU's cgroup engine will not dump the root of the cgroup tree `/`. The problem is that systemd opens `/` as a directory file descriptor and changes the permissions on it, resulting in errors like:
+## CGroups Restoration Strategy
 
-`(00.361723)      1: Error (criu/files-reg.c:1487): File sys/fs/cgroup/systemd has bad mode 040755 (expect 040775)`
+The `--manage-cgroups=MODE` option allows for fine-grained control:
 
-The solution is for the container engine to tell CRIU the root of the tree at which to start dumping via `--cgroup-root` on dump, so that these permissions are preserved when checkpointing the cgroup tree.
+*   `none`: Requires cgroups to pre-exist; does not restore properties.
+*   `props`: Requires cgroups to pre-exist; restores properties from the image.
+*   `soft` (Default): Restores properties only for cgroups created by CRIU.
+*   `full`: Always recreates all cgroups and restores all properties.
+*   `strict`: Recreates all cgroups from scratch; fails if any already exist.
+*   `ignore`: Completely ignores cgroup information.
 
-## Mountpoints of "cgroup" filesystem
+## External CGroup Yard
 
-If found in the list of mounts, CRIU will dump one, but only the "root" mount will work. If you have bind-mounted subgroups into a container, the CRIU dump will fail.
-
-## Restoring into different CGroups
-
-The option syntax is `--cgroup-root [*controller*:]/*path*`. Without this option, CRIU restores tasks and groups that reside in the subtrees starting from the root task's directories. When this option is provided, the respective `*controller*`s are restored under the given `*path*`s instead.
-
-## CGroups restoring strategy
-
-When restoring cgroups, CRIU may encounter existing cgroup controllers. In such cases, it relies on the user to specify the desired behavior: should it overwrite existing properties with values from the image, or should it ignore them? Or perhaps it is unacceptable to modify any existing cgroup?
-
-To resolve this, CRIU supports named restore modes, which are specified via the `--manage-cgroups=*mode*` option. The `*mode*` argument can be one of the following:
-
-- `none`: Do not restore cgroup properties; require the cgroup to pre-exist at the time of restoration.
-- `props`: Restore cgroup properties; require the cgroup to pre-exist.
-- `soft`: Restore cgroup properties only if the cgroup was created by CRIU; otherwise, do not restore properties.
-- `full`: Always restore all cgroups and their properties.
-- `strict`: Restore all cgroups and their properties from scratch, requiring that they do not already exist in the system.
-- `ignore`: Do not manage cgroups and proceed as if they do not exist.
-
-By default, `soft` is assigned if the `--manage-cgroups` option is passed without an argument (i.e., the same as `--manage-cgroups=soft`).
-
-## External CGroup yard
-The option syntax is `--cgroup-yard path`.
-
-Instead of trying to mount cgroups within CRIU, provide a path to a directory containing a pre-created cgroup "yard." This is useful if you do not want to grant `CAP_SYS_ADMIN` to CRIU. For every cgroup mount, there should be exactly one directory. If there is only one controller in the mount, the directory name should simply be the name of the controller. If multiple controllers are co-mounted, the directory name should be a comma-separated list of those controllers.
+The `--cgroup-yard PATH` option allows CRIU to use a pre-mounted cgroup hierarchy located at `PATH`. This is particularly useful in unprivileged environments where CRIU may not have the `CAP_SYS_ADMIN` capability required to mount cgroup filesystems itself. For every cgroup mount, there should be exactly one directory named after the controller(s) co-mounted there (or "unified" for cgroup v2).
