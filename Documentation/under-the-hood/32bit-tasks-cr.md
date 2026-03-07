@@ -76,23 +76,29 @@ Following LKML discussions, it was decided to separate personality changes from 
 
 ### Current approach
 
-FIXME
+CRIU (a 64-bit process) handles 32-bit (ia32) tasks through a series of architecture-specific transitions:
+
+1.  **Architecture Detection**: CRIU uses `ptrace(PTRACE_GETREGSET, pid, NT_PRSTATUS, &iov)` to detect the task's architecture. The kernel returns different register set sizes depending on the mode: `sizeof(user_regs_struct64)` for native 64-bit tasks and `sizeof(user_regs_struct32)` for 32-bit compatibility mode tasks.
+2.  **Dumping**: When dumping a 32-bit task, CRIU uses the 64-bit `ptrace` interface. The kernel handles the internal mapping of 32-bit registers into the structure expected by CRIU.
+3.  **vDSO Handling**: To ensure the restored task uses a vDSO compatible with the current kernel, CRIU uses the `arch_prctl(ARCH_MAP_VDSO_32, addr)` system call (available since kernel v4.8) to map the 32-bit vDSO into the restored process's address space.
+4.  **Restoration via Sigreturn**: The final restoration of 32-bit registers is performed using a 32-bit `rt_sigreturn` call:
+    *   CRIU prepares a 32-bit signal frame (`rt_sigframe_ia32`) on the target task's stack.
+    *   The CRIU restorer code, running in 64-bit mode, executes a far return (`lretq`) to switch the CPU to 32-bit mode with the `USER32_CS` (0x23) segment selector.
+    *   Once in 32-bit mode, it executes `int $0x80` with the `__NR32_rt_sigreturn` syscall number. The kernel then restores all registers from the 32-bit sigframe and resumes the task in 32-bit mode.
 
 ## To-Do
 
-### Kernel patch for vsyscall page
+### vsyscall page handling
 
-The `vsyscall` page is emulated and is not a standard VMA; it only appears in `/proc/<pid>/maps`. Its presence depends on `!TIF_IA32` and `!TIF_X32`. Andy Lutomirski has patches to disable this emulation on a per-PID basis. Currently, tests are run with the `vsyscall=none` boot parameter because `zdtm.py` verifies memory maps before and after C/R.
+The `vsyscall` page is an emulated, fixed-address page (`0xffffffffff600000`) used for legacy support. It is not a standard VMA and is marked as `VMA_AREA_VSYSCALL` by CRIU, which avoids dumping or restoring its contents. Since its presence in `/proc/<pid>/maps` depends on kernel configuration (`vsyscall=emulate` or `vsyscall=xonly`), it can introduce noise during ZDTM tests that compare memory layouts. Consequently, tests are often run with `vsyscall=none`.
 
 ### Error reporting on x32 binary dumping
 
-Currently, only ia32 applications are supported. Attempting to dump an x32 binary should result in an error.
+Currently, CRIU does not support x32 binaries (64-bit registers with 32-bit pointers). While the infrastructure for 32-bit pointers exists, the specific register handling and vDSO mapping for x32 are not implemented. Attempting to dump an x32 binary should result in an explicit error.
 
-### Continue removing TIF_IA32 from uprobes & Oprofile
+### Removal of TIF_IA32 from the kernel
 
-As suggested by Andy Lutomirski and Oleg Nesterov, this flag should be removed. While removing it requires significant kernel work, it enables restored ia32 processes to be traced by tools like uprobes and OProfile.
-
-**Update**: Completed; patches were merged into kernel v5.11.
+The `TIF_IA32` thread info flag was historically used to distinguish 32-bit tasks. Kernel efforts (merged in v5.11) have moved towards relying on the nature of the syscall (compat vs. native) rather than a persistent thread flag. This unification simplifies how the kernel and CRIU interact, particularly for tracing tools like uprobes.
 
 ## External links
 - [GitHub issue](https://github.com/checkpoint-restore/criu/issues/43)
