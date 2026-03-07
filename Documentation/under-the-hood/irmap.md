@@ -1,22 +1,19 @@
 # Irmap
 
-## Problem
+## The Problem
 
-How having an inode number and device of a file get its path back? This problem appears when dumping various notifies objects like inotify or fanotify. Those are put on an inode (that is looked up by a path) and after it the path string is forgotten.
+How can we retrieve a file's path given its inode number and device? This challenge arises when dumping notification objects like `inotify` or `fanotify`. These are established on an inode (initially identified by a path), after which the kernel "forgets" the original path string.
 
-CRIU uses the empiric knowledge where *notify-s are typically put by programs (config files and alike) and does filesystem tree scan to find out the name by the inode number. The engine is caller *irmap* which stands for **Inode Reverse MAP**. The irmap cache recursively scans the tree starting from "known" locations and remembers all the name-inode pairs it meets. If we later try to irmap some inode which was met during the first scan, no additional FS access would occur, irmap would just report the name back.
+CRIU leverages empirical knowledge of where these notifications are typically placed (such as configuration files) and performs a filesystem tree scan to find the path associated with a specific inode number. This engine is called **irmap** (Inode Reverse MAP). The `irmap` cache recursively scans the filesystem starting from "known" locations and records name-inode pairs. If a required inode was encountered during the scan, `irmap` retrieves the path immediately without further filesystem access.
 
-## Caching the irmap cache
+## Caching the Irmap
 
-Since this FS scan can be quite long, this is recommended to be done while tasks are not frozen. So the irmap cache fill is also started on the pre-dump operation, when tasks are not frozen. After the scan the cache is stored in the working dir under the irmap-cache.img name. When CRIU's next pre-dump or final dump is performed, the irmap cache is read back and when required the cached entries are re-validated individually, w/o the full FS re-scan.
+Because filesystem scans can be time-consuming, CRIU performs this process while tasks are still running. The `irmap` cache filling begins during the pre-dump operation. The resulting cache is stored in the working directory as `irmap-cache.img`. During subsequent pre-dumps or the final dump, CRIU reads this cache and re-validates individual entries as needed, avoiding a full rescane.
 
-## Other solutions?
+## Other Solutions?
 
-We're currently unaware of any :(
+Currently, no other reliable APIs exist for this purpose.
 
 ## OverlayFS
 
-[Irmap doesn't work on this FS](https://github.com/checkpoint-restore/criu/issues/136)
-
-
-
+[Irmap does not currently work on OverlayFS](https://github.com/checkpoint-restore/criu/issues/136).

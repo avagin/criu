@@ -1,31 +1,34 @@
-# Pid restore
+# PID Restoration
 
 ## ns_last_pid
-In order to restore PID, CRIU uses /proc/sys/kernel/ns_last_pid, which is available in kernel since v3.3 (according to [Upstream_kernel_commits](upstream_kernel_commits.md)). It requires CONFIG_CHECKPOINT_RESTORE to be set and it is enabled in the vast majority of distros. ns_last_pid contains the last pid that was assigned by the kernel. So, when kernel needs to assign a new one, it looks into ns_last_pid, gets last_pid and assigns last_pid+1. To restore PID, criu locks ns_last_pid, writes PID-1 and calls clone().
+To restore PIDs, CRIU uses `/proc/sys/kernel/ns_last_pid`, which has been available in the kernel since version 3.3. This feature requires `CONFIG_CHECKPOINT_RESTORE` to be enabled, which is the case for the vast majority of Linux distributions. The `ns_last_pid` file contains the last PID assigned by the kernel. When the kernel needs to assign a new PID, it retrieves the value from `ns_last_pid` and assigns `ns_last_pid + 1`. To restore a specific PID, CRIU locks `ns_last_pid`, writes `PID - 1` to it, and then calls `clone()`.
 
 ## Example
-Here is a simple program that shows how to set PID for a forked child.
+The following C program demonstrates how to set a specific PID for a forked child process.
 
--*BEWARE! This program requires root. I don't take any responsibility for what this code might do to your system.**( tested though =) )
+**BEWARE**: This program requires root privileges. The authors take no responsibility for the impact of this code on your system (though it has been tested).
 
 ```c
-
-1.include <sys/stat.h>
-1.include <fcntl.h>
-1.include <stdio.h>
-1.include <string.h>
-1.include <stdlib.h>
+#include <sys/stat.h>
+#include <sys/file.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
 
 int main(int argc, char *argv[])
 {
     int fd, pid;
     char buf[32];
 
-    if (argc != 2)
-     return 1;
+    if (argc != 2) {
+        fprintf(stderr, "Usage: %s <desired_pid>\n", argv[0]);
+        return 1;
+    }
 
     printf("Opening ns_last_pid...\n");
-    fd = open("/proc/sys/kernel/ns_last_pid", O_RDWR | O_CREAT, 0644);
+    fd = open("/proc/sys/kernel/ns_last_pid", O_RDWR);
     if (fd < 0) {
         perror("Can't open ns_last_pid");
         return 1;
@@ -35,7 +38,7 @@ int main(int argc, char *argv[])
     printf("Locking ns_last_pid...\n");
     if (flock(fd, LOCK_EX)) {
         close(fd);
-        printf("Can't lock ns_last_pid\n");
+        perror("Can't lock ns_last_pid");
         return 1;
     }
     printf("Done\n");
@@ -43,37 +46,35 @@ int main(int argc, char *argv[])
     pid = atoi(argv[1]);
     snprintf(buf, sizeof(buf), "%d", pid - 1);
 
-    printf("Writing pid-1 to ns_last_pid...\n");
-    if (write(fd, buf, strlen(buf)) != strlen(buf)) {
-        printf("Can't write to buf\n");
+    printf("Writing pid-1 (%d) to ns_last_pid...\n", pid - 1);
+    if (write(fd, buf, strlen(buf)) != (ssize_t)strlen(buf)) {
+        perror("Can't write to ns_last_pid");
+        flock(fd, LOCK_UN);
+        close(fd);
         return 1;
     }
     printf("Done\n");
 
     printf("Forking...\n");
-    int new_pid;
-    new_pid = fork();
+    int new_pid = fork();
     if (new_pid == 0) {
-        printf("I'm child!\n");
+        printf("I'm the child! My PID is %d\n", getpid());
         exit(0);
     } else if (new_pid == pid) {
-        printf("I'm parent. My child got right pid!\n");
+        printf("I'm the parent. My child received the correct PID (%d)!\n", new_pid);
     } else {
-        printf("pid does not match expected one\n");
+        printf("PID %d does not match expected PID %d\n", new_pid, pid);
     }
     printf("Done\n");
 
-    printf("Cleaning up...");
+    printf("Cleaning up...\n");
     if (flock(fd, LOCK_UN)) {
-        printf("Can't unlock");
+        perror("Can't unlock");
     }
 
     close(fd);
-
     printf("Done\n");
 
     return 0;
 }
-
 ```
-

@@ -1,26 +1,22 @@
-# Pidfd store
+# Pidfd Store
 
-Pidfd store increases the reliability of pid reuse detection during pre-dumps/dumps using task pidfd instead of task creation time.
+The `pidfd` store increases the reliability of PID reuse detection during pre-dumps and dumps by using task `pidfds` instead of task creation times.
 
-It is only supported for RPC and the C library.
+This feature is supported only via RPC and the C library.
 
 ## Usage
 
-A connectionless unix socket is passed to CRIU during each pre-dump/dump through
-the RPC option `pidfd_store_sk` or `criu_set_pidfd_store_sk` routine in the the library.
+A connectionless UNIX socket is passed to CRIU during each pre-dump or dump operation using the `pidfd_store_sk` RPC option or the `criu_set_pidfd_store_sk` library routine.
 
-<b>NOTE</b>: This is targeted at migration tools like P.Haul, because the passed socket must be kept alive throughout all pre-dump/dump iterations.
+**NOTE**: This feature is intended for migration tools like P.Haul, as the provided socket must remain active throughout all pre-dump and dump iterations.
 
-## Feature check
+## Feature Check
 
-This feature requires `pidfd_open` and `pidfd_getfd` syscalls.
-Support could be checked with:
-  CLI: `criu check --feature pidfd_store`.
-  RPC: `CRIU_REQ_TYPE__FEATURE_CHECK` and set `pidfd_store` to true in the "features" field of the request
+This feature requires the `pidfd_open` and `pidfd_getfd` system calls. Support can be verified via:
 
-## How it works
+- **CLI**: `criu check --feature pidfd_store`
+- **RPC**: Use `CRIU_REQ_TYPE__FEATURE_CHECK` and set `pidfd_store` to `true` in the `features` field of the request.
 
-The `pidfd_store_sk` is used as a queue for task pidfds. CRIU sends tasks pidfds to this socket and receives them in the next pre-dump/dump iteration. Those pidfds could then be used to check whether the task is still alive, otherwise it is a case of pid reuse and CRIU should make a full page dump.
+## How It Works
 
-
-
+The `pidfd_store_sk` serves as a queue for task `pidfds`. CRIU sends task `pidfds` to this socket and retrieves them during the subsequent pre-dump or dump iteration. These `pidfds` are then used to verify if the task is still active. If the task is no longer alive, CRIU detects this as a PID reuse scenario and performs a full page dump.

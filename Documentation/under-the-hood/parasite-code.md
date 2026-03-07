@@ -1,60 +1,54 @@
-# Parasite code
+# Parasite Code
 
 ## Overview
-Parasite code is a binary blob of code built in [PIE](http://en.wikipedia.org/wiki/Position-independent_code) format for execution inside another process address space. The main and only purpose of the parasite code is to execute CRIU service routines inside dumpee tasks address space.
+Parasite code is a binary blob compiled in Position-Independent Executable ([PIE](http://en.wikipedia.org/wiki/Position-independent_code)) format for execution within the address space of another process. Its primary purpose is to execute CRIU service routines within the context of the dumpee tasks.
 
-## Using the parasite
+## Using the Parasite
 
-All architecture independent code calling for parasite service routines is sitting in `parasite-syscall.c` file. When we need to run parasite code inside some dumpee task we:
+The architecture-independent logic for calling parasite service routines is located in `parasite-syscall.c`. To run parasite code within a dumpee task:
  
-1. Move task into that named seized state with `ptrace(PTRACE_SEIZE, …)` helper (thus task get stopped but does not notice that someone outside is trying to manipulate it).
-1. Inject and execute mmap syscall inside dumpee address space with help of `ptrace` system call, because we need to allocate a shared memory area which will be used for parasite stack and parameters exchange between CRIU and dumpee.
-1. Open local copy of shared memory space from */proc/$PID/map_files/*, where **$PID** is process identificator of a dumpee.
+1. The task is moved into a "seized" state using `ptrace(PTRACE_SEIZE, ...)`. This stops the task without it perceiving external manipulation.
+1. An `mmap` syscall is injected and executed within the dumpee's address space via `ptrace`. This allocates a shared memory area for the parasite's stack and for parameter exchange between CRIU and the dumpee.
+1. CRIU opens its own local copy of this shared memory via `/proc/$PID/map_files/`.
 
-All these actions are gathered in `parasite_infect_seized()` helper. Once parasite is prepared and placed into dumpee address space, CRIU can call for parasite service routines.
+These actions are coordinated by the `parasite_infect_seized()` helper. Once the parasite is positioned, CRIU can invoke its service routines.
 
-There are two modes the parasite can operate in:
+The parasite operates in two modes:
 
-1. Trap mode
-1. Daemon mode
+1. **Trap Mode**: The parasite executes a single command and then yields via a CPU trap instruction, which CRIU intercepts. This is a one-command-at-a-time execution mode.
+1. **Daemon Mode**: The parasite acts like a UNIX daemon. It opens a UNIX socket and listens for commands. Upon receiving a command, it processes it and returns the result via a socket packet. The daemon then resumes listening for subsequent commands. Supported commands are defined in the `PARASITE_CMD_...` enum in `parasite.h`.
 
-In trap mode parasite simply executes one command and yields cpu trap instruction which CRIU intercepts. This is like one command at a time mode.
+## Internal Structure
 
-In daemon mode (as name implies) parasite behaves like a unix daemon - it opens a unix socket and start listening for commands on it. Once a command is received, it is handled and the daemon returns the result back via a socket packet. The daemon continues listening for the subsequent commands to execute. All currently known commands are assembled as `PARASITE_CMD_…` enum in `parasite.h` header.
+The parasite consists of the following functional blocks:
 
-## Parasite internal structure
+![File:Parasite-layout.svg](File:Parasite-layout.svg)
 
-Internally parasite might be represented as following blocks
+The bootstrap code is written in architecture-specific assembly (x86, ARM, ARM64), while the parasite daemon is common across architectures and written in C. 
 
-![thumb|upright=1|center](File:Parasite-layout.svg)
+The **sigframe** (signal frame) block deserves special mention. Its purpose is to handle the `rt_sigreturn()` system call, which is used to restore the victim's original execution context (registers, etc.) after the parasite's work is complete. It is prepared by the caller using the register values the victim had at the moment of injection.
 
-Parasite bootstrap code written in assembly language, which is specific for every architecture (x86, arm, arm64), in turn parasite daemon is common for all architectures and written in C language. We consider only x86 architecture here but other architectures have the similar approach.
+### Parasite Bootstrap
 
-While all blocks on the image above are self descriptive the sigframe (signal frame) block requires some comments. Its main purpose is to handle `rt_sigreturn()` system call which we use to restore victim’s execution context (registers and etc). It should be prepared by caller setting up original registers values and etc the victim has at the moment of parasite injection.
+The bootstrap code resides in `parasite-head.S`. It adjusts its own stack and calls the daemon's entry point. Immediately following the call is a trapping instruction that notifies the caller when the parasite has finished its work (when in trap mode).
 
-### Parasite bootstrap
+### Parasite Daemon
 
-Parasite bootstrap lives in `parasite-head.S` file and simply adjusts own stack and literally call the daemon entry point. Right after the call there is trapping instruction placed which triggers the notification to a caller that parasite has finished its work if been running in trap mode. When parasite is running in daemon mode the notifications are a bit more complex and will be considered later.
+The daemon code is located in `pie/parasite.c`, with `parasite_daemon()` as its entry point. Upon starting, it opens a command socket to communicate with CRIU. The daemon then waits for commands.
 
-### Parasite daemon
+![File:Parasite-daemon.svg](File:Parasite-daemon.svg)
 
-Parasite daemon code lives in `pie/parasite.c` file. Its entry point is `parasite_daemon()`. Upon enter it opens command socket which is used to communicate with the caller. Once socket is opened the daemon comes to sleep waiting for command to appear. 
+Since the parasite memory block is a shared memory slab, data exchange between CRIU and the dumpee is performed via standard read/write operations in the arguments area, while commands are transmitted as network packets.
 
-![thumb|upright=3|center](File:Parasite-daemon.svg)
+## Removing Parasite Code from the Dumpee
 
-Because the whole parasite memory block is a shared memory slab data exchange between CRIU and dumpee is regular read/write operations into arguments area while commands are sent as network packets.
+Once the parasite is no longer needed, it is removed using these steps:
 
-## Curing dumpee from parasite code
-
-Once everything is done and we no longer need parasite it is removed from the dumpee's address space by performing the following steps:
-
-1. CRIU starts tracing the syscalls parasite is executing with help of `ptrace`
-1. CRIU sends `PARASITE_CMD_FINI` to the parasite via the control socket
-1. Parasite receives the command, then closes control socket and executes `rt_sigreturn()` system call
-1. CRIU intercepts exit from this syscall and unmaps parasite memory area, thus reverting the dumpee back to the state it was in before parasite injection
+1. CRIU begins tracing the syscalls executed by the parasite using `ptrace`.
+1. CRIU sends the `PARASITE_CMD_FINI` command via the control socket.
+1. The parasite closes the socket and executes an `rt_sigreturn()` system call.
+1. CRIU intercepts the completion of this syscall and unmaps the parasite's memory area, returning the dumpee to its original state.
 
 ## See also
 - [Code blobs](code-blobs.md)
 - [Compel](compel.md)
-
-

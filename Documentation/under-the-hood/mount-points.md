@@ -1,35 +1,34 @@
-# Mount points
+# Mount Points
 
-This page describes what we do with mount points trees.
+This page describes how CRIU handles mount point trees.
+
 ## Introduction
-When we are thinking about restoring a mount tree, we need to remember a few things:
-- shared and slave groups
-- how mounts are propagated inside one group
-- bind mounts (rw, ro)
+When restoring a mount tree, several factors must be considered:
+- Shared and slave groups.
+- How mounts propagate within a group.
+- Bind mounts (both read-write and read-only).
 
-The algorithm described here is not able to cover all the cases, so this solution is a temporary one.
+The algorithm described here is a temporary solution and may not cover all complex edge cases.
 
 ## Dump
 
-There is nothing interesting here. We just dump information about mounts and validate them to be sure that we are able to restore them.
+Dumping is straightforward. CRIU captures information about the mounts and validates them to ensure they can be successfully restored.
 
 ## Restore
 
-Mounts are restored for a few iterations. On each iteration we enumerate all mounts and mount everything we can. On the next iteration we mount a bit more and continue to do so  step by step. The idea is that we will be able to mount something new on each iteration. If we can't mount anything, we stop and report an error telling that we can't restore this configuration.
-For example, a mount can't be mounted if its parent isn't mounted yet. Or a more interesting example, a mount can't be mounted if not all the mounts from its parent shared group are mounted.
+Mounts are restored over several iterations. In each iteration, CRIU enumerates all mounts and restores those that are currently possible. This continues step-by-step until the tree is complete. The core idea is that each successful mount may enable others in the next iteration. If an iteration completes without any new mounts being added, CRIU stops and reports an error.
 
-## Known issues
-CRIU doesn't support configurations where two mounts of one shared group have different set of mounts. This is not a feature, this is a bug and you are welcome to fix it.
+For example, a mount cannot be restored if its parent has not yet been mounted, or if certain dependencies within its parent's shared group are missing.
 
-(done and checked by non_uniform_share_propagation in zdtm)
+## Known Issues
+CRIU does not currently support configurations where two mounts within the same shared group have different sets of sub-mounts. This is a known bug rather than a feature.
 
-## TODO
-- Read-only bind mounts
-(not sure was meant here but e.g. ghost files on readonly mounts handled and checked by ghost_on_rofs zdtm test)
-- Skipping mountpoints
-- Enabling FS runtime
+(Note: This has been addressed and is verified by the `non_uniform_share_propagation` test in ZDTM.)
+
+## To-Do
+- **Read-only bind mounts**: While certain cases (like ghost files on read-only mounts) are handled and verified by the `ghost_on_rofs` ZDTM test, full support may require further refinement.
+- **Skipping mount points**.
+- **Enabling filesystem runtime**.
 
 ## See also
 [External bind mounts](external-bind-mounts.md)
-
-

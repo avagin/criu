@@ -1,33 +1,26 @@
 # FAQ
 
-The intention of this page is to hold answers to frequently (and no so frequently) asked questions as well as some random data spread among developers' heads ;-) Note, that a big portion of FAQ-s are about [why C/R fails](why-cr-fails.md).
+This page provides answers to frequently (and not so frequently) asked questions, along with technical details maintained by the developers. Note that many questions regarding why C/R might fail are addressed in [Why C/R fails](why-cr-fails.md).
 
-- <b>Q</b>: Why CRIU dumps parts of read-only mappings that map the code section of a binary? For instance, there is a mapping at, say 0x400000, that maps the code of /usr/bin/something. After dump there will be at least a page at 0x400000 in the pagemap
-- <b>A</b>: The code section may have been COWed, for instance during dynamic load of the shared libraries.
+- **Q**: Why does CRIU dump parts of read-only mappings that contain the code section of a binary? For example, there is a mapping at `0x400000` for `/usr/bin/something`, and after the dump, there is at least one page at `0x400000` in the pagemap.
+- **A**: The code section may have been modified via Copy-on-Write (COW), for instance, during the dynamic loading of shared libraries.
 
+- **Q**: Why can't my [test](zdtm-test-suite.md) perform privileged operations, even though I am running `zdtm.py` as root?
+- **A**: This is because `zdtm.py` runs sub-tests as a non-existent, non-root user. If your sub-test requires root privileges, add `'flags': 'suid'` to the test's `.desc` file.
 
-- <b>Q</b>: Why my [test](zdtm-test-suite.md) cannot do privileged operation, though I run zdtm.py as root?
-- <b>A</b>: That's because zdtm.py runs all sub-tests from non-existing non-root user. If you need root prio in your sub-test add `'flags': 'suid'` into test's .desc file.
+- **Q**: Is it possible to perform [live migration](live-migration.md) between servers while changing the IP address?
+- **A**: The short answer is yes, provided that breaking existing connections is acceptable. More details are available in [this article](change-ip-address.md).
 
+- **Q**: Why does a dump fail with the message "Cannot dump half of a stream unix connection" in the logs?
+- **A**: This usually occurs in configurations [where C/R fails](when-cr-fails.md). This specific error relates to [external UNIX sockets](external-unix-socket.md).
 
-- <b>Q</b>: Is it possible to do [live migration](live-migration.md) from one server to another with changing the IP address?
-- <b>A</b>: Quick answer is -- if breaking the connections is OK, then yes. In details it's described [in this article](change-ip-address.md).
+- **Q**: Why does a restore fail with a "... pid mismatch ..." error in the logs?
+- **A**: The PID of a process or thread CRIU is trying to restore is already in use by another process. To resolve this, consider using [CR in namespaces](cr-in-namespace.md).
 
-
-- <b>Q</b>: Why does dump fail with "Cannot dump half of a stream unix connection" message in logs?
-- <b>A</b>: There are configurations [when C/R fails](when-cr-fails.md). This particular error is about [external UNIX socket](external-unix-socket.md).
-
-
-- <b>Q</b>: Why does restore fail with "... pid mismatch ..." error in logs?
-- <b>A</b>: The PID of the process of thread CRIU tries to restore is already busy. To overcome this, try [CR in namespace](cr-in-namespace.md).
-
-
-- <b>Q</b>: I've built CRIU, how can I make sure it works?
-- <b>A</b>: There are two minimal things to do. First is to [check the kernel](check-the-kernel.md) and the second is run the [ZDTM test suite](zdtm-test-suite.md).
+- **Q**: How can I verify that my CRIU build works correctly?
+- **A**: There are two primary steps: first, [check the kernel](check-the-kernel.md) compatibility, and second, run the [ZDTM test suite](zdtm-test-suite.md).
 
 ## Docker
 
-- <b>Q</b>: Cannot restore from images onto freshly created container (E.g. [this](https://github.com/xemul/criu/issues/289) gihub issue)
-- <b>A</b>: CRIU doesn't checkpoint filesystem, so once you've checkpointed the container, the images contain path to files, that sit in the *modified* root tree. So you cannot restore from images on *another* root tree, you need to get the same tree back. You need to say `docker commit` after the checkpoint and restore only on this particular image.
-
-
+- **Q**: Why can't I restore from images onto a freshly created container? (See [this GitHub issue](https://github.com/checkpoint-restore/criu/issues/289))
+- **A**: CRIU does not checkpoint the filesystem itself. When you checkpoint a container, the images contain paths to files residing in the *modified* root filesystem. Therefore, you cannot restore from those images onto a *different* root filesystem; you must use the original filesystem state. You should `docker commit` after the checkpoint and only restore using that specific image.
