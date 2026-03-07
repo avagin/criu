@@ -1,62 +1,68 @@
-# Code blobs
+# Code Blobs and PIE Generation
 
-## Summary
+CRIU and its sub-project **Compel** use specialized binary blobs to execute code in environments where standard libraries and runtime environments are unavailable. These blobs are Position-Independent Executables (PIE) that are converted into C headers for easy integration into the main CRIU binary.
 
-There are two scenarios where CRIU operates in a specialized environment:
+## Why Code Blobs are Necessary
 
-- [Parasite code](parasite-code.md) execution.
-- [Restoration](restorer-context.md) of dumped page contents and yielding `rt_sigreturn` to continue execution of the original program.
+CRIU operates in two primary scenarios that require these specialized environments:
 
-## Building PIE Code Blobs for CRIU
+1.  **Parasite Code Execution**: During a checkpoint, CRIU injects code into the target process's address space to extract internal state (like memory contents and credentials). This code must be self-contained and PIE-compiled to run at any address.
+2.  **Restorer Context**: During restoration, the process must unmap its current memory (including CRIU's own code) and map the original memory of the checkpointed application. The code performing these operations must exist in a memory region that does not conflict with the target application's layout.
 
-Parasite code executes within the context of the dumpee process; therefore, it must be compiled as a Position-Independent Executable (PIE) and maintain its own stack. The same requirements apply to the restorer code used at the end of the restoration process.
+## Building PIE Code Blobs
 
-To accommodate this, we reserve a static stack within CRIU for use during the checkpoint and restoration stages. To keep the source code maintainable, we employ the following techniques:
+The generation of these blobs is handled by the **Compel** utility. The process involves compiling C and assembly source files into a single ELF object and then using the `compel hgen` tool to transform that object into a C header.
 
-- The parasite code uses its own bootstrap logic, defined in a pure assembly file (`parasite_head.S`).
-- The restorer bootstrap code is implemented more simply within `restorer.c`.
+### The `compel hgen` Tool
 
-For both cases, we generate header files that include:
+The `hgen` (header generator) tool performs the following tasks:
+1.  **Relocation Extraction**: It identifies all symbols that require relocation and creates a structured `compel_reloc` array.
+2.  **Binary Data Conversion**: It converts the allocated ELF sections (code and data) into a static C byte array.
+3.  **Bootstrap Initialization**: It generates a setup function (e.g., `parasite_setup_c_header`) that populates a `parasite_blob_desc` structure, which CRIU uses to manage the blob's lifecycle.
 
-- Function offsets for export.
-- A C array of binary data.
+### Example Header Format
 
-Example:
+The generated header file typically contains:
 
 ```c
-#define parasite_blob_offset____export_parasite_args 0x000000000000002c
-#define parasite_blob_offset____export_parasite_cmd 0x0000000000000028
-#define parasite_blob_offset____export_parasite_head_start 0x0000000000000000
-#define parasite_blob_offset____export_parasite_stack 0x0000000000006034
-
-static char parasite_blob[] = {
-	0x48, 0x8d, 0x25, 0x2d, 0x60, 0x00, 0x00, 0x48,
-	0x83, 0xec, 0x10, 0x48, 0x83, 0xe4, 0xf0, 0x6a,
-	0x00, 0x48, 0x89, 0xe5, 0x8b, 0x3d, 0x0e, 0x00,
-	0x00, 0x00, 0x48, 0x8d, 0x35, 0x0b, 0x00, 0x00,
-...
+/* Relocation information */
+static const struct compel_reloc parasite_relocs[] = {
+    { .offset = 0x0000002c, .type = COMPEL_TYPE_INT, .addend = 0, .value = 0x12345678 },
+    ...
 };
+
+/* The binary blob itself */
+static const char parasite_blob[] = {
+    0x48, 0x8d, 0x25, 0x2d, 0x60, 0x00, 0x00, 0x48,
+    ...
+};
+
+/* Setup function for CRIU integration */
+static void parasite_setup_c_header_desc(struct parasite_blob_desc *pbd, bool native)
+{
+    pbd->parasite_type = COMPEL_BLOB_CHEADER;
+    pbd->hdr.mem       = parasite_blob;
+    pbd->hdr.bsize     = sizeof(parasite_blob);
+    ...
+}
 ```
 
-These headers are included in the CRIU source files and used during checkpoint/restore.
+## Build Procedure
 
-Generation of these files involves several steps:
+The build system follows these steps to generate the headers:
 
-1. All required object files are linked into `built-in.o`.
-1. Using a linker script, code and data are moved to a specialized layout (i.e., sections with predefined names and addresses).
-1. Using `objcopy`, the required section(s) are moved into a single binary file.
-1. Using `hexdump`, a C-style data array is generated and placed into a `-blob.h` header.
+1.  **Compilation**: Source files (like `parasite.c` or `restorer.c`) are compiled with PIE flags (`-fpie`, `-ffreestanding`, `-nostdlib`).
+2.  **Linking**: Object files are linked into a single `.built-in.o` file using a specialized linker script (`compel-pack.lds.S`) that organizes sections into a layout suitable for a standalone blob.
+3.  **Header Generation**: The `compel hgen` command is executed on the linked object to produce the final `-blob.h` header.
 
-## Example Building Procedure
-
+```bash
+# Example Makefile recipe
+$(obj)/parasite-blob.h: $(obj)/parasite.built-in.o
+    compel hgen -f $< -o $@
 ```
-  LINK     pie/parasite.built-in.o
-  GEN      pie/parasite.built-in.bin.o
-  GEN      pie/parasite.built-in.bin
-  GEN      pie/parasite-blob.h
-  
-  LINK     pie/restorer.built-in.o
-  GEN      pie/restorer.built-in.bin.o
-  GEN      pie/restorer.built-in.bin
-  GEN      pie/restorer-blob.h
-```
+
+## See also
+
+* [Parasite Code](parasite-code.md)
+* [Restorer Context](restorer-context.md)
+* [Compel Sub-project](../compel.md)
