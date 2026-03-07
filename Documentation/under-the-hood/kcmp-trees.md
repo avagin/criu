@@ -1,29 +1,48 @@
-# Kcmp Trees
+# Shared Object Detection (Kcmp Trees)
 
-## Overview
+CRIU must frequently determine if system resources (such as file descriptions, memory mappings, or namespaces) are shared between different processes. While some objects have unique kernel-provided IDs (like inode numbers for files on disk), many do not. This document explains how CRIU uses the `kcmp()` system call and red-black trees to efficiently detect these shared objects.
 
-When checkpointing a group of processes, many of them may share resources. CRIU must distinguish between resources that are shared and those that are unique to a process.
+## The Challenge
 
-To achieve this, the [`kcmp`](http://man7.org/linux/man-pages/man2/kcmp.2.html) system call was introduced to the Linux kernel. It compares a specific resource between two processes and returns a result similar to [`strcmp`](http://man7.org/linux/man-pages/man3/strcmp.3.html). This allows CRIU to efficiently track shared resources using a sorting algorithm.
+Comparing every resource in every process against every other process would result in $O(N^2)$ complexity, where $N$ is the total number of resources (e.g., 100 tasks with 100 files each = 10,000 files, or 50 million pairs). This is prohibitively slow.
 
-### API
+## The Solution: `kcmp()` and Pointer Comparison
 
-CRIU organizes files, filesystems, virtual memory descriptors, signal handlers, and file descriptors into separate "Kcmp trees." Currently, CRIU maintains five such trees, each declared using the `DECLARE_KCMP_TREE` helper. For example:
+The `kcmp()` system call identifies whether two kernel objects are the same. Crucially, its return value is not a simple boolean; it returns the result of an internal kernel pointer comparison:
+*   **0**: The objects are identical.
+*   **1**: The first object's pointer is "less than" the second.
+*   **2**: The first object's pointer is "greater than" the second.
+*   **-1**: Error.
 
-```c
-DECLARE_KCMP_TREE(vm_tree, KCMP_VM);
-```
+This ordering information allows CRIU to use **red-black trees** to sort and search for objects with $O(N \log N)$ complexity.
 
-Internally, each tree is implemented as a [red-black tree](http://en.wikipedia.org/wiki/Red%E2%80%93black_tree).
+## Two-Level Red-Black Trees
 
-As CRIU gathers process resources, it uses the `kid_generate_gen()` helper to check if a resource already exists in the tree. If the resource is new, it is added to the tree, and the caller receives a new abstract ID for use in CRIU images. If the resource is already known, the helper returns zero, indicating it has already been handled.
+To further optimize performance and minimize the number of expensive `kcmp()` system calls, CRIU uses a two-level tree structure:
 
-This mechanism is critical for preventing duplicate entries in dump images, which would otherwise lead to significant performance issues.
+### Level 1: Fast ID (genid)
+CRIU first calculates a "generation ID" (`genid`) using cheap, locally available metadata. For regular files, this is derived from the device ID, inode number, and current file position.
+*   Objects are inserted into a primary red-black tree ordered by `genid`.
+*   If two objects have different `genid`s, they are guaranteed to be different, and no system call is needed.
 
-### Two-Tree Strategy
+### Level 2: Sub-tree (kcmp)
+If two objects have identical `genid`s, they *might* be the same.
+*   CRIU then descends into a sub-tree associated with that `genid`.
+*   In this sub-tree, objects are ordered using the `kcmp()` system call.
+*   If `kcmp()` returns 0, the objects are confirmed as shared.
 
-To minimize the number of expensive `kcmp` calls, CRIU uses two identifiers for each object: a **gen_id** and the **ID** itself.
+## Supported Object Types
 
-The **gen_id** is generated from visible attributes of an object. For a file, it might be derived from the inode number, device, and position. If two objects have different `gen_id`s, they are guaranteed to be different. However, two identical `gen_id`s do not guarantee that the objects are the same.
+CRIU uses `kcmp()` for various object types, including:
+*   **KCMP_FILE**: Individual file descriptions.
+*   **KCMP_VM**: Virtual memory address spaces.
+*   **KCMP_FILES**: The entire file descriptor table.
+*   **KCMP_FS**: Filesystem information (umask, root, cwd).
+*   **KCMP_SIGHAND**: Signal handler tables.
+*   **KCMP_IO**: I/O context.
+*   **KCMP_SYSV_SEM**: System V semaphore undo lists.
+*   **KCMP_EPOLL_TFD**: Specific descriptors within an epoll interest list.
 
-To handle this efficiently, objects are stored in two layers of trees. The first is a red-black tree sorted by `gen_id`. If an object is not found here, it is considered new. If a match is found, CRIU must then call `kcmp` to confirm equality. Because one `gen_id` might correspond to multiple distinct objects, a second tree is maintained under each `gen_id` leaf, sorted by the results of the `kcmp` calls.
+## See also
+* [Dumping File Descriptors](dumping-files.md)
+* [Copy-on-write memory](copy-on-write-memory.md)
