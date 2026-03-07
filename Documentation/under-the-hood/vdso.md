@@ -1,19 +1,40 @@
-# vDSO
+# vDSO and VVAR Handling
 
-## Overview
-**vDSO** (virtual Dynamic Shared Object) is a small shared library that the kernel automatically maps into the address space of every userspace program. It provides highly optimized versions of frequently used system calls—such as `gettimeofday` and `getcpu`—that can be executed without the overhead of a full context switch. Most applications access these via **libc** rather than calling them directly.
+The **vDSO** (virtual Dynamic Shared Object) and **VVAR** (virtual VARiable) areas are specialized memory regions mapped by the Linux kernel into every process. They enable high-performance userspace execution of specific system calls (such as `gettimeofday()` or `clock_gettime()`) by providing direct access to kernel-maintained code and data without the overhead of a full context switch.
 
-## The Challenge
-While the kernel maintains backward compatibility for vDSO functions, the internal structure and memory layout of the vDSO can change between kernel versions. This poses a significant problem for CRIU: if an application is migrated to a host running a different kernel, the vDSO image captured during the dump may be incompatible with the new kernel's internals.
+## The Challenge of C/R
 
-## Call Proxification
-To address this, CRIU uses a technique called **call proxification**. During restoration, CRIU redirects calls from the original (dumped) vDSO to the version provided by the current kernel. This process involves several steps:
+The vDSO is uniquely challenging for checkpoint/restore because its contents and memory layout are determined by the **host kernel**.
+1.  **Address Dependencies**: Applications frequently cache the addresses of vDSO functions. These must remain identical after restoration.
+2.  **ABI and Kernel Compatibility**: If a process is migrated to a different kernel version, the vDSO code from the original host might be incompatible with the new host's internal kernel-to-userspace data interfaces.
 
-1. CRIU analyzes the vDSO provided by the restoration host's kernel, parsing its symbols, sections, and entry points.
-2. During the restoration of the dumped vDSO memory area, CRIU patches the function entry points with redirection instructions (e.g., a `jmp` instruction on x86) that point to the corresponding functions in the new vDSO.
+## CRIU's Restoration Strategy
 
-This allows the application to continue using its existing vDSO entry points while actually executing the code compatible with the current kernel. If CRIU detects that the dump and restoration kernels are identical, proxification is skipped.
+CRIU uses two primary strategies to handle vDSO migration, automatically selecting the best one based on kernel capabilities detected during the [Kerndat](kerndat.md) phase.
 
-## Proxification Challenges
-- In very rare cases, a process might be checkpointed exactly while executing the first few bytes of a vDSO function. If these bytes are the ones being patched for proxification, it could lead to inconsistent state.
-- If the instruction pointer is immediately after these patched entry bytes, the function may attempt to use stale data from the `vvar` page, although this is typically handled by the kernel.
+### 1. The Proxy (Patching) Method
+This is the fallback approach used when the kernel does not support mapping the vDSO at an arbitrary address:
+*   **Checkpoint**: CRIU captures the original vDSO contents and parses its ELF symbol table to identify the offsets of essential functions (e.g., `__vdso_gettimeofday`, `__vdso_time`).
+*   **Restoration**:
+    1.  CRIU maps the original vDSO binary at its original virtual address.
+    2.  It identifies the **new vDSO** provided by the current host kernel.
+    3.  For each essential symbol, CRIU locates the corresponding function in the new vDSO.
+    4.  CRIU **patches** the code in the original vDSO with a "trampoline" (a small jump instruction) that redirects execution to the equivalent function in the new host's vDSO.
+*   **Result**: The application continues to call the memory addresses it originally linked against, but it transparently executes the code optimized for the current host kernel.
+
+### 2. The `arch_prctl` Method (Modern)
+On modern kernels (v4.18+ for x86_64), CRIU uses a significantly more efficient mechanism:
+*   CRIU uses the `arch_prctl()` system call with the `ARCH_MAP_VDSO_64` (or `ARCH_MAP_VDSO_32`) flag to instruct the kernel to map its **current, native** vDSO directly at the application's original virtual address.
+*   **Advantage**: This eliminates the complexity of ELF patching and ensures the application always uses the most optimal, native code path for the host kernel.
+
+## VVAR Handling
+
+The **VVAR** area contains the raw data (such as the current clock value) that the vDSO code reads. 
+*   VVAR is a data-only region and is not executable.
+*   CRIU identifies the VVAR mapping during the dump and ensures it is correctly re-established on the destination host, usually adjacent to the restored vDSO.
+*   When using the `arch_prctl` method, the kernel automatically manages the associated VVAR mapping when the vDSO is moved.
+
+## See also
+* [Checkpoint/Restore Architecture](checkpointrestore.md)
+* [Kerndat Feature Detection](kerndat.md)
+* [Restorer Context](restorer-context.md)
