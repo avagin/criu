@@ -1,26 +1,48 @@
-# Technologies
+# Foundational Technologies
 
-This page lists technologies and tools that were developed during the implementation of CRIU and may be useful on their own. While these tools are currently maintained within the CRIU repository, they may eventually be split into standalone projects that CRIU uses as libraries or sub-tools.
+CRIU relies on a wide array of advanced Linux kernel features and userspace libraries to perform transparent checkpoint and restore.
 
-## Parasite Code Injection
-This functionality was split into a sub-project called [Compel](compel.md). Compel is a utility for executing code within the address space of a foreign process. It is based on the same technology CRIU uses to retrieve process-private data during a dump. While Compel is not actively maintained and may be outdated, it remains functional.
+## Kernel Technologies
 
-*See also: [Code blobs](code-blobs.md)*
+### Core C/R Capabilities
+*   **kcmp()**: A system call used to identify shared resources (files, memory mappings, namespaces) between processes by performing internal kernel pointer comparisons.
+*   **clone3()**: A modern process creation interface that allows CRIU to atomically request specific PIDs and TIDs, even across nested PID namespaces.
+*   **prctl() Extensions**:
+    *   `PR_SET_MM`: Allows the restorer to reconstruct a process's original memory layout (code, data, heap, etc.).
+    *   `PR_GET_TID_ADDRESS`: Captures the address used for `set_tid_address`.
+    *   `PR_SET_THP_DISABLE`: Preserves the status of Transparent Huge Pages.
+*   **ptrace() Extensions**:
+    *   `PTRACE_SEIZE` & `PTRACE_INTERRUPT`: Enables non-disruptive task stopping.
+    *   `PTRACE_GETSIGMASK` & `PTRACE_SETSIGMASK`: Captures and restores thread signal masks.
+    *   `PTRACE_PEEKSIGINFO`: Reads pending signal queues without delivering them.
+    *   `PTRACE_GET_RSEQ_CONF`: Retrieves Restartable Sequences (rseq) registration details.
 
-## Managing Protocol Buffer Objects
-CRIU includes [a Python module](https://github.com/xemul/criu/blob/master/pycriu/images/pb2dict.py) for converting Google Protocol Buffers (protobuf) to Python objects and vice-versa.
+### Resource Introspection
+*   **/proc Filesystem**:
+    *   `/proc/$pid/map_files`: Provides stable handles to files mapped into a process's memory.
+    *   `/proc/$pid/fdinfo`: Exposes internal state for file descriptors, including positions, flags, and socket handles.
+    *   `ioctl(PAGEMAP_SCAN)`: Efficiently identifies dirty and present pages in large address spaces.
+*   **sock_diag**: A netlink-based interface used to retrieve detailed protocol-level state for sockets (TCP, UDP, Unix, etc.).
 
-Unlike other conversion projects, our `pb2dict` correctly handles optional fields that contain empty repeated fields. it also supports custom field options to mark fields that require special handling. For example, you can include [opts.proto](https://github.com/xemul/criu/blob/master/protobuf/opts.proto) in your proto-file and use `criu.*` options:
+### Advanced Subsystems
+*   **TCP Repair Mode**: A specialized socket state that allows CRIU to capture and restore the full internal state of TCP connections without sending network packets.
+*   **Userfaultfd**: Enables **Lazy Migration** by allowing CRIU to handle page faults in userspace and load memory pages on-demand.
+*   **Mount V2 APIs**: Uses `fsopen()`, `fsmount()`, `open_tree()`, and `move_mount()` to robustly reconstruct complex filesystem hierarchies and propagation groups.
+*   **Netfilter (nftables/iptables)**: Used to "lock" network connections during migration to prevent state changes.
 
-`required uint64 blk_sigset = 5 [(criu).hex = true];`
+## Userspace Technologies
 
-Refer to the `.proto` files in the `protobuf/` directory for more examples. We also use a unique number for all custom protobuf options to avoid collisions with other projects.
+### Compel
+[Compel](../compel.md) is a dedicated sub-project that provides the infrastructure for **Parasite Injection**. It allows CRIU to execute self-contained code (PIE) within the context of a target process to capture internal state.
 
-*See also: [Images](images.md)*
+### Google Protocol Buffers (protobuf)
+CRIU uses [Protocol Buffers](https://developers.google.com/protocol-buffers/) as the standard serialization format for all image files. This ensures a structured, extensible, and cross-version compatible way to store process state.
 
-## Sharing of Kernel Objects
-Many kernel objects can be shared between tasks. For example, if a task calls `open()` and then `fork()`, the resulting file object is shared between the parent and child. Similarly, `dup()` creates two file descriptors referencing the same shared file object. In contrast, two separate `open()` calls for the same path result in two distinct file objects.
+### ZDTM (Zero-Downtime Migration)
+[ZDTM](zdtm-test-suite.md) is CRIU's comprehensive test suite. It includes hundreds of tests that verify the functional correctness of C/R across various architectures and kernel versions.
 
-Since the kernel lacks an API to directly reveal the mapping of tasks to shared objects, CRIU uses the `kcmp()` system call. This API compares two resources (e.g., file descriptors) and reports whether they refer to the same kernel object. CRIU's [KCMPIDS](https://github.com/xemul/criu/blob/master/kcmp-ids.c) engine leverages this API to build [kcmp trees](kcmp-trees.md) and generate unique IDs for shared objects.
-
-*See also: [Kcmp trees](kcmp-trees.md)*
+## See also
+* [Checkpoint/Restore Architecture](checkpointrestore.md)
+* [Memory Changes Tracking](memory-changes-tracking.md)
+* [Mount V2](mount-v2.md)
+* [PID Restoration](pid-restore.md)
