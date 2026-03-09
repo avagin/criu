@@ -91,11 +91,16 @@
 	})
 
 static struct task_entries *task_entries_local;
-static futex_t thread_inprogress;
+
+static atomic_t thread_inprogress;
+static void *rst_mem;
+static long rst_mem_size;
+
 static pid_t *helpers;
 static int n_helpers;
 static pid_t *zombies;
 static int n_zombies;
+
 static enum faults fi_strategy;
 bool fault_injected(enum faults f)
 {
@@ -739,6 +744,15 @@ static int recv_cg_set_restore_ack(int sk)
 	return 0;
 }
 
+static void thread_fini(void)
+{
+	if (!atomic_dec_and_test(&thread_inprogress))
+		return;
+
+	std_log_set_fd(-1);
+	sys_munmap(rst_mem, rst_mem_size);
+}
+
 /*
  * Threads restoration via sigreturn. Note it's locked
  * routine and calls for unlock at the end.
@@ -821,7 +835,7 @@ __visible long __export_restore_thread(struct thread_restore_args *args)
 
 	restore_finish_stage(task_entries_local, CR_STATE_RESTORE_CREDS);
 
-	futex_dec_and_wake(&thread_inprogress);
+	thread_fini();
 
 	new_sp = (long)rt_sigframe + RT_SIGFRAME_OFFSET(rt_sigframe);
 	rst_sigreturn(new_sp, rt_sigframe);
@@ -2291,7 +2305,9 @@ __visible long __export_restore_task(struct task_restore_args *args)
 	ret = ret || restore_pdeath_sig(args->t);
 	ret = ret || restore_child_subreaper(args->child_subreaper);
 
-	futex_set_and_wake(&thread_inprogress, args->nr_threads);
+	atomic_set(&thread_inprogress, args->nr_threads);
+	rst_mem = args->rst_mem;
+	rst_mem_size = args->rst_mem_size;
 
 	/*
 	 * Shadow stack of the leader can be locked only after all other
@@ -2302,15 +2318,17 @@ __visible long __export_restore_task(struct task_restore_args *args)
 		goto core_restore_end;
 
 	restore_finish_stage(task_entries_local, CR_STATE_RESTORE_CREDS);
-
+	/*
+	 * From this point forward, cross-process synchronization is strictly
+	 * prohibited. compel_stop_tasks_on_syscall enumerates all restored
+	 * tasks/threads sequentially, allowing each to execute one syscall
+	 * per iteration. Any attempt to communicate with other tasks or
+	 * threads may trigger a deadlock.
+	 */
 	if (ret)
 		BUG();
 
-	/* Wait until children stop to use args->task_entries */
-	futex_wait_while_gt(&thread_inprogress, 1);
-
 	sys_close(args->proc_fd);
-	std_log_set_fd(-1);
 
 	/*
 	 * The code that prepared the itimers makes sure that the
@@ -2328,7 +2346,7 @@ __visible long __export_restore_task(struct task_restore_args *args)
 
 	restore_posix_timers(args);
 
-	sys_munmap(args->rst_mem, args->rst_mem_size);
+	thread_fini();
 
 	/*
 	 * Sigframe stack.
