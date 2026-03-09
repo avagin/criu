@@ -1779,7 +1779,6 @@ int compel_stop_on_syscall(int tasks, const int sys_nr, const int sys_nr_compat)
 	int status, ret;
 	pid_t pid;
 
-	/* Stop all threads on the enter point in sys_rt_sigreturn */
 	while (tasks) {
 		pid = wait4(-1, &status, __WALL, NULL);
 		if (pid == -1) {
@@ -1860,14 +1859,14 @@ enum {
 };
 
 /*
- * Trap multiple tasks on the exit from the specified syscall.
+ * Trap tasks on the exit from the specified syscall.
  *
  * wait4() with specific PIDs is used instead of wait4(-1, ...) to avoid
  * the performance overhead of the kernel iterating over many tasks to
  * find one that has changed state.
  *
- * nr_tasks - number of processes, which should be trapped
- * pids - an array of process IDs
+ * nr_tasks - number of tasks, which should be trapped
+ * pids - an array of tasks IDs
  * sys_nr - the required syscall number
  * sys_nr_compat - the required compatible syscall number
  */
@@ -1883,7 +1882,6 @@ int compel_stop_tasks_on_syscall(int nr_tasks, pid_t *pids, const int sys_nr, co
 	if (!done)
 		return -1;
 
-	/* Stop all threads on the enter point in sys_rt_sigreturn */
 	while (cont) {
 		cont = 0;
 
