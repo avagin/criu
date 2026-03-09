@@ -1705,9 +1705,10 @@ int compel_stop_on_syscall(pid_t pid, const int sys_nr, const int sys_nr_compat)
 }
 
 enum {
-	SYS_TRAP_UNSPEC = 0, /* the target syscall isn't found yet */
-	SYS_TRAP_ENTER  = 1, /* enter to the target syscall */
-	SYS_TRAP_EXIT   = 2, /* exit from the target syscall */
+	SYS_TRAP_EXIT       = 0, /* exit from a syscall (initial state) */
+	SYS_TRAP_ENTER      = 1, /* enter to a syscall */
+	SYS_TRAP_TGT_ENTER  = 2, /* enter to the target syscall */
+	SYS_TRAP_TGT_EXIT   = 3, /* exit from the target syscall */
 };
 
 /*
@@ -1738,7 +1739,7 @@ int compel_stop_tasks_on_syscall(int nr_tasks, pid_t *pids, const int sys_nr, co
 		cont = 0;
 
 		for (i = 0; i < nr_tasks; i++) {
-			if (done[i] == SYS_TRAP_EXIT)
+			if (done[i] == SYS_TRAP_TGT_EXIT)
 				continue;
 			cont = 1;
 			pid = pids[i];
@@ -1759,9 +1760,13 @@ int compel_stop_tasks_on_syscall(int nr_tasks, pid_t *pids, const int sys_nr, co
 				goto err;
 			}
 
-			if (done[i] == SYS_TRAP_ENTER) {
-				done[i] = SYS_TRAP_EXIT;
-				continue;
+			switch (done[i]) {
+				case SYS_TRAP_ENTER:
+					done[i] = SYS_TRAP_EXIT;
+					goto goon;
+				case SYS_TRAP_TGT_ENTER:
+					done[i] = SYS_TRAP_TGT_EXIT;
+					continue;
 			}
 
 			ret = ptrace_get_regs(pid, &regs);
@@ -1771,8 +1776,10 @@ int compel_stop_tasks_on_syscall(int nr_tasks, pid_t *pids, const int sys_nr, co
 			}
 
 			if (is_required_syscall(&regs, pid, sys_nr, sys_nr_compat))
+				done[i] = SYS_TRAP_TGT_ENTER;
+			else
 				done[i] = SYS_TRAP_ENTER;
-
+		goon:
 			/* Let this task run while updating the others. */
 			ret = ptrace(PTRACE_SYSCALL, pid, NULL, NULL);
 			if (ret) {
