@@ -825,7 +825,7 @@ static int restore_one_zombie(CoreEntry *core)
 		exit_code = 0;
 	}
 
-	exit((exit_code >> 8) & 0x7f);
+	exit((exit_code >> 8) & 0xff);
 
 	/* never reached */
 	BUG_ON(1);
