@@ -636,7 +636,7 @@ static int restore_one_alive_task(int pid, CoreEntry *core)
 
 	args_len = round_up(sizeof(*ta) + sizeof(struct thread_restore_args) * current->nr_threads, page_size());
 	ta = mmap(NULL, args_len, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, 0, 0);
-	if (!ta)
+	if (ta == MAP_FAILED)
 		return -1;
 
 	memzero(ta, args_len);
