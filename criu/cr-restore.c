@@ -3493,9 +3493,6 @@ static int sigreturn_restore(pid_t pid, struct task_restore_args *task_args, uns
 			strncpy(thread_args[i].comm, core->tc->comm, TASK_COMM_LEN - 1);
 		thread_args[i].comm[TASK_COMM_LEN - 1] = 0;
 
-		if (thread_args[i].pid != pid)
-			core_entry__free_unpacked(tcore, NULL);
-
 		pr_info("Thread %4d stack %8p rt_sigframe %8p\n", i, mz[i].stack, mz[i].rt_sigframe);
 	}
 
@@ -3525,6 +3522,8 @@ static int sigreturn_restore(pid_t pid, struct task_restore_args *task_args, uns
 			core_entry__free_unpacked(current->core[i], NULL);
 	}
 	xfree(current->core);
+	xfree(siginfo_priv_nr);
+	siginfo_priv_nr = NULL;
 
 	/*
 	 * Now prepare run-time data for threads restore.
