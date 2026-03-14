@@ -516,12 +516,12 @@ static int open_core(int pid, CoreEntry **pcore)
 
 static int open_cores(int pid, CoreEntry *leader_core)
 {
-	int i, tpid;
+	int i, j, tpid;
 	CoreEntry **cores = NULL;
 
-	cores = xmalloc(sizeof(*cores) * current->nr_threads);
+	cores = xzalloc(sizeof(*cores) * current->nr_threads);
 	if (!cores)
-		goto err;
+		return -1;
 
 	for (i = 0; i < current->nr_threads; i++) {
 		tpid = current->threads[i].ns[0].virt;
@@ -570,6 +570,10 @@ static int open_cores(int pid, CoreEntry *leader_core)
 
 	return 0;
 err:
+	for (j = 0; j < i; j++) {
+		if (cores[j] && cores[j] != leader_core)
+			core_entry__free_unpacked(cores[j], NULL);
+	}
 	xfree(cores);
 	return -1;
 }
@@ -3521,6 +3525,10 @@ static int sigreturn_restore(pid_t pid, struct task_restore_args *task_args, uns
 
 	/* No longer need it */
 	core_entry__free_unpacked(core, NULL);
+	for (i = 0; i < current->nr_threads; i++) {
+		if (current->core[i] && current->core[i] != core)
+			core_entry__free_unpacked(current->core[i], NULL);
+	}
 	xfree(current->core);
 
 	/*
