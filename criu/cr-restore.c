@@ -580,16 +580,21 @@ err:
 
 static int prepare_oom_score_adj(int value)
 {
-	int fd, ret = 0;
-	char buf[11];
+	int fd, len, ret = 0;
+	char buf[32];
 
 	fd = open_proc_rw(PROC_SELF, "oom_score_adj");
 	if (fd < 0)
 		return -1;
 
-	snprintf(buf, 11, "%d", value);
+	len = snprintf(buf, sizeof(buf), "%d", value);
+	if (len >= sizeof(buf)) {
+		pr_err("oom_score_adj value %d is too long\n", value);
+		close(fd);
+		return -1;
+	}
 
-	if (write(fd, buf, 11) < 0) {
+	if (write(fd, buf, len) < 0) {
 		pr_perror("Write %s to /proc/self/oom_score_adj failed", buf);
 		ret = -1;
 	}
