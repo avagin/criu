@@ -989,16 +989,21 @@ err:
 
 int prepare_loginuid(unsigned int value)
 {
-	int fd, ret = 0;
-	char buf[11]; /* 4294967295 is maximum for u32 */
+	int fd, len, ret = 0;
+	char buf[11];  /* 4294967295 is maximum for u32 */
 
 	fd = open_proc_rw(PROC_SELF, "loginuid");
 	if (fd < 0)
 		return -1;
 
-	snprintf(buf, 11, "%u", value);
+	len = snprintf(buf, sizeof(buf), "%u", value);
+	if (len >= sizeof(buf)) {
+		pr_err("loginuid value %u is too long\n", value);
+		close(fd);
+		return -1;
+	}
 
-	if (write(fd, buf, 11) < 0) {
+	if (write(fd, buf, len) < 0) {
 		pr_warn("Write %s to /proc/self/loginuid failed: %s\n", buf, strerror(errno));
 		ret = -1;
 	}
