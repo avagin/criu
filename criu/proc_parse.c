@@ -2570,6 +2570,12 @@ int parse_threads(int pid, struct pid **_t, int *_n)
 			}
 			t = tmp;
 			t[nr - 1].ns[0].virt = -1;
+		} else {
+			if (nr > *_n) {
+				pr_err("Too many threads for %d (%d > %d)\n", pid, nr, *_n);
+				closedir(dir);
+				return -1;
+			}
 		}
 		t[nr - 1].real = atoi(de->d_name);
 		t[nr - 1].state = TASK_THREAD;
