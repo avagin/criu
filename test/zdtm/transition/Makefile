@@ -33,6 +33,7 @@ TST_FILE	=	\
 		unix_sock       \
 		fifo_dyn        \
 		fifo_loop       \
+		soft-dirty-merged-vmas \
 
 
 TST	= $(TST_NOFILE) $(TST_FILE)
