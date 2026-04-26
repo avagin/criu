@@ -3,6 +3,7 @@
 #include <sys/mman.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <string.h>
 #include <sys/syscall.h>
 #include <sys/prctl.h>
 
@@ -27,6 +28,7 @@
 #include "bitmap.h"
 #include "sk-packet.h"
 #include "files-reg.h"
+#include "pagemap.h"
 #include "pagemap-cache.h"
 #include "fault-injection.h"
 #include "prctl.h"
@@ -1519,6 +1521,12 @@ static int prepare_vma_ios(struct pstree_item *t, struct task_restore_args *ta)
 		return -1;
 
 	ta->vma_ios_fd = img_raw_fd(pages);
+	if (ta->vma_ios_fd >= 0) {
+		if (probe_pages_o_direct(ta->vma_ios_fd) < 0) {
+			close_image(pages);
+			return -1;
+		}
+	}
 	return pagemap_render_iovec(&rsti(t)->vma_io, ta);
 }
 
