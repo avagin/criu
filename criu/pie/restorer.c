@@ -1645,6 +1645,71 @@ static ssize_t preadv_limited(int fd, struct iovec *iovs, int nr, off_t offs, si
 	return ret;
 }
 
+static int restore_vma_sync(struct task_restore_args *args)
+{
+	struct restore_vma_io *rio = args->vma_ios;
+	int i;
+
+	for (i = 0; i < args->vma_ios_n; i++) {
+		struct iovec *iovs = rio->iovs;
+		int nr = rio->nr_iovs;
+		ssize_t r;
+
+		while (nr) {
+			pr_debug("Preadv %lx:%d... (%d iovs)\n", (unsigned long)iovs->iov_base, (int)iovs->iov_len, nr);
+			/*
+			 * If we're requested to punch holes in the file after reading we do
+			 * it to save memory. Limit the reads then to an arbitrary block size.
+			 */
+			r = preadv_limited(args->vma_ios_fd, iovs, nr, rio->off,
+					   args->auto_dedup ? AUTO_DEDUP_OVERHEAD_BYTES : 0);
+			if (r < 0) {
+				pr_err("Can't read pages data (%d)\n", (int)r);
+				return -1;
+			}
+
+			if (r == 0) {
+				pr_err("Unexpected EOF reading pages data at offset %ld (%d iovs remaining)\n",
+				       (long)rio->off, nr);
+				return -1;
+			}
+
+			pr_debug("`- returned %ld\n", (long)r);
+			/* If the file is open for writing, then it means we should punch holes
+			 * in it. */
+			if (r > 0 && args->auto_dedup) {
+				int fr = sys_fallocate(args->vma_ios_fd, FALLOC_FL_KEEP_SIZE | FALLOC_FL_PUNCH_HOLE,
+						       rio->off, r);
+				if (fr < 0) {
+					pr_debug("Failed to punch holes with fallocate: %d\n", fr);
+				}
+			}
+			rio->off += r;
+			/* Advance the iovecs */
+			do {
+				if (iovs->iov_len <= r) {
+					pr_debug("   `- skip pagemap\n");
+					r -= iovs->iov_len;
+					iovs++;
+					nr--;
+					continue;
+				}
+
+				iovs->iov_base += r;
+				iovs->iov_len -= r;
+				break;
+			} while (nr > 0);
+		}
+
+		rio = (struct restore_vma_io *)((char *)rio + RIO_SIZE(rio->nr_iovs));
+	}
+
+	sys_close(args->vma_ios_fd);
+	args->vma_ios_fd = -1;
+
+	return 0;
+}
+
 /*
  * In the worst case buf size should be:
  *   sizeof(struct inotify_event) * 2 + PATH_MAX
@@ -1766,7 +1831,6 @@ __visible long __export_restore_task(struct task_restore_args *args)
 	int i;
 	VmaEntry *vma_entry;
 	unsigned long va;
-	struct restore_vma_io *rio;
 	struct rt_sigframe *rt_sigframe;
 	struct prctl_mm_map prctl_map;
 	unsigned long new_sp;
@@ -1934,64 +1998,10 @@ __visible long __export_restore_task(struct task_restore_args *args)
 	/*
 	 * Now read the contents (if any)
 	 */
-
-	rio = args->vma_ios;
-	for (i = 0; i < args->vma_ios_n; i++) {
-		struct iovec *iovs = rio->iovs;
-		int nr = rio->nr_iovs;
-		ssize_t r;
-
-		while (nr) {
-			pr_debug("Preadv %lx:%d... (%d iovs)\n", (unsigned long)iovs->iov_base, (int)iovs->iov_len, nr);
-			/*
-			 * If we're requested to punch holes in the file after reading we do
-			 * it to save memory. Limit the reads then to an arbitrary block size.
-			 */
-			r = preadv_limited(args->vma_ios_fd, iovs, nr, rio->off,
-					   args->auto_dedup ? AUTO_DEDUP_OVERHEAD_BYTES : 0);
-			if (r < 0) {
-				pr_err("Can't read pages data (%d)\n", (int)r);
-				goto core_restore_end;
-			}
-
-			if (r == 0) {
-				pr_err("Unexpected EOF reading pages data at offset %ld (%d iovs remaining)\n",
-				       (long)rio->off, nr);
-				goto core_restore_end;
-			}
-
-			pr_debug("`- returned %ld\n", (long)r);
-			/* If the file is open for writing, then it means we should punch holes
-			 * in it. */
-			if (r > 0 && args->auto_dedup) {
-				int fr = sys_fallocate(args->vma_ios_fd, FALLOC_FL_KEEP_SIZE | FALLOC_FL_PUNCH_HOLE,
-						       rio->off, r);
-				if (fr < 0) {
-					pr_debug("Failed to punch holes with fallocate: %d\n", fr);
-				}
-			}
-			rio->off += r;
-			/* Advance the iovecs */
-			do {
-				if (iovs->iov_len <= r) {
-					pr_debug("   `- skip pagemap\n");
-					r -= iovs->iov_len;
-					iovs++;
-					nr--;
-					continue;
-				}
-
-				iovs->iov_base += r;
-				iovs->iov_len -= r;
-				break;
-			} while (nr > 0);
-		}
-
-		rio = ((void *)rio) + RIO_SIZE(rio->nr_iovs);
+	if (args->vma_ios_n > 0 && args->vma_ios_fd != -1) {
+		if (restore_vma_sync(args) < 0)
+			goto core_restore_end;
 	}
-
-	if (args->vma_ios_fd != -1)
-		sys_close(args->vma_ios_fd);
 
 	/*
 	 * Proxify vDSO.
