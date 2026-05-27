@@ -94,6 +94,9 @@
 		__ret;                                                          \
 	})
 
+/* Native AIO restore in-flight window size (used by restore_vma_aio path). */
+#define AIO_BATCH 128
+
 static struct task_entries *task_entries_local;
 
 static atomic_t thread_inprogress;
@@ -1711,6 +1714,274 @@ static int restore_vma_sync(struct task_restore_args *args)
 }
 
 /*
+ * Advance restore_vma_io by 'res' bytes consumed. Updates rio in place.
+ * Returns the new (iov_ptr, nr_iovs) for resubmission, or 0 if fully done.
+ * Used when AIO returns a short read (kernel MAX_RW_COUNT = 0x7FFFF000 limit).
+ */
+static void advance_vma_io_retry(struct restore_vma_io *rio, ssize_t res,
+				 struct iovec **iov_out, unsigned int *nr_out)
+{
+	size_t remaining;
+	unsigned int j = 0;
+
+	/*
+	 * AIO fd is O_DIRECT (or buffered fallback that tolerates alignment).
+	 * Mask to PAGE_SIZE so resubmits stay alignment-legal.
+	 */
+	res &= ~(PAGE_SIZE - 1);
+	if (res == 0) {
+		*iov_out = NULL;
+		*nr_out = 0;
+		return;
+	}
+
+	remaining = (size_t)res;
+	rio->off += (off_t)res;
+
+	while (j < (unsigned int)rio->nr_iovs && remaining > 0) {
+		size_t len = (size_t)rio->iovs[j].iov_len;
+		if (len <= remaining) {
+			remaining -= len;
+			rio->iovs[j].iov_len = 0;
+			j++;
+		} else {
+			rio->iovs[j].iov_base = (char *)rio->iovs[j].iov_base + remaining;
+			rio->iovs[j].iov_len = len - remaining;
+			remaining = 0;
+			break;
+		}
+	}
+	while (j < (unsigned int)rio->nr_iovs && rio->iovs[j].iov_len == 0)
+		j++;
+	if (j == (unsigned int)rio->nr_iovs) {
+		*iov_out = NULL;
+		*nr_out = 0;
+	} else {
+		*iov_out = &rio->iovs[j];
+		*nr_out = (unsigned int)rio->nr_iovs - j;
+	}
+}
+
+/*
+ * Handle one io_getevents() completion.  Returns 0 if the event was fully
+ * consumed (caller bumps the completed counter), 1 if a short read was
+ * masked and the iocb resubmitted, or -1 on unrecoverable error.
+ */
+static int process_aio_event(struct task_restore_args *args, aio_context_t aio_ctx,
+			     struct io_event *ev, struct iocb *iocbs,
+			     struct restore_vma_io **rio_ptrs)
+{
+	ssize_t res = ev->res;
+	int fd = args->vma_ios_fd;
+	struct iocb *cb;
+	unsigned int idx;
+	struct restore_vma_io *r;
+	struct iovec *iov_next;
+	unsigned int nr_next;
+	long ret2;
+
+	if (res < 0) {
+		pr_err("AIO read failed: %lld\n", ev->res);
+		return -1;
+	}
+	if (res == 0) {
+		pr_err("AIO zero read (expected %llu)\n", ev->data);
+		return -1;
+	}
+
+	cb = (struct iocb *)(unsigned long)ev->obj;
+
+	/*
+	 * Short read (e.g. MAX_RW_COUNT 0x7FFFF000): mask to page-aligned
+	 * so retry submit and the auto-dedup punch agree on the consumed
+	 * range. A sub-page residual is unrecoverable on O_DIRECT.
+	 */
+	if ((__u64)res != ev->data) {
+		res &= ~(PAGE_SIZE - 1);
+		if (res == 0) {
+			pr_err("AIO sub-page short read: %lld of %llu\n", ev->res, ev->data);
+			return -1;
+		}
+	}
+
+	if (args->auto_dedup) {
+		long fr = sys_fallocate(fd, FALLOC_FL_KEEP_SIZE | FALLOC_FL_PUNCH_HOLE,
+					(off_t)cb->aio_offset, (off_t)res);
+		if (fr < 0)
+			pr_debug("Failed to punch holes with fallocate: %ld\n", fr);
+	}
+
+	if ((__u64)res == ev->data)
+		return 0;
+
+	idx = cb - iocbs;
+	r = rio_ptrs[idx];
+	advance_vma_io_retry(r, res, &iov_next, &nr_next);
+	if (!iov_next || nr_next == 0) {
+		pr_err("AIO retry advance produced no work after %zd bytes\n", res);
+		return -1;
+	}
+	cb->aio_buf = (unsigned long)iov_next;
+	cb->aio_nbytes = nr_next;
+	cb->aio_offset = r->off;
+	cb->aio_data -= (__u64)res;
+	ret2 = sys_io_submit(aio_ctx, 1, &cb);
+	if (ret2 != 1) {
+		pr_err("AIO retry submit failed: %ld\n", ret2);
+		return -1;
+	}
+	return 1;
+}
+
+/*
+ * Submit pending iocbs in AIO_BATCH-sized chunks until the in-flight
+ * window is full or all iocbs are submitted. Returns 0 on success, -1
+ * on submit failure. Bumps *submitted with the number of new iocbs in
+ * flight.
+ */
+static int submit_aio_batch(aio_context_t aio_ctx, struct iocb **iocbps, unsigned int n,
+			    unsigned int *submitted, unsigned int completed)
+{
+	while (*submitted < n && (*submitted - completed) < AIO_BATCH) {
+		unsigned int batch = n - *submitted;
+		long aio_ret;
+
+		if (batch > AIO_BATCH - (*submitted - completed))
+			batch = AIO_BATCH - (*submitted - completed);
+		aio_ret = sys_io_submit(aio_ctx, batch, &iocbps[*submitted]);
+		if (aio_ret <= 0) {
+			pr_err("io_submit failed: %ld (submitted %u/%u)\n",
+			       aio_ret, *submitted, n);
+			return -1;
+		}
+		*submitted += aio_ret;
+	}
+	return 0;
+}
+
+/*
+ * Process a batch of io_getevents() completions. Bumps *completed for
+ * events fully consumed; short reads are masked + resubmitted by
+ * process_aio_event() without bumping. Returns 0 on success, -1 on any
+ * unrecoverable event error.
+ */
+static int reap_aio_events(struct task_restore_args *args, aio_context_t aio_ctx,
+			   struct io_event *events, long nr,
+			   struct iocb *iocbs, struct restore_vma_io **rio_ptrs,
+			   unsigned int *completed)
+{
+	long k;
+
+	for (k = 0; k < nr; k++) {
+		int rc = process_aio_event(args, aio_ctx, &events[k], iocbs, rio_ptrs);
+
+		if (rc < 0)
+			return -1;
+		if (rc == 0)
+			(*completed)++;
+	}
+	return 0;
+}
+
+/*
+ * Restore private VMA page contents via Linux native AIO.
+ *
+ * Submits io_submit() requests against the O_DIRECT-prepared pages image
+ * fd in a bounded AIO_BATCH window. Handles MAX_RW_COUNT (0x7FFFF000)
+ * short reads by masking to page alignment and resubmitting. Closes
+ * args->vma_ios_fd on exit.
+ */
+static int restore_vma_aio(struct task_restore_args *args)
+{
+	unsigned int n = args->vma_ios_n;
+	int fd = args->vma_ios_fd;
+	aio_context_t aio_ctx = 0;
+	long aio_ret;
+	struct iocb *iocbs;
+	struct iocb **iocbps;
+	struct restore_vma_io **rio_ptrs;
+	struct restore_vma_io *rio;
+	struct io_event *events;
+	unsigned long alloc_sz;
+	unsigned int submitted = 0, completed = 0;
+	unsigned int i;
+	int ret = -1;
+
+	aio_ret = sys_io_setup(AIO_BATCH, &aio_ctx);
+	if (aio_ret < 0) {
+		pr_err("io_setup(%d) failed: %ld\n", AIO_BATCH, aio_ret);
+		return -1;
+	}
+
+	alloc_sz = n * sizeof(struct iocb) + n * sizeof(struct iocb *) +
+		   n * sizeof(struct restore_vma_io *) +
+		   AIO_BATCH * sizeof(struct io_event);
+	iocbs = (void *)sys_mmap(NULL, alloc_sz, PROT_READ | PROT_WRITE,
+				 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (IS_ERR(iocbs)) {
+		pr_err("Can't mmap AIO buffers: %ld\n", PTR_ERR(iocbs));
+		sys_io_destroy(aio_ctx);
+		return -1;
+	}
+	iocbps = (struct iocb **)((char *)iocbs + n * sizeof(struct iocb));
+	rio_ptrs = (struct restore_vma_io **)((char *)iocbps + n * sizeof(struct iocb *));
+	events = (struct io_event *)((char *)rio_ptrs + n * sizeof(struct restore_vma_io *));
+
+	/* Build all iocbs from vma_ios */
+	rio = args->vma_ios;
+	for (i = 0; i < n; i++) {
+		struct iocb *cb = &iocbs[i];
+		size_t expected = 0;
+		int j;
+
+		for (j = 0; j < rio->nr_iovs; j++)
+			expected += rio->iovs[j].iov_len;
+
+		memset(cb, 0, sizeof(*cb));
+		cb->aio_fildes = fd;
+		cb->aio_lio_opcode = IOCB_CMD_PREADV;
+		cb->aio_buf = (unsigned long)rio->iovs;
+		cb->aio_nbytes = rio->nr_iovs;
+		cb->aio_offset = rio->off;
+		/* io_getevents() returns this as event.data for short-read checks. */
+		cb->aio_data = expected;
+		iocbps[i] = cb;
+		rio_ptrs[i] = rio;
+
+		rio = (struct restore_vma_io *)((char *)rio + RIO_SIZE(rio->nr_iovs));
+	}
+
+	/* Submit and reap in batches */
+	while (submitted < n || completed < n) {
+		if (submit_aio_batch(aio_ctx, iocbps, n, &submitted, completed) < 0)
+			goto out;
+
+		if (completed >= n)
+			continue;
+
+		/*
+		 * min_nr=1 to block until at least one event;
+		 * nr=AIO_BATCH to reap all (incl. retries).
+		 */
+		aio_ret = sys_io_getevents(aio_ctx, 1, AIO_BATCH, events, NULL);
+		if (aio_ret <= 0) {
+			pr_err("io_getevents failed: %ld\n", aio_ret);
+			goto out;
+		}
+		if (reap_aio_events(args, aio_ctx, events, aio_ret, iocbs, rio_ptrs, &completed) < 0)
+			goto out;
+	}
+
+	ret = 0;
+out:
+	sys_io_destroy(aio_ctx);
+	sys_munmap(iocbs, alloc_sz);
+	sys_close(fd);
+	args->vma_ios_fd = -1;
+	return ret;
+}
+
+/*
  * In the worst case buf size should be:
  *   sizeof(struct inotify_event) * 2 + PATH_MAX
  * See round_event_name_len() in kernel.
@@ -1996,10 +2267,19 @@ __visible long __export_restore_task(struct task_restore_args *args)
 	}
 
 	/*
-	 * Now read the contents (if any)
+	 * Now read the contents (if any).
+	 * Use Native AIO (io_submit + O_DIRECT) for high-throughput page reads
+	 * if O_DIRECT is supported, otherwise fall back to synchronous preadv.
 	 */
 	if (args->vma_ios_n > 0 && args->vma_ios_fd != -1) {
-		if (restore_vma_sync(args) < 0)
+		int ret;
+
+		if (args->vma_ios_o_direct)
+			ret = restore_vma_aio(args);
+		else
+			ret = restore_vma_sync(args);
+
+		if (ret < 0)
 			goto core_restore_end;
 	}
 

@@ -1522,10 +1522,12 @@ static int prepare_vma_ios(struct pstree_item *t, struct task_restore_args *ta)
 
 	ta->vma_ios_fd = img_raw_fd(pages);
 	if (ta->vma_ios_fd >= 0) {
-		if (probe_pages_o_direct(ta->vma_ios_fd) < 0) {
+		int ret = probe_pages_o_direct(ta->vma_ios_fd);
+		if (ret < 0) {
 			close_image(pages);
 			return -1;
 		}
+		ta->vma_ios_o_direct = (ret == 1);
 	}
 	return pagemap_render_iovec(&rsti(t)->vma_io, ta);
 }
