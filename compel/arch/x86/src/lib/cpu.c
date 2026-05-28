@@ -116,13 +116,22 @@ static int compel_fpuid(compel_cpuinfo_t *c)
 		return -1;
 	}
 
-	/*
-	 * Clear XSAVE features that are disabled in the normal CPUID.
-	 */
+	pr_err("DEBUG: initial xfeatures_mask: 0x%llx\n", (unsigned long long)c->xfeatures_mask);
+	pr_err("DEBUG: x86_capability[CPUID_1_ECX (4)]: 0x%x (AVX bit 28: %d)\n",
+	       c->x86_capability[4], (c->x86_capability[4] & (1 << 28)) != 0);
+	pr_err("DEBUG: compel_test_cpu_cap(AVX): %d\n", compel_test_cpu_cap(c, X86_FEATURE_AVX));
+	pr_err("DEBUG: compel_test_cpu_cap(FPU): %d\n", compel_test_cpu_cap(c, X86_FEATURE_FPU));
+
 	for (i = 0; i < ARRAY_SIZE(xsave_cpuid_features); i++) {
-		if (!compel_test_cpu_cap(c, xsave_cpuid_features[i]))
+		int supported = compel_test_cpu_cap(c, xsave_cpuid_features[i]);
+		if (i == 0 || i == 1 || i == 2 || i == 17) {
+			pr_err("DEBUG: feature %zu (%s): cap_supported=%d\n",
+			       i, xfeature_names[i], supported);
+		}
+		if (!supported)
 			c->xfeatures_mask &= ~(1 << i);
 	}
+	pr_err("DEBUG: filtered xfeatures_mask: 0x%llx\n", (unsigned long long)c->xfeatures_mask);
 
 	c->xfeatures_mask &= XFEATURE_MASK_USER;
 	c->xfeatures_mask &= ~XFEATURE_MASK_SUPERVISOR;
