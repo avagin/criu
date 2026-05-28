@@ -32,7 +32,13 @@ static inline void change_bit(long nr, volatile unsigned long *addr)
 	asm volatile(__ASM_SIZE(btc) " %1,%0" : ADDR : "Ir"(nr));
 }
 
-static inline bool test_bit(long nr, volatile const unsigned long *addr)
+static inline bool constant_test_bit(long nr, volatile const unsigned long *addr)
+{
+	return ((1UL << (nr & (BITS_PER_LONG - 1))) &
+		(addr[nr / BITS_PER_LONG])) != 0;
+}
+
+static inline bool variable_test_bit(long nr, volatile const unsigned long *addr)
 {
 	bool oldbit;
 
@@ -43,6 +49,11 @@ static inline bool test_bit(long nr, volatile const unsigned long *addr)
 
 	return oldbit;
 }
+
+#define test_bit(nr, addr) \
+	(__builtin_constant_p(nr) ? \
+	 constant_test_bit((nr), (addr)) : \
+	 variable_test_bit((nr), (addr)))
 
 static inline void clear_bit(long nr, volatile unsigned long *addr)
 {
