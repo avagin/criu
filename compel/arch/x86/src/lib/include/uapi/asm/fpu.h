@@ -110,7 +110,7 @@ enum xfeature {
 #define FIRST_EXTENDED_XFEATURE XFEATURE_YMM
 
 /* Supervisor features */
-#define XFEATURE_MASK_SUPERVISOR (XFEATURE_MASK_PT | XFEATURE_HDC)
+#define XFEATURE_MASK_SUPERVISOR (XFEATURE_MASK_PT | XFEATURE_MASK_HDC)
 
 /* All currently supported features */
 #define XFEATURE_MASK_USER                                                                                           \
