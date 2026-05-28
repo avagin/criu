@@ -81,8 +81,8 @@ int compel_test_cpu_cap(compel_cpuinfo_t *c, unsigned int feature)
 int compel_test_fpu_cap(compel_cpuinfo_t *c, unsigned int feature)
 {
 	if (feature == 2) {
-		pr_err("DEBUG: compel_test_fpu_cap(2): mask=0x%llx, result=%d\n",
-		       (unsigned long long)c->xfeatures_mask,
+		pr_err("DEBUG: compel_test_fpu_cap(2) c=%p: mask=0x%llx, result=%d\n",
+		       c, (unsigned long long)c->xfeatures_mask,
 		       (int)((c->xfeatures_mask & (1UL << feature)) != 0));
 	}
 	if (likely(feature < XFEATURE_MAX))
@@ -95,6 +95,8 @@ static int compel_fpuid(compel_cpuinfo_t *c)
 	unsigned int last_good_offset;
 	uint32_t eax, ebx, ecx, edx;
 	size_t i;
+
+	pr_err("DEBUG: compel_fpuid c=%p\n", c);
 
 	BUILD_BUG_ON(ARRAY_SIZE(xsave_cpuid_features) != ARRAY_SIZE(xfeature_names));
 
@@ -458,8 +460,8 @@ bool compel_fpu_has_feature(unsigned int feature)
 {
 	fetch_rt_cpuinfo();
 	if (feature == 2) {
-		pr_err("DEBUG: compel_fpu_has_feature(2): rt_info.mask=0x%llx\n",
-		       (unsigned long long)rt_info.xfeatures_mask);
+		pr_err("DEBUG: compel_fpu_has_feature(2) &rt_info=%p: rt_info.mask=0x%llx\n",
+		       &rt_info, (unsigned long long)rt_info.xfeatures_mask);
 	}
 	return compel_test_fpu_cap(&rt_info, feature);
 }
