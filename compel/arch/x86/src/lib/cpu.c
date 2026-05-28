@@ -40,13 +40,23 @@ static const char *const xfeature_names[] = {
 	"AVX-512 ZMM_Hi256",
 	"Processor Trace",
 	"Protection Keys User registers",
+	"PASID",
+	"CET User",
+	"CET Supervisor",
 	"Hardware Duty Cycling",
+	"User Interrupts",
+	"Last Branch Record",
+	"Hardware P-States",
+	"AMX Tile Config",
+	"AMX Tile Data",
 };
 
 static short xsave_cpuid_features[] = {
 	X86_FEATURE_FPU,      X86_FEATURE_XMM,	   X86_FEATURE_AVX,	X86_FEATURE_MPX,
 	X86_FEATURE_MPX,      X86_FEATURE_AVX512F, X86_FEATURE_AVX512F, X86_FEATURE_AVX512F,
-	X86_FEATURE_INTEL_PT, X86_FEATURE_PKU,	   X86_FEATURE_HDC,
+	X86_FEATURE_INTEL_PT, X86_FEATURE_PKU,	   -1,			-1,
+	-1,		      X86_FEATURE_HDC,     -1,			-1,
+	-1,		      X86_FEATURE_AMX_TILE, -1,
 };
 
 void compel_set_cpu_cap(compel_cpuinfo_t *c, unsigned int feature)

@@ -16,6 +16,7 @@ TST_NOFILE	:=				\
 		fpu01				\
 		fpu02				\
 		fpu03				\
+		amx_cfg00			\
 		arm-neon00			\
 		futex				\
 		futex-rl			\

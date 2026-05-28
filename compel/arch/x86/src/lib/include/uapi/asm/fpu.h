@@ -68,25 +68,41 @@ enum xfeature {
 	XFEATURE_Hi16_ZMM,
 	XFEATURE_PT,
 	XFEATURE_PKRU,
+	XFEATURE_PASID,
+	XFEATURE_CET_U,
+	XFEATURE_CET_S,
 	XFEATURE_HDC,
+	XFEATURE_UINTR,
+	XFEATURE_LBR,
+	XFEATURE_HWP,
+	XFEATURE_XTILE_CFG,
+	XFEATURE_XTILE_DATA,
 
 	XFEATURE_MAX,
 };
 
 #define XSTATE_CPUID 0x0000000d
 
-#define XFEATURE_MASK_FP	(1 << XFEATURE_FP)
-#define XFEATURE_MASK_SSE	(1 << XFEATURE_SSE)
-#define XFEATURE_MASK_YMM	(1 << XFEATURE_YMM)
-#define XFEATURE_MASK_BNDREGS	(1 << XFEATURE_BNDREGS)
-#define XFEATURE_MASK_BNDCSR	(1 << XFEATURE_BNDCSR)
-#define XFEATURE_MASK_OPMASK	(1 << XFEATURE_OPMASK)
-#define XFEATURE_MASK_ZMM_Hi256 (1 << XFEATURE_ZMM_Hi256)
-#define XFEATURE_MASK_Hi16_ZMM	(1 << XFEATURE_Hi16_ZMM)
-#define XFEATURE_MASK_PT	(1 << XFEATURE_PT)
-#define XFEATURE_MASK_PKRU	(1 << XFEATURE_PKRU)
-#define XFEATURE_MASK_HDC	(1 << XFEATURE_HDC)
-#define XFEATURE_MASK_MAX	(1 << XFEATURE_MAX)
+#define XFEATURE_MASK_FP		(1 << XFEATURE_FP)
+#define XFEATURE_MASK_SSE		(1 << XFEATURE_SSE)
+#define XFEATURE_MASK_YMM		(1 << XFEATURE_YMM)
+#define XFEATURE_MASK_BNDREGS		(1 << XFEATURE_BNDREGS)
+#define XFEATURE_MASK_BNDCSR		(1 << XFEATURE_BNDCSR)
+#define XFEATURE_MASK_OPMASK		(1 << XFEATURE_OPMASK)
+#define XFEATURE_MASK_ZMM_Hi256		(1 << XFEATURE_ZMM_Hi256)
+#define XFEATURE_MASK_Hi16_ZMM		(1 << XFEATURE_Hi16_ZMM)
+#define XFEATURE_MASK_PT		(1 << XFEATURE_PT)
+#define XFEATURE_MASK_PKRU		(1 << XFEATURE_PKRU)
+#define XFEATURE_MASK_PASID		(1 << XFEATURE_PASID)
+#define XFEATURE_MASK_CET_U		(1 << XFEATURE_CET_U)
+#define XFEATURE_MASK_CET_S		(1 << XFEATURE_CET_S)
+#define XFEATURE_MASK_HDC		(1 << XFEATURE_HDC)
+#define XFEATURE_MASK_UINTR		(1 << XFEATURE_UINTR)
+#define XFEATURE_MASK_LBR		(1 << XFEATURE_LBR)
+#define XFEATURE_MASK_HWP		(1 << XFEATURE_HWP)
+#define XFEATURE_MASK_XTILE_CFG		(1 << XFEATURE_XTILE_CFG)
+#define XFEATURE_MASK_XTILE_DATA	(1 << XFEATURE_XTILE_DATA)
+#define XFEATURE_MASK_MAX		(1 << XFEATURE_MAX)
 
 #define XFEATURE_MASK_FPSSE  (XFEATURE_MASK_FP | XFEATURE_MASK_SSE)
 #define XFEATURE_MASK_AVX512 (XFEATURE_MASK_OPMASK | XFEATURE_MASK_ZMM_Hi256 | XFEATURE_MASK_Hi16_ZMM)
@@ -99,7 +115,8 @@ enum xfeature {
 /* All currently supported features */
 #define XFEATURE_MASK_USER                                                                                           \
 	(XFEATURE_MASK_FP | XFEATURE_MASK_SSE | XFEATURE_MASK_YMM | XFEATURE_MASK_OPMASK | XFEATURE_MASK_ZMM_Hi256 | \
-	 XFEATURE_MASK_Hi16_ZMM | XFEATURE_MASK_PKRU | XFEATURE_MASK_BNDREGS | XFEATURE_MASK_BNDCSR)
+	 XFEATURE_MASK_Hi16_ZMM | XFEATURE_MASK_PKRU | XFEATURE_MASK_BNDREGS | XFEATURE_MASK_BNDCSR |                 \
+	 XFEATURE_MASK_XTILE_CFG)
 
 /* xsave structure features which is safe to fill with garbage (see validate_random_xstate()) */
 #define XFEATURE_MASK_FAULTINJ                                                                                       \
@@ -243,6 +260,17 @@ struct avx_512_hi16_state {
 struct pkru_state {
 	uint32_t pkru;
 	uint32_t pad;
+} __packed;
+
+/*
+	* State component 17: AMX Tile Configuration.
+	*/
+struct tilecfg_state {
+	uint8_t palette_id;
+	uint8_t start_row;
+	uint8_t reserved[14];
+	uint16_t colsb[16];
+	uint8_t rows[16];
 } __packed;
 
 /*

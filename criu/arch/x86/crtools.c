@@ -127,6 +127,7 @@ int save_task_regs(pid_t pid, void *x, user_regs_struct_t *regs, user_fpregs_str
 		assign_xsave(XFEATURE_ZMM_Hi256, xsave, zmm_upper, extended_state_area);
 		assign_xsave(XFEATURE_Hi16_ZMM, xsave, hi16_zmm, extended_state_area);
 		assign_xsave(XFEATURE_PKRU, xsave, pkru, extended_state_area);
+		assign_xsave(XFEATURE_XTILE_CFG, xsave, xtile_cfg, extended_state_area);
 	}
 
 #undef assign_reg
@@ -204,6 +205,13 @@ static int alloc_xsave_extends(UserX86XsaveEntry *xsave)
 		xsave->n_pkru = XSAVE_PB_NELEMS(struct pkru_state, xsave, pkru);
 		xsave->pkru = xzalloc(pb_repeated_size(xsave, pkru));
 		if (!xsave->pkru)
+			goto err;
+	}
+
+	if (compel_fpu_has_feature(XFEATURE_XTILE_CFG)) {
+		xsave->n_xtile_cfg = XSAVE_PB_NELEMS(struct tilecfg_state, xsave, xtile_cfg);
+		xsave->xtile_cfg = xzalloc(pb_repeated_size(xsave, xtile_cfg));
+		if (!xsave->xtile_cfg)
 			goto err;
 	}
 
@@ -371,6 +379,12 @@ static bool valid_xsave_frame(CoreEntry *core)
 					.obtained = xsave->n_pkru,
 					.ptr = xsave->pkru,
 				},
+				{
+					.name = __stringify_1(XFEATURE_XTILE_CFG),
+					.expected = XSAVE_PB_NELEMS(struct tilecfg_state, xsave, xtile_cfg),
+					.obtained = xsave->n_xtile_cfg,
+					.ptr = xsave->xtile_cfg,
+				},
 			};
 
 			for (i = 0; i < ARRAY_SIZE(features); i++) {
@@ -516,6 +530,7 @@ int restore_fpu(struct rt_sigframe *sigframe, CoreEntry *core)
 			assign_xsave(XFEATURE_ZMM_Hi256, xsave, zmm_upper, extended_state_area);
 			assign_xsave(XFEATURE_Hi16_ZMM, xsave, hi16_zmm, extended_state_area);
 			assign_xsave(XFEATURE_PKRU, xsave, pkru, extended_state_area);
+			assign_xsave(XFEATURE_XTILE_CFG, xsave, xtile_cfg, extended_state_area);
 		}
 
 		x->xsave_hdr.xstate_bv = xstate_bv;
