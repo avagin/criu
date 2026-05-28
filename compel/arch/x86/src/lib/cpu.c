@@ -80,6 +80,11 @@ int compel_test_cpu_cap(compel_cpuinfo_t *c, unsigned int feature)
 
 int compel_test_fpu_cap(compel_cpuinfo_t *c, unsigned int feature)
 {
+	if (feature == 2) {
+		pr_err("DEBUG: compel_test_fpu_cap(2): mask=0x%llx, result=%d\n",
+		       (unsigned long long)c->xfeatures_mask,
+		       (int)((c->xfeatures_mask & (1UL << feature)) != 0));
+	}
 	if (likely(feature < XFEATURE_MAX))
 		return (c->xfeatures_mask & (1UL << feature));
 	return 0;
@@ -443,6 +448,10 @@ bool compel_cpu_has_feature(unsigned int feature)
 bool compel_fpu_has_feature(unsigned int feature)
 {
 	fetch_rt_cpuinfo();
+	if (feature == 2) {
+		pr_err("DEBUG: compel_fpu_has_feature(2): rt_info.mask=0x%llx\n",
+		       (unsigned long long)rt_info.xfeatures_mask);
+	}
 	return compel_test_fpu_cap(&rt_info, feature);
 }
 
