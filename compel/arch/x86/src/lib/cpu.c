@@ -11,7 +11,13 @@
 #undef LOG_PREFIX
 #define LOG_PREFIX "cpu: "
 
-static compel_cpuinfo_t rt_info;
+#include <sys/mman.h>
+
+static union {
+	compel_cpuinfo_t info;
+	char pad[4096];
+} rt_info_union __attribute__((aligned(4096)));
+#define rt_info rt_info_union.info
 
 static void fetch_rt_cpuinfo(void)
 {
@@ -253,6 +259,14 @@ static int compel_fpuid(compel_cpuinfo_t *c)
 			pr_debug("fpu: %-32s xstate_offsets %6d / %-6d xstate_sizes %6d / %-6d\n", xfeature_names[i],
 				 c->xstate_offsets[i], c->xstate_comp_offsets[i], c->xstate_sizes[i],
 				 c->xstate_comp_sizes[i]);
+		}
+	}
+
+	if (c == &rt_info) {
+		if (mprotect(&rt_info_union, 4096, PROT_READ) < 0) {
+			pr_err("mprotect PROT_READ failed\n");
+		} else {
+			pr_err("DEBUG: rt_info page is now READ-ONLY\n");
 		}
 	}
 
