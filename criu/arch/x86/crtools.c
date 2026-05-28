@@ -483,6 +483,8 @@ int restore_fpu(struct rt_sigframe *sigframe, CoreEntry *core)
 				}                                                                                 \
 			}                                                                                         \
 			xstate_bv |= (1UL << feature);                                                            \
+			pr_err("DEBUG: restore assign feature %d: off=%u, size=%zu, size_next=%zu\n",             \
+			       feature, off, size, xstate_size_next);                                             \
 			BUG_ON(xstate_size > xstate_size_next);                                                   \
 			xstate_size = xstate_size_next;                                                           \
 			memcpy(to, from, size);                                                                   \
@@ -548,6 +550,8 @@ int restore_fpu(struct rt_sigframe *sigframe, CoreEntry *core)
 		 */
 		magic2 = (void *)x + xstate_size;
 		*(u32 *)magic2 = FP_XSTATE_MAGIC2;
+		pr_err("DEBUG: restore final xstate_size=%zu, magic2_addr=%p, magic2_val=0x%x (expect 0x46505845)\n",
+		       xstate_size, magic2, *(u32 *)magic2);
 	}
 
 	show_rt_xsave_frame(x);
