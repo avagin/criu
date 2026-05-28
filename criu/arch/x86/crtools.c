@@ -159,6 +159,9 @@ static void alloc_tls(ThreadInfoX86 *ti, void **mempool)
 
 static int alloc_xsave_extends(UserX86XsaveEntry *xsave)
 {
+	pr_err("DEBUG: alloc_xsave_extends called\n");
+	pr_err("DEBUG: XFEATURE_YMM=%d, compel_fpu_has_feature(YMM)=%d\n",
+	       XFEATURE_YMM, compel_fpu_has_feature(XFEATURE_YMM));
 	if (compel_fpu_has_feature(XFEATURE_YMM)) {
 		xsave->n_ymmh_space = XSAVE_PB_NELEMS(struct ymmh_struct, xsave, ymmh_space);
 		xsave->ymmh_space = xzalloc(pb_repeated_size(xsave, ymmh_space));
