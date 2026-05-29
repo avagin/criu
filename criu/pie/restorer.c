@@ -1625,22 +1625,11 @@ static void advance_vma_io_retry(struct restore_vma_io *rio, ssize_t res,
 	size_t remaining;
 	unsigned int j = 0;
 
-	/*
-	 * AIO fd is O_DIRECT (or buffered fallback that tolerates alignment).
-	 * Mask to PAGE_SIZE so resubmits stay alignment-legal.
-	 */
-	res &= ~(PAGE_SIZE - 1);
-	if (res == 0) {
-		*iov_out = NULL;
-		*nr_out = 0;
-		return;
-	}
+	remaining = res;
+	rio->off += res;
 
-	remaining = (size_t)res;
-	rio->off += (off_t)res;
-
-	while (j < (unsigned int)rio->nr_iovs && remaining > 0) {
-		size_t len = (size_t)rio->iovs[j].iov_len;
+	while (j < rio->nr_iovs && remaining > 0) {
+		size_t len = rio->iovs[j].iov_len;
 		if (len <= remaining) {
 			remaining -= len;
 			rio->iovs[j].iov_len = 0;
@@ -1652,14 +1641,14 @@ static void advance_vma_io_retry(struct restore_vma_io *rio, ssize_t res,
 			break;
 		}
 	}
-	while (j < (unsigned int)rio->nr_iovs && rio->iovs[j].iov_len == 0)
+	while (j < rio->nr_iovs && rio->iovs[j].iov_len == 0)
 		j++;
-	if (j == (unsigned int)rio->nr_iovs) {
+	if (j == rio->nr_iovs) {
 		*iov_out = NULL;
 		*nr_out = 0;
 	} else {
 		*iov_out = &rio->iovs[j];
-		*nr_out = (unsigned int)rio->nr_iovs - j;
+		*nr_out = rio->nr_iovs - j;
 	}
 }
 
@@ -1692,27 +1681,14 @@ static int process_aio_event(struct task_restore_args *args, aio_context_t aio_c
 
 	cb = (struct iocb *)(unsigned long)ev->obj;
 
-	/*
-	 * Short read (e.g. MAX_RW_COUNT 0x7FFFF000): mask to page-aligned
-	 * so retry submit and the auto-dedup punch agree on the consumed
-	 * range. A sub-page residual is unrecoverable on O_DIRECT.
-	 */
-	if ((__u64)res != ev->data) {
-		res &= ~(PAGE_SIZE - 1);
-		if (res == 0) {
-			pr_err("AIO sub-page short read: %lld of %llu\n", ev->res, ev->data);
-			return -1;
-		}
-	}
-
 	if (args->auto_dedup) {
 		long fr = sys_fallocate(fd, FALLOC_FL_KEEP_SIZE | FALLOC_FL_PUNCH_HOLE,
-					(off_t)cb->aio_offset, (off_t)res);
+					cb->aio_offset, res);
 		if (fr < 0)
 			pr_debug("Failed to punch holes with fallocate: %ld\n", fr);
 	}
 
-	if ((__u64)res == ev->data)
+	if (res == ev->data)
 		return 0;
 
 	idx = cb - iocbs;
@@ -1725,7 +1701,7 @@ static int process_aio_event(struct task_restore_args *args, aio_context_t aio_c
 	cb->aio_buf = (unsigned long)iov_next;
 	cb->aio_nbytes = nr_next;
 	cb->aio_offset = r->off;
-	cb->aio_data -= (__u64)res;
+	cb->aio_data -= res;
 	ret2 = sys_io_submit(aio_ctx, 1, &cb);
 	if (ret2 != 1) {
 		pr_err("AIO retry submit failed: %ld\n", ret2);
