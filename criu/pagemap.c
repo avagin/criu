@@ -569,64 +569,42 @@ static int process_async_reads(struct page_read *pr)
 	}
 
 	list_for_each_entry_safe(piov, n, &pr->async, l) {
-		ssize_t bytes;
+		ssize_t ret;
 		struct iovec *iovs = piov->to;
 
 		pr_debug("Read piov iovs %d, from %ju, len %ju, first %p:%zu\n", piov->nr, piov->from,
 			 piov->end - piov->from, piov->to->iov_base, piov->to->iov_len);
 	more:
-		bytes = preadv(fd, piov->to, piov->nr, piov->from);
+		ret = preadv(fd, piov->to, piov->nr, piov->from);
 		if (fault_injected(FI_PARTIAL_PAGES)) {
 			/*
 			 * We might have read everything, but for debug
 			 * purposes let's try to force the advance_piov()
 			 * and re-read tail.
 			 */
-			if (bytes > 0 && piov->nr >= 2) {
-				pr_debug("`- trim preadv %zu\n", bytes);
-				bytes /= 2;
-				if (pr->use_direct)
-					bytes &= ~(PAGE_SIZE - 1);
+			if (ret >= 2 * PAGE_SIZE) {
+				pr_debug("`- trim preadv %zu\n", ret);
+				ret /= 2;
+				ret &= PAGE_MASK;
 			}
 		}
 
-		if (bytes < 0) {
-			pr_err("Can't read async pr bytes (%zd / %ju read, %ju off, %d iovs)\n", bytes,
+		if (ret < 0) {
+			pr_err("Can't read async pr bytes (%zd / %ju read, %ju off, %d iovs)\n", ret,
 			       piov->end - piov->from, piov->from, piov->nr);
-			ret = -1;
-			goto cleanup;
-		} else if (bytes == 0) {
-			pr_err("Unexpected EOF in async page read (%ju bytes remaining at off %ju, %d iovs)\n",
-			       piov->end - piov->from, piov->from, piov->nr);
-			ret = -1;
-			goto cleanup;
-		} else {
-			/*
-			 * O_DIRECT requires page-aligned retry. Mask
-			 * before the auto-dedup punch so punch_hole()
-			 * covers only what we actually consume;
-			 * otherwise the retry preadv() would read from
-			 * a punched hole.
-			 */
-			if (pr->use_direct && bytes != piov->end - piov->from) {
-				ssize_t aligned = bytes & ~(PAGE_SIZE - 1);
-
-				if (aligned == 0) {
-					pr_err("Sub-page short read on O_DIRECT fd: %zd bytes\n", bytes);
-					ret = -1;
-					goto cleanup;
-				} else {
-					bytes = aligned;
-				}
-			}
-
-			if (opts.auto_dedup && punch_hole(pr, piov->from, bytes, false)) {
-				ret = -1;
-				goto cleanup;
-			}
+			goto err;
 		}
 
-		if (bytes != piov->end - piov->from) {
+		if (ret == 0 && piov->end != piov->from) {
+			pr_err("Unexpected EOF reading pages: expected %ju more bytes at offset %ju\n",
+			       piov->end - piov->from, piov->from);
+			goto err;
+		}
+
+		if (opts.auto_dedup && punch_hole(pr, piov->from, ret, false))
+			goto err;
+
+		if (ret != piov->end - piov->from) {
 			/*
 			 * The preadv() can return less than requested. It's
 			 * valid and doesn't mean error or EOF. We should advance
@@ -636,25 +614,23 @@ static int process_async_reads(struct page_read *pr)
 			 * anyway.
 			 */
 
-			advance_piov(piov, bytes);
+			advance_piov(piov, ret);
 			goto more;
 		}
 
 		BUG_ON(pr->io_complete); /* FIXME -- implement once needed */
-cleanup:
 		list_del(&piov->l);
 		xfree(iovs);
 		xfree(piov);
-		if (ret < 0) {
-			drain_async_queue(pr);
-			return -1;
-		}
 	}
 
 	if (pr->parent)
 		ret = process_async_reads(pr->parent);
 
 	return ret;
+err:
+	drain_async_queue(pr);
+	return -1;
 }
 
 static void close_page_read(struct page_read *pr)
