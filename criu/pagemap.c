@@ -238,8 +238,6 @@ static int read_local_page(struct page_read *pr, unsigned long vaddr, unsigned l
 	int fd;
 	ssize_t ret;
 	size_t curr = 0;
-	void *aligned_buf = NULL;
-	void *read_buf = buf;
 
 	fd = img_raw_fd(pr->pi);
 	if (fd < 0) {
@@ -253,47 +251,16 @@ static int read_local_page(struct page_read *pr, unsigned long vaddr, unsigned l
 	if (pr->sync(pr))
 		return -1;
 
-	if (pr->use_direct) {
-		/*
-		 * O_DIRECT may require the buffer, length, and file offset to
-		 * be aligned to the underlying device's logical block size
-		 * (varies by filesystem and kernel; see open(2)). PAGE_SIZE is
-		 * a safe upper bound. Most callers here are already
-		 * page-aligned, but the one-page COW-compare path in
-		 * restore_priv_vma_content() reads into a stack-allocated
-		 * unsigned char buf[PAGE_SIZE] which is only 16-byte aligned.
-		 * For that case, route the read through a page-aligned bounce
-		 * buffer and memcpy the result back below.
-		 */
-		if (((unsigned long)buf & (PAGE_SIZE - 1)) || (len & (PAGE_SIZE - 1)) ||
-		    (pr->pi_off & (PAGE_SIZE - 1))) {
-			int err;
-
-			err = posix_memalign(&aligned_buf, PAGE_SIZE, len);
-			if (err) {
-				pr_err("Can't allocate aligned buffer for direct read (%lu bytes, err=%d)\n", len, err);
-				return -1;
-			}
-			read_buf = aligned_buf;
-		}
-	}
-
 	pr_debug("\tpr%lu-%u Read page from self %lx/%" PRIx64 "\n", pr->img_id, pr->id, pr->cvaddr, pr->pi_off);
 	while (1) {
-		ret = pread(fd, read_buf + curr, len - curr, pr->pi_off + curr);
+		ret = pread(fd, buf + curr, len - curr, pr->pi_off + curr);
 		if (ret < 1) {
 			pr_perror("Can't read mapping page %zd", ret);
-			xfree(aligned_buf);
 			return -1;
 		}
 		curr += ret;
 		if (curr == len)
 			break;
-	}
-
-	if (aligned_buf) {
-		memcpy(buf, aligned_buf, len);
-		xfree(aligned_buf);
 	}
 
 	if (opts.auto_dedup && !pr->disable_dedup) {
