@@ -1670,8 +1670,6 @@ static int __restore_task_with_children(void *_arg)
 	if (populate_pid_proc())
 		goto err;
 
-	sfds_protected = true;
-
 	if (unmap_guard_pages(current))
 		goto err;
 
@@ -1694,11 +1692,17 @@ static int __restore_task_with_children(void *_arg)
 		if (restore_wait_other_tasks())
 			goto err;
 		fini_restore_mntns();
+
+		if (start_asyncd())
+			goto err;
+
 		__restore_switch_stage(CR_STATE_RESTORE);
 	} else {
 		if (restore_finish_stage(task_entries, CR_STATE_FORKING) < 0)
 			goto err;
 	}
+
+	sfds_protected = true;
 
 	if (restore_one_task(vpid(current), ca->core))
 		goto err;
@@ -3240,6 +3244,8 @@ static int sigreturn_restore(pid_t pid, struct task_restore_args *task_args, uns
 		if (restore_wait_other_tasks())
 			goto err_nv;
 		if (root_ns_mask & CLONE_NEWNS && remount_readonly_mounts())
+			goto err_nv;
+		if (stop_asyncd())
 			goto err_nv;
 	}
 

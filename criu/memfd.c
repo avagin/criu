@@ -254,8 +254,23 @@ int prepare_memfd_inodes(void)
 	return collect_image(&memfd_inode_cinfo);
 }
 
+struct async_shmem_arg {
+	MemfdInodeEntry *mie;
+};
+
+int async_restore_memfd_shmem_content(void *arg, int fd, pid_t pid)
+{
+	MemfdInodeEntry *mie = ((struct async_shmem_arg *)arg)->mie;
+
+	if (restore_memfd_shmem_content(fd, mie->shmid, mie->size))
+		return -1;
+
+	return 0;
+}
+
 static int memfd_open_inode_nocache(struct memfd_restore_inode *inode)
 {
+	struct async_shmem_arg async_arg;
 	MemfdInodeEntry *mie = NULL;
 	int fd = -1;
 	int ret = -1;
@@ -279,8 +294,14 @@ static int memfd_open_inode_nocache(struct memfd_restore_inode *inode)
 		pr_perror("Can't create memfd:%s", mie->name);
 		goto out;
 	}
+	if (ftruncate(fd, mie->size) < 0) {
+		pr_perror("Can't resize memfd:%s size=%ld", mie->name, mie->size);
+		goto out;
+	}
 
-	if (restore_memfd_shmem_content(fd, mie->shmid, mie->size))
+	ret = -1;
+	async_arg.mie = mie;
+	if (async_call(async_restore_memfd_shmem_content, 0, (void *)&async_arg, sizeof(async_arg), fd))
 		goto out;
 
 	if (mie->has_mode)
@@ -293,9 +314,11 @@ static int memfd_open_inode_nocache(struct memfd_restore_inode *inode)
 		goto out;
 	}
 
+	ret = -1;
 	inode->fdstore_id = fdstore_add(fd);
-	if (inode->fdstore_id < 0)
+	if (inode->fdstore_id < 0) {
 		goto out;
+	}
 
 	ret = fd;
 	fd = -1;
