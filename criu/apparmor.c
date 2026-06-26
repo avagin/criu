@@ -359,38 +359,35 @@ err:
 	 "}\n")
 
 char policydir[PATH_MAX] = ".criu.temp-aa-policy.XXXXXX";
-char cachedir[PATH_MAX];
 
 struct apparmor_parser_args {
-	char *cache;
+	char *bin_file;
 	char *file;
+	char *ns;
 };
 
 static int apparmor_parser_exec(void *data)
 {
 	struct apparmor_parser_args *args = data;
 
-	execlp("apparmor_parser", "apparmor_parser", "-QWL", args->cache, args->file, NULL);
+	if (args->ns)
+		execlp("apparmor_parser", "apparmor_parser", "-n", args->ns, "-o", args->bin_file, args->file, NULL);
+	else
+		execlp("apparmor_parser", "apparmor_parser", "-o", args->bin_file, args->file, NULL);
 
 	return -1;
 }
 
-static int apparmor_cache_exec(void *data)
+static void *get_suspend_policy(char *name, char *ns_name, bool use_ns_flag, off_t *len)
 {
-	execlp("apparmor_parser", "apparmor_parser", "--cache-loc", "/", "--print-cache-dir", (char *)NULL);
-
-	return -1;
-}
-
-static void *get_suspend_policy(char *name, off_t *len)
-{
-	char policy[1024], file[PATH_MAX], cache[PATH_MAX], clean_name[PATH_MAX];
+	char policy[1024], file[PATH_MAX], bin_file[PATH_MAX], clean_name[PATH_MAX];
 	void *ret = NULL;
 	int n, fd, policy_len, i;
 	struct stat sb;
 	struct apparmor_parser_args args = {
-		.cache = cache,
+		.bin_file = bin_file,
 		.file = file,
+		.ns = use_ns_flag ? ns_name : NULL,
 	};
 
 	*len = 0;
@@ -412,19 +409,19 @@ static void *get_suspend_policy(char *name, off_t *len)
 	}
 	clean_name[i] = 0;
 
-	n = snprintf(file, sizeof(file), "%s/%s", policydir, clean_name);
-	if (n < 0 || n >= sizeof(policy)) {
+	n = snprintf(file, sizeof(file), "%.1024s/%.1024s", policydir, clean_name);
+	if (n < 0 || n >= sizeof(file)) {
 		pr_err("policy name %s too long\n", clean_name);
 		return NULL;
 	}
 
-	n = snprintf(cache, sizeof(cache), "%s/cache", policydir);
-	if (n < 0 || n >= sizeof(policy)) {
-		pr_err("policy dir too long\n");
+	n = snprintf(bin_file, sizeof(bin_file), "%.1024s/%.1024s.bin", policydir, clean_name);
+	if (n < 0 || n >= sizeof(bin_file)) {
+		pr_err("policy bin name %s too long\n", clean_name);
 		return NULL;
 	}
 
-	fd = open(file, O_CREAT | O_WRONLY, 0600);
+	fd = open(file, O_CREAT | O_WRONLY | O_TRUNC, 0600);
 	if (fd < 0) {
 		pr_perror("couldn't create %s", file);
 		return NULL;
@@ -437,11 +434,7 @@ static void *get_suspend_policy(char *name, off_t *len)
 		return NULL;
 	}
 
-	n = run_command(cachedir, sizeof(cachedir), apparmor_cache_exec, NULL);
-	if (n < 0) {
-		pr_err("apparmor parsing failed %d\n", n);
-		return NULL;
-	}
+	unlink(bin_file);
 
 	n = run_command(NULL, 0, apparmor_parser_exec, &args);
 	if (n < 0) {
@@ -449,15 +442,9 @@ static void *get_suspend_policy(char *name, off_t *len)
 		return NULL;
 	}
 
-	n = snprintf(file, sizeof(file), "%s/cache/%s/%s", policydir, cachedir, clean_name);
-	if (n < 0 || n >= sizeof(policy)) {
-		pr_err("policy name %s too long\n", clean_name);
-		return NULL;
-	}
-
-	fd = open(file, O_RDONLY);
+	fd = open(bin_file, O_RDONLY);
 	if (fd < 0) {
-		pr_perror("couldn't open %s", file);
+		pr_perror("couldn't open %s", bin_file);
 		return NULL;
 	}
 
@@ -465,15 +452,16 @@ static void *get_suspend_policy(char *name, off_t *len)
 		pr_perror("couldn't stat fd");
 		goto out;
 	}
+	pr_err("opened compiled suspend policy %s (size %ld)\n", bin_file, (long)sb.st_size);
 
 	ret = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
 	if (ret == MAP_FAILED) {
-		pr_perror("mmap of %s failed", file);
+		pr_perror("mmap of %s failed", bin_file);
 		ret = NULL;
-		goto out;
+	} else {
+		*len = sb.st_size;
 	}
 
-	*len = sb.st_size;
 out:
 	close(fd);
 	return ret;
@@ -495,43 +483,12 @@ out:
 static int write_aa_policy(AaNamespace *ns, char *path, int offset, char *rewrite, bool suspend)
 {
 	int i, my_offset, ret;
-	char *rewrite_pos = rewrite, namespace[PATH_MAX];
+	char *rewrite_pos = NULL;
 
-	if (rewrite && suspend) {
-		pr_err("requesting aa rewriting and suspension at the same time is not supported\n");
-		return -1;
-	}
-
-	if (!rewrite) {
-		strncpy(namespace, ns->name, sizeof(namespace) - 1);
-	} else {
-		NEXT_AA_TOKEN(rewrite_pos);
-
-		switch (*rewrite_pos) {
-		case ':': {
-			char tmp, *end;
-
-			end = strchr(rewrite_pos + 1, ':');
-			if (!end) {
-				pr_err("invalid namespace %s\n", rewrite_pos);
-				return -1;
-			}
-
-			tmp = *end;
-			*end = 0;
-			__strlcpy(namespace, rewrite_pos + 1, sizeof(namespace));
-			*end = tmp;
-
-			break;
-		}
-		default:
-			__strlcpy(namespace, ns->name, sizeof(namespace));
-			for (i = 0; i < ns->n_policies; i++) {
-				if (strcmp(ns->policies[i]->name, rewrite_pos))
-					pr_warn("binary rewriting of apparmor policies not supported right now, not renaming %s to %s\n",
-						ns->policies[i]->name, rewrite_pos);
-			}
-		}
+	if (rewrite) {
+		rewrite_pos = strstr(rewrite, "//");
+		if (rewrite_pos)
+			rewrite_pos += 2;
 	}
 
 	my_offset = snprintf(path + offset, PATH_MAX - offset, "/namespaces/%s", ns->name);
@@ -569,8 +526,8 @@ static int write_aa_policy(AaNamespace *ns, char *path, int offset, char *rewrit
 		}
 
 		if (suspend) {
-			pr_info("suspending policy %s\n", p->name);
-			data = get_suspend_policy(p->name, &len);
+			pr_info("suspending policy %s (namespace %s)\n", p->name, ns->name);
+			data = get_suspend_policy(p->name, ns->name, false, &len);
 			if (!data) {
 				close(fd);
 				goto fail;
@@ -578,14 +535,41 @@ static int write_aa_policy(AaNamespace *ns, char *path, int offset, char *rewrit
 		}
 
 		n = write(fd, data, len);
+		if (n < 0 && suspend) {
+			int err1 = errno;
+			pr_err("attempt 1 (without -n, written to %s) failed: n=%d len=%ld errno=%d (%s)\n",
+			       path, n, (long)len, err1, strerror(err1));
+			close(fd);
+			if (munmap(data, len) < 0)
+				pr_perror("failed to munmap attempt 1");
+
+			pr_err("retrying suspend policy compilation with -n %s via root interface\n", ns->name);
+			fd = open(AA_SECURITYFS_PATH "/policy/.replace", O_WRONLY);
+			if (fd < 0) {
+				pr_perror("couldn't open root replace interface " AA_SECURITYFS_PATH "/policy/.replace");
+				goto fail;
+			}
+			data = get_suspend_policy(p->name, ns->name, true, &len);
+			if (!data) {
+				close(fd);
+				goto fail;
+			}
+			n = write(fd, data, len);
+			if (n < 0) {
+				int err2 = errno;
+				pr_err("attempt 2 (with -n %s, written to root interface) failed: n=%d len=%ld errno=%d (%s)\n",
+				       ns->name, n, (long)len, err2, strerror(err2));
+			}
+		}
+
 		close(fd);
 		if (suspend && munmap(data, len) < 0) {
 			pr_perror("failed to munmap");
 			goto fail;
 		}
 
-		if (n != len) {
-			pr_perror("write AA policy %s in %s failed", p->name, namespace);
+		if (n < 0) {
+			pr_perror("write AA policy %s in %s failed", p->name, ns->name);
 			goto fail;
 		}
 
@@ -601,7 +585,7 @@ fail:
 		rmdir(path);
 	}
 
-	pr_err("failed to write policy in AA namespace %s\n", namespace);
+	pr_err("failed to write policy in AA namespace %s\n", ns->name);
 	return -1;
 }
 
