@@ -1281,8 +1281,7 @@ class criu:
         if not log:
             log = action + ".log"
 
-        s_args = ["--log-file", log, "--images-dir", self.__ddir(),
-                  "--verbosity=4"] + opts
+        s_args = ["--log-file", log, "--images-dir", self.__ddir()] + opts
 
         if self.__cuda_checkpoint:
             s_args += [ "--libdir" , os.path.join(os.getcwd(), "..", "plugins", "cuda") ]
@@ -1333,8 +1332,12 @@ class criu:
 
         preload_libfault = self.__preload_libfault and action in ['dump', 'pre-dump', 'restore']
 
+        start_time = time.perf_counter()
         ret = self.__criu.run(action, s_args, self.__criu_bin, self.__fault,
                               strace, preexec, preload_libfault, nowait)
+        end_time = time.perf_counter()
+        execution_time = end_time - start_time
+        print(f"Execution time: {execution_time:.6f} seconds")
 
         if nowait:
             os.close(status_fds[1])

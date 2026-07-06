@@ -1906,6 +1906,7 @@ int probe_pages_o_direct(int fd)
 	void *probe = NULL;
 	ssize_t probe_ret;
 
+	return 0;
 	fl = fcntl(fd, F_GETFL);
 	if (fl < 0)
 		return 0;

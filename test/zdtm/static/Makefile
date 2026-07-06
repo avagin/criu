@@ -157,6 +157,7 @@ TST_NOFILE	:=				\
 		maps01				\
 		maps02				\
 		maps04				\
+		maps04-bench				\
 		maps05				\
 		maps09				\
 		maps10				\

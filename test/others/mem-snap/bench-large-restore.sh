@@ -427,8 +427,8 @@ write_system_report()
 			printf "variant_%s_criu_realpath=%s\n" "${i}" \
 				"$(readlink -f "${VARIANT_CRIUS[${i}]}" 2>/dev/null || printf "%s" "${VARIANT_CRIUS[${i}]}")"
 		done
-		printf "dump_args=--no-default-config -D RUNDIR -o dump.log -t PID -v4\n"
-		printf "restore_args=--no-default-config -D RUNDIR -o restore.log -d -v4\n"
+		printf "dump_args=--no-default-config -D RUNDIR -o dump.log -t PID\n"
+		printf "restore_args=--no-default-config -D RUNDIR -o restore.log -d\n"
 	} >> "${OUTPUT}"
 
 	report_cmd "uname" uname -a
@@ -484,10 +484,10 @@ write_iteration_report()
 		printf "pidfile=%s\n" "${PIDFILE}"
 		printf "outfile=%s\n" "${OUTFILE}"
 		printf "dump_command=%q" "${criu_path}"
-		shell_quote_args dump --no-default-config -D "${rundir}" -o dump.log -t "${target_pid}" -v4
+		shell_quote_args dump --no-default-config -D "${rundir}" -o dump.log -t "${target_pid}"
 		printf "\n"
 		printf "restore_command=%q" "${criu_path}"
-		shell_quote_args restore --no-default-config -D "${rundir}" -o restore.log -d -v4
+		shell_quote_args restore --no-default-config -D "${rundir}" -o restore.log -d
 		printf "\n"
 	} >> "${OUTPUT}"
 
@@ -677,14 +677,14 @@ for variant_index in "${!VARIANT_LABELS[@]}"; do
 		start_workload
 		workload_pid="${CURRENT_PID}"
 
-		if ! run_timed "${variant_criu}" dump --no-default-config -D "${RUNDIR}" -o dump.log -t "${CURRENT_PID}" -v4; then
+		if ! run_timed "${variant_criu}" dump --compress-region 1M --no-default-config -D "${RUNDIR}" -o dump.log -t "${CURRENT_PID}"; then
 			write_iteration_report "${variant_label}" "${variant_criu}" "${i}" "${RUNDIR}" \
 				"${ELAPSED_MS}" "failed" "${workload_pid}"
 			fail "CRIU dump failed for variant ${variant_label}"
 		fi
 		dump_ms="${ELAPSED_MS}"
 
-		if ! run_timed "${variant_criu}" restore --no-default-config -D "${RUNDIR}" -o restore.log -d -v4; then
+		if ! run_timed "${variant_criu}" restore --no-default-config -D "${RUNDIR}" -o restore.log -d; then
 			write_iteration_report "${variant_label}" "${variant_criu}" "${i}" "${RUNDIR}" \
 				"${dump_ms}" "${ELAPSED_MS}" "${workload_pid}"
 			fail "CRIU restore failed for variant ${variant_label}"
