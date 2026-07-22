@@ -411,6 +411,7 @@ TST_FILE	=				\
 		sk-unix-listen04		\
 		sk-unix-restore-fs-share	\
 		mnt_ext_file_bind_auto		\
+		futex_robust_list
 
 TST_DIR		=				\
 		cwd00				\
