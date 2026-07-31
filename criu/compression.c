@@ -334,9 +334,9 @@ struct decompress_queue {
 	size_t nr_jobs;
 	size_t job_chunk;
 	/*
-	 * Concurrent scheduling and result accesses use compiler atomics. Keep all
-	 * three fields under that API because next_job needs size_t, while CRIU's
-	 * atomic_t is int-sized.
+	 * Concurrent scheduling and failure reporting use compiler-provided
+	 * atomics. Keep one API for all three fields because next_job needs size_t,
+	 * while CRIU's atomic_t is int-sized.
 	 */
 	size_t next_job;
 	int failed;
@@ -389,7 +389,9 @@ static int decompress_job_run(const struct decompress_job *job)
 	return decompress_data_nolog(job->src, job->compressed_size, block_bytes, job->dst);
 }
 
-static void decompress_queue_init(struct decompress_queue *queue, struct decompress_job *jobs, size_t nr_jobs,
+static void decompress_queue_init(struct decompress_queue *queue,
+				  struct decompress_job *jobs,
+				  size_t nr_jobs,
 				  unsigned int nr_threads)
 {
 	queue->jobs = jobs;
@@ -406,10 +408,18 @@ static void decompress_queue_init(struct decompress_queue *queue, struct decompr
 
 static bool decompress_queue_failed(const struct decompress_queue *queue)
 {
-	return __atomic_load_n(&queue->failed, __ATOMIC_ACQUIRE);
+	/* Cancellation is only a hint; read the result after all work stops. */
+	return __atomic_load_n(&queue->failed, __ATOMIC_RELAXED);
 }
 
-static bool decompress_queue_claim_chunk(struct decompress_queue *queue, size_t *first, size_t *end)
+static int decompress_queue_failed_block(const struct decompress_queue *queue)
+{
+	return __atomic_load_n(&queue->failed_block, __ATOMIC_RELAXED);
+}
+
+static bool decompress_queue_claim_chunk(struct decompress_queue *queue,
+					 size_t *first,
+					 size_t *end)
 {
 	if (decompress_queue_failed(queue))
 		return false;
@@ -436,8 +446,8 @@ static void decompress_queue_record_failure(struct decompress_queue *queue, int 
 			break;
 	}
 
-	/* Publish cancellation only after failed_block has been updated. */
-	__atomic_store_n(&queue->failed, 1, __ATOMIC_RELEASE);
+	/* Stop useful scheduling; already claimed disjoint chunks may finish. */
+	__atomic_store_n(&queue->failed, 1, __ATOMIC_RELAXED);
 }
 
 static void decompress_queue_run(struct decompress_queue *queue)
@@ -468,11 +478,13 @@ static int decompress_jobs_serial(struct decompress_job *jobs, size_t nr_jobs)
 	if (!decompress_queue_failed(&queue))
 		return 0;
 
-	pr_err("Decompression failed at block %d\n", queue.failed_block);
+	pr_err("Decompression failed at block %d\n", decompress_queue_failed_block(&queue));
 	return -1;
 }
 
-static unsigned int decompress_batch_threads(size_t nr_jobs, size_t total_uncompressed, unsigned int requested_threads)
+static unsigned int decompress_batch_threads(size_t nr_jobs,
+					     size_t total_uncompressed,
+					     unsigned int requested_threads)
 {
 	size_t work_limit;
 	unsigned int nr_threads;
@@ -560,7 +572,8 @@ static void *decompression_pool_worker(void *arg)
 	return NULL;
 }
 
-static void decompression_pool_spawn_workers(struct decompression_pool *pool, unsigned int nr_workers,
+static void decompression_pool_spawn_workers(struct decompression_pool *pool,
+					     unsigned int nr_workers,
 					     pthread_attr_t *attrp)
 {
 	unsigned int attempt;
@@ -703,8 +716,10 @@ void decompression_pool_destroy(struct decompression_pool *pool)
 }
 
 /* Publish one immutable job array to the selected subset of pool workers. */
-static void decompression_pool_start_batch(struct decompression_pool *pool, struct decompress_job *jobs,
-					   size_t nr_jobs, unsigned int active_threads)
+static void decompression_pool_start_batch(struct decompression_pool *pool,
+					   struct decompress_job *jobs,
+					   size_t nr_jobs,
+					   unsigned int active_threads)
 {
 	int err;
 
@@ -742,8 +757,13 @@ static bool decompression_pool_finish_batch(struct decompression_pool *pool, int
 		}
 	}
 
+	/*
+	 * Each worker records failure before taking this lock to drop its pending
+	 * count, and the caller finishes its queue run before entering here.
+	 * Waiting for all pending workers therefore publishes the minimum.
+	 */
 	failed = decompress_queue_failed(&pool->queue);
-	*failed_block = pool->queue.failed_block;
+	*failed_block = decompress_queue_failed_block(&pool->queue);
 	pool->queue.jobs = NULL;
 	pool->queue.nr_jobs = 0;
 	pool->batch_active = false;
