@@ -96,7 +96,8 @@ static inline bool page_is_all_zero(const char *page)
 /*
  * One block that can be restored independently. Jobs passed together must
  * write to disjoint destinations. A zero compressed size clears the block;
- * other jobs hold LZ4 payloads. Raw-fallback blocks remain caller-owned.
+ * other jobs hold LZ4 payloads. The caller handles raw blocks instead of
+ * submitting them as jobs.
  */
 struct decompress_job {
 	const char *src;
@@ -181,6 +182,8 @@ int decompress_block(const char *src, int compressed_size,
  * selects automatic concurrency and one keeps the call serial. The active
  * width is bounded by available CPUs, useful batch work, and the shared CPU
  * budget. Small batches run serially. Calls sharing a pool must be serialized.
+ * The call is synchronous: the caller must keep @jobs and their source and
+ * destination buffers valid until it returns.
  * @pool must initially be NULL and must be destroyed before the caller forks
  * or remaps its address space.
  */
@@ -191,9 +194,10 @@ int decompress_jobs_parallel_pool(struct decompression_pool **pool,
 				  unsigned int requested_threads);
 /*
  * After dispatching a parallel batch, run @caller_work once in the calling
- * thread before it helps the pool. Serial fallbacks skip the callback. The
- * callback must record its own result and must not mutate @jobs, re-enter
- * @pool, or acquire another worker-budget reservation.
+ * thread while selected workers may use @jobs concurrently. Serial fallbacks
+ * skip the callback. The callback must record its own result and must not
+ * mutate @jobs, access their destination buffers, re-enter @pool, or acquire
+ * another worker-budget reservation.
  */
 int decompress_jobs_parallel_pool_with_caller_work(
 	struct decompression_pool **pool, struct decompress_job *jobs,
