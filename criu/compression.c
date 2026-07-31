@@ -328,7 +328,46 @@ int decompress_block(const char *src, int compressed_size,
 	return 0;
 }
 
-/* Parallel decompression queue and reusable worker pool. */
+/*
+ * A decompression batch starts when a pagemap reader hands the pool a list of
+ * independent jobs. The pool borrows that list and its buffers; the API caller
+ * keeps them valid until every participant has finished.
+ *
+ * For a parallel batch, N CPU-budget slots cover these participants:
+ *
+ *             N slots = 1 caller + (N - 1) selected pool workers
+ *
+ * Pool pthreads live longer than a batch, but the budget reservation ends
+ * with each call. Between calls, workers sleep without holding budget slots,
+ * so a later batch can reuse them without another pthread_create().
+ *
+ * One batch tells the following story:
+ *
+ *              caller                               pool workers
+ *              ------                               ------------
+ * start:       publish jobs and broadcast --------> test generation/index
+ * overlap:     optional work                        claim/decode chunks
+ *              (for example, prefetch next payload)
+ * help:        claim/decode available chunks        claim/decode chunks
+ * finish:      wait for selected workers <--------- report completion
+ * return:      reuse jobs and buffers               sleep
+ *
+ * decompression_pool_start_batch() publishes immutable job metadata under
+ * pool->lock and wakes the pool. The lock protects publication, worker
+ * selection, completion, and shutdown; it is not held while jobs run. The
+ * caller and selected workers then atomically claim chunks from the queue.
+ * Jobs write to disjoint destinations, so the chunks need no further locking.
+ * decompression_pool_finish_batch() waits until every selected worker has
+ * dropped its reference before the caller may reuse the jobs or their buffers.
+ *
+ * batch_generation gives each dispatch an identity. After a wake-up, a worker
+ * may leave the wait loop only if the generation is new and its stable index
+ * is in the selected prefix.
+ *
+ * Failure is a request to stop claiming new chunks, not an immediate stop.
+ * Already claimed jobs may finish. failed_block records the lowest observed
+ * failure and is consumed only after all participants stop using the queue.
+ */
 struct decompress_queue {
 	struct decompress_job *jobs;
 	size_t nr_jobs;
@@ -349,24 +388,23 @@ struct decompress_worker {
 	unsigned int index;
 };
 
-/*
- * The lock protects the batch scheduler fields below. decompression_pool_start_batch()
- * publishes the caller-owned jobs as immutable batch metadata. Workers update
- * only the queue's atomic scheduling and result fields.
- * decompression_pool_finish_batch() waits for every selected worker before
- * releasing those jobs.
- */
 struct decompression_pool {
 	pthread_mutex_t lock;
 	pthread_cond_t work_ready;
 	pthread_cond_t work_done;
 	struct decompress_worker *workers;
 	struct decompress_queue queue;
+	/* Persistent pthreads owned by this pool. */
 	unsigned int nr_workers;
+	/* Selected workers for this batch; the caller is not counted. */
 	unsigned int batch_workers;
+	/* Selected workers which may still reference queue.jobs. */
 	unsigned int pending_batch_workers;
+	/* A new identity for every published batch. */
 	unsigned long batch_generation;
+	/* True while queue.jobs is borrowed from the caller. */
 	bool batch_active;
+	/* Ask sleeping workers to leave their loop during pool destruction. */
 	bool stop;
 };
 
@@ -396,6 +434,10 @@ static void decompress_queue_init(struct decompress_queue *queue,
 {
 	queue->jobs = jobs;
 	queue->nr_jobs = nr_jobs;
+	/*
+	 * Leave several claims per participant to balance uneven jobs. The cap
+	 * limits the work already claimed when another participant fails.
+	 */
 	queue->job_chunk = nr_jobs / nr_threads / 4;
 	if (!queue->job_chunk)
 		queue->job_chunk = 1;
@@ -489,6 +531,10 @@ static unsigned int decompress_batch_threads(size_t nr_jobs,
 	size_t work_limit;
 	unsigned int nr_threads;
 
+	/*
+	 * Add participants only while each has a job and at least 512 KiB of
+	 * decoded work. Smaller batches stay with the caller.
+	 */
 	if (total_uncompressed < PARALLEL_RESTORE_MIN_BATCH_BYTES)
 		return 1;
 
@@ -538,7 +584,10 @@ static void *decompression_pool_worker(void *arg)
 	for (;;) {
 		struct decompress_queue *queue;
 
-		/* Wait for a new batch that selected this worker. */
+		/*
+		 * A wake-up alone is not work. The generation prevents a worker
+		 * from repeating a batch, while its index selects the useful prefix.
+		 */
 		while (!pool->stop) {
 			if (seen_generation != pool->batch_generation && worker->index < pool->batch_workers)
 				break;
@@ -606,6 +655,7 @@ static struct decompression_pool *decompression_pool_create(unsigned int nr_thre
 	*mask_restore_failed = false;
 	if (nr_threads <= 1)
 		return NULL;
+	/* The caller uses one slot, so create only nr_threads - 1 workers. */
 	nr_workers = nr_threads - 1;
 
 	pool = xzalloc(sizeof(*pool));
@@ -800,6 +850,10 @@ int decompress_jobs_parallel_pool_with_caller_work(
 	}
 
 	pool = *poolp;
+	/*
+	 * The pool survives a batch, but its CPU-budget reservation does not. Reuse a
+	 * large enough pool; replace it only when this batch needs more workers.
+	 */
 	if (pool && threads_held > pool->nr_workers + 1) {
 		decompression_pool_destroy(pool);
 		pool = NULL;
@@ -826,6 +880,11 @@ int decompress_jobs_parallel_pool_with_caller_work(
 	active_threads = min(threads_held, pool->nr_workers + 1);
 	decompress_budget_trim_reservation(&threads_held, active_threads);
 
+	/*
+	 * Publishing the batch lets workers decode while the caller performs
+	 * optional work. The caller then helps drain the queue and waits until no
+	 * worker can reference it.
+	 */
 	decompression_pool_start_batch(pool, jobs, nr_jobs, active_threads);
 	if (caller_work)
 		caller_work(caller_work_arg);
