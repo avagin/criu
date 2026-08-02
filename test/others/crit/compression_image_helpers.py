@@ -6,6 +6,7 @@ import hashlib
 import importlib
 import os
 import random
+import struct
 import sys
 
 
@@ -58,8 +59,11 @@ def make_sparse_pagemap_image(directory, compressed):
                 "compat_nr_pages": 1,
                 "nr_pages": 1,
                 "flags": PE_PRESENT,
-                "compressed_size": [PAGE_SIZE],
-                "total_compressed_size": PAGE_SIZE,
+                "regions": {
+                    "region_sizes": [PAGE_SIZE],
+                    "total_payload_size": PAGE_SIZE,
+                    "pages_per_region": 1,
+                },
             },
             {
                 "vaddr": 0x101000,
@@ -78,8 +82,11 @@ def make_sparse_pagemap_image(directory, compressed):
                 "compat_nr_pages": 1,
                 "nr_pages": 1,
                 "flags": PE_PRESENT,
-                "compressed_size": [0],
-                "total_compressed_size": 0,
+                "regions": {
+                    "region_sizes": [0],
+                    "total_payload_size": 0,
+                    "pages_per_region": 1,
+                },
             },
         ]
     else:
@@ -212,10 +219,9 @@ def assert_pagemap_entry_uncompressed(directory):
         pagemap = images.load(image_file)
 
     entry = pagemap["entries"][1]
-    for field in ("compressed_size", "total_compressed_size", "region_pages"):
-        if field in entry:
-            print("FAIL: raw-only entry retained %s" % field)
-            return 1
+    if "regions" in entry:
+        print("FAIL: raw-only entry retained regions")
+        return 1
     if not int(entry.get("flags", 0)) & PE_PAYLOAD_ALIGNED:
         print("FAIL: raw-only entry lacks PE_PAYLOAD_ALIGNED")
         return 1
@@ -230,7 +236,8 @@ def assert_region_pagemap(directory):
         with open(path, "rb") as image_file:
             pagemap = images.load(image_file)
         for entry in pagemap["entries"][1:]:
-            region_pages = entry.get("region_pages", 0)
+            regions = entry.get("regions", {})
+            region_pages = regions.get("pages_per_region", 0)
             if region_pages > 1:
                 found_region = True
                 if entry.get("nr_pages", entry["compat_nr_pages"]) % region_pages:
@@ -263,6 +270,40 @@ def write_pair(directory, images, pages_id, entry, payload):
         )
 
 
+def write_partial_pair(directory, images, pages_id, kind):
+    with open(
+        os.path.join(directory, "pages-%d.img" % pages_id), "wb"
+    ) as image_file:
+        image_file.write(b"A" * PAGE_SIZE)
+
+    entry = images.pagemap_entry()
+    entry.vaddr = 0x100000
+    entry.compat_nr_pages = 1
+    entry.nr_pages = 1
+    entry.flags = PE_PRESENT
+
+    regions = entry.regions
+    if kind == "empty-regions":
+        regions.SetInParent()
+    else:
+        regions.region_sizes.append(PAGE_SIZE)
+        if kind != "missing-pages-per-region":
+            regions.pages_per_region = 1
+        if kind != "missing-total-payload-size":
+            regions.total_payload_size = PAGE_SIZE
+
+    with open(
+        os.path.join(directory, "pagemap-%d.img" % pages_id), "wb"
+    ) as image_file:
+        images.dump(
+            {"magic": "PAGEMAP", "entries": [{"pages_id": pages_id}]},
+            image_file,
+        )
+        entry_data = entry.SerializePartialToString()
+        image_file.write(struct.pack("i", len(entry_data)))
+        image_file.write(entry_data)
+
+
 def make_malformed_compressed_image(directory, kind):
     images = pycriu_images()
     with open(os.path.join(directory, "inventory.img"), "wb") as image_file:
@@ -282,56 +323,90 @@ def make_malformed_compressed_image(directory, kind):
     }
 
     if kind == "oversize":
-        base["compressed_size"] = [PAGE_SIZE + 1]
-        base["total_compressed_size"] = PAGE_SIZE + 1
+        base["regions"] = {
+            "region_sizes": [PAGE_SIZE + 1],
+            "total_payload_size": PAGE_SIZE + 1,
+            "pages_per_region": 1
+        }
         write_pair(directory, images, 1, base, b"A" * (PAGE_SIZE + 1))
     elif kind == "total":
-        base["compressed_size"] = [PAGE_SIZE]
-        base["total_compressed_size"] = PAGE_SIZE - 1
+        base["regions"] = {
+            "region_sizes": [PAGE_SIZE],
+            "total_payload_size": PAGE_SIZE - 1,
+            "pages_per_region": 1
+        }
         write_pair(directory, images, 1, base, b"A" * PAGE_SIZE)
     elif kind == "count":
         base["compat_nr_pages"] = 2
         base["nr_pages"] = 2
-        base["compressed_size"] = [PAGE_SIZE]
-        base["total_compressed_size"] = PAGE_SIZE
+        base["regions"] = {
+            "region_sizes": [PAGE_SIZE],
+            "total_payload_size": PAGE_SIZE,
+            "pages_per_region": 1
+        }
         write_pair(directory, images, 1, base, b"A" * PAGE_SIZE)
     elif kind == "flags":
         base["flags"] = PE_PRESENT | PE_PARENT
-        base["compressed_size"] = [PAGE_SIZE]
-        base["total_compressed_size"] = PAGE_SIZE
+        base["regions"] = {
+            "region_sizes": [PAGE_SIZE],
+            "total_payload_size": PAGE_SIZE,
+            "pages_per_region": 1
+        }
         write_pair(directory, images, 1, base, b"A" * PAGE_SIZE)
     elif kind == "aligned-nonpresent":
         base["flags"] = PE_PAYLOAD_ALIGNED
         write_pair(directory, images, 1, base, b"")
     elif kind == "region-limit":
-        base["region_pages"] = 4 * 1024 * 1024 // PAGE_SIZE + 1
-        base["compressed_size"] = [PAGE_SIZE]
-        base["total_compressed_size"] = PAGE_SIZE
+        base["regions"] = {
+            "pages_per_region": 4 * 1024 * 1024 // PAGE_SIZE + 1,
+            "region_sizes": [PAGE_SIZE],
+            "total_payload_size": PAGE_SIZE
+        }
+        write_pair(directory, images, 1, base, b"A" * PAGE_SIZE)
+    elif kind == "region-zero":
+        base["regions"] = {
+            "pages_per_region": 0,
+            "region_sizes": [PAGE_SIZE],
+            "total_payload_size": PAGE_SIZE
+        }
         write_pair(directory, images, 1, base, b"A" * PAGE_SIZE)
     elif kind == "region-count":
         base["compat_nr_pages"] = 17
         base["nr_pages"] = 17
-        base["region_pages"] = 16
-        base["compressed_size"] = [PAGE_SIZE]
-        base["total_compressed_size"] = PAGE_SIZE
+        base["regions"] = {
+            "pages_per_region": 16,
+            "region_sizes": [PAGE_SIZE],
+            "total_payload_size": PAGE_SIZE
+        }
         write_pair(directory, images, 1, base, b"A" * PAGE_SIZE)
     elif kind == "region-final-oversize":
         base["compat_nr_pages"] = 17
         base["nr_pages"] = 17
-        base["region_pages"] = 16
-        base["compressed_size"] = [0, PAGE_SIZE + 1]
-        base["total_compressed_size"] = PAGE_SIZE + 1
+        base["regions"] = {
+            "pages_per_region": 16,
+            "region_sizes": [0, PAGE_SIZE + 1],
+            "total_payload_size": PAGE_SIZE + 1
+        }
         write_pair(directory, images, 1, base, b"A" * (PAGE_SIZE + 1))
+    elif kind in ("missing-pages-per-region", "missing-total-payload-size",
+                  "empty-regions"):
+        write_partial_pair(directory, images, 1, kind)
     elif kind == "transaction":
         first = dict(base)
-        first["compressed_size"] = [PAGE_SIZE]
-        first["total_compressed_size"] = PAGE_SIZE
+        first["regions"] = {
+            "region_sizes": [PAGE_SIZE],
+            "total_payload_size": PAGE_SIZE,
+            "pages_per_region": 1
+        }
         write_pair(directory, images, 1, first, b"A" * PAGE_SIZE)
 
         second = dict(base)
         second["vaddr"] = 0x200000
-        second["compressed_size"] = [8]
-        second["total_compressed_size"] = 8
+        second["regions"] = {
+            "region_sizes": [8],
+            "total_payload_size": 8,
+            "pages_per_region": 1
+        }
         write_pair(directory, images, 2, second, b"not-lz4!")
     else:
         raise ValueError("unknown malformed-image kind %s" % kind)

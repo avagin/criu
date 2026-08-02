@@ -574,8 +574,9 @@ function run_test_compress {
 	# -------------------------------------------------------
 	echo "  -- Test 10: malformed compressed metadata is rejected"
 	local kind
-	for kind in oversize total count flags aligned-nonpresent region-limit region-count \
-			region-final-oversize; do
+	for kind in oversize total count flags aligned-nonpresent region-limit region-zero region-count \
+			region-final-oversize missing-pages-per-region missing-total-payload-size \
+			empty-regions; do
 		local dir="malformed-$kind"
 		local before
 		local after
@@ -587,6 +588,15 @@ function run_test_compress {
 			cat "$dir.log"
 			exit 1
 		fi
+		case "$kind" in
+		missing-pages-per-region|missing-total-payload-size|empty-regions)
+			grep -q "incomplete compression metadata" "$dir.log" || {
+				echo "FAIL: malformed $kind metadata was not rejected by validation"
+				cat "$dir.log"
+				exit 1
+			}
+			;;
+		esac
 		after=$(image_set_checksum "$dir/")
 		if [ "$before" != "$after" ]; then
 			echo "FAIL: malformed $kind image was modified"

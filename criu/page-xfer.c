@@ -708,6 +708,7 @@ region_out:
 	/* When all blocks are compressed, flush the pagemap entry */
 	if (xfer->pending_pe.n_compressed == xfer->pending_pe.total_blocks) {
 		PagemapEntry pe = PAGEMAP_ENTRY__INIT;
+		PagemapRegions regions = PAGEMAP_REGIONS__INIT;
 		bool all_raw = pending_entry_is_all_raw(xfer);
 
 		pe.vaddr = xfer->pending_pe.vaddr;
@@ -721,15 +722,11 @@ region_out:
 		 * compression metadata lets restore take the uncompressed fast path.
 		 */
 		if (!all_raw) {
-			pe.compressed_size = xfer->pending_pe.compressed_size;
-			pe.n_compressed_size = xfer->pending_pe.total_blocks;
-			pe.has_total_compressed_size = true;
-			pe.total_compressed_size = xfer->pending_pe.total_compressed_size;
-
-			if (region_pages > 0) {
-				pe.has_region_pages = true;
-				pe.region_pages = region_pages;
-			}
+			regions.region_sizes = xfer->pending_pe.compressed_size;
+			regions.n_region_sizes = xfer->pending_pe.total_blocks;
+			regions.total_payload_size = xfer->pending_pe.total_compressed_size;
+			regions.pages_per_region = region_pages ? region_pages : 1;
+			pe.regions = &regions;
 		}
 
 		if (pb_write_one(xfer->pmi, &pe, PB_PAGEMAP) < 0)
@@ -1744,6 +1741,7 @@ static int page_server_add_compressed(int sk, struct page_server_iov *pi, u32 fl
 	/* Write pagemap entry with compression metadata */
 	{
 		PagemapEntry pe = PAGEMAP_ENTRY__INIT;
+		PagemapRegions regions = PAGEMAP_REGIONS__INIT;
 
 		pe.vaddr = encode_pointer(iov.iov_base);
 		pe.nr_pages = pi->nr_pages;
@@ -1751,10 +1749,11 @@ static int page_server_add_compressed(int sk, struct page_server_iov *pi, u32 fl
 		pe.flags = flags;
 		pe.has_nr_pages = true;
 		if (!all_raw) {
-			pe.compressed_size = compressed_size;
-			pe.n_compressed_size = pi->nr_pages;
-			pe.has_total_compressed_size = true;
-			pe.total_compressed_size = total_compressed_size;
+			regions.region_sizes = compressed_size;
+			regions.n_region_sizes = pi->nr_pages;
+			regions.total_payload_size = total_compressed_size;
+			regions.pages_per_region = 1;
+			pe.regions = &regions;
 		}
 
 		if (pb_write_one(lxfer->pmi, &pe, PB_PAGEMAP) < 0) {
@@ -2053,7 +2052,7 @@ static bool page_read_requires_buffered_copy(const struct page_read *pr)
 
 	for (i = 0; i < pr->nr_pmes; i++)
 		if (pagemap_present(pr->pmes[i]) &&
-		    (pr->pmes[i]->n_compressed_size ||
+		    (pr->pmes[i]->regions ||
 		     pagemap_payload_aligned(pr->pmes[i])))
 			return true;
 
@@ -2138,7 +2137,7 @@ static int decode_page_pipe(struct page_read *pr, struct page_pipe *pp)
 				entry_pages = pr->pe->nr_pages - ((page_vaddr - pr->pe->vaddr) / PAGE_SIZE);
 				read_pages = entry_pages;
 				read_pages = min(read_pages, nr_pages - pages_done);
-				region_pages = pr->pe->has_region_pages ? pr->pe->region_pages : 0;
+				region_pages = (pr->pe->regions && pr->pe->regions->pages_per_region > 1) ? pr->pe->regions->pages_per_region : 0;
 				if (read_pages > buffer_pages ||
 				    (region_pages && read_pages == buffer_pages &&
 				     entry_pages > read_pages)) {

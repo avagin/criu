@@ -906,8 +906,10 @@ log-file /tmp/criu.log"""
             "vaddr": start,
             "nr_pages": 4,
             "flags": self.region_cache.PE_PRESENT,
-            "region_pages": 4,
-            "compressed_size": [100],
+            "regions": {
+                "pages_per_region": 4,
+                "region_sizes": [100],
+            },
         }]
         final_entries = [
             {
@@ -927,7 +929,7 @@ log-file /tmp/criu.log"""
         self.assertEqual(evidence["reused_lz4_regions"], 1)
         self.assertEqual(evidence["max_slices_per_region"], 2)
 
-        pre_entries[0]["compressed_size"] = [4 * page_size]
+        pre_entries[0]["regions"]["region_sizes"] = [4 * page_size]
         with self.assertRaisesRegex(
                 self.region_cache.TrialError, "no LZ4-compressed region"):
             self.region_cache.analyze_partial_region_reads(
@@ -936,8 +938,10 @@ log-file /tmp/criu.log"""
             )
 
         pre_entries[0]["nr_pages"] = 2
-        pre_entries[0]["region_pages"] = 2
-        pre_entries[0]["compressed_size"] = [100]
+        pre_entries[0]["regions"] = {
+            "pages_per_region": 2,
+            "region_sizes": [100],
+        }
         with self.assertRaisesRegex(
                 self.region_cache.TrialError, "repeated partial reads"):
             self.region_cache.analyze_partial_region_reads(
