@@ -1065,11 +1065,13 @@ class criu_rpc:
             elif "--mntns-compat-mode" == arg:
                 criu.opts.mntns_compat_mode = True
             elif arg in ("-c", "--compress"):
-                criu.opts.compress = 1  # COMPRESS_PER_PAGE
+                criu.opts.compress = 2  # COMPRESS_REGION
+                criu.opts.compress_region_size = mmap.PAGESIZE
             elif "--compress-acceleration" == arg:
                 criu.opts.compress_acceleration = int(args.pop(0))
                 if criu.opts.compress == 0:
-                    criu.opts.compress = 1
+                    criu.opts.compress = 2
+                    criu.opts.compress_region_size = mmap.PAGESIZE
             elif arg == "--compress-region" or \
                     arg.startswith("--compress-region="):
                 # Accept K/M/G suffixes and both '--compress-region SIZE'

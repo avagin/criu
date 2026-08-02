@@ -379,7 +379,7 @@ mount -t cgroup -o devices,freezer none devices,freezer
     during *restore*).
 
 *-c, --compress*::
-    Enable LZ4 per-page compression of memory pages during *dump*.
+    Enable page-sized LZ4 compression of memory pages during *dump*.
     Each system page is compressed as an independent LZ4 block.
     Zero-filled pages are detected and stored with no data; pages that
     do not compress well are stored raw to avoid decompression overhead
@@ -396,7 +396,8 @@ mount -t cgroup -o devices,freezer none devices,freezer
     on heap-shaped data than per-page compression at the cost of
     slightly slower restore on partial reads. 'size' accepts K/M/G
     suffixes (e.g. *256K*, *1M*); it must be a multiple of the system
-    page size and at most 4M. Mutually exclusive with *--compress*.
+    page size and at most 4M. When both this option and *--compress* are
+    specified, the last option takes precedence.
     Currently supports only the local image path (no
     *--page-server* / *--stream*). Hole-punching deduplication is
     skipped for compressed images since compressed pages are

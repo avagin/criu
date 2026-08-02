@@ -175,9 +175,11 @@ int check_img_inventory(bool restore)
 			       he->img_version);
 			goto out_err;
 		}
-		opts.compress_mode = he->compress;
-		if (he->has_compress_region_size)
+		opts.compress_mode = COMPRESS_REGION;
+		if (he->has_compress_region_size && he->compress_region_size)
 			opts.compress_region_size = he->compress_region_size;
+		else if (!opts.compress_region_size)
+			opts.compress_region_size = PAGE_SIZE;
 
 		/*
 		 * On restore the compression mode usually comes from the
@@ -192,27 +194,24 @@ int check_img_inventory(bool restore)
 #else
 			/*
 			 * The image-streamer and page-server/remote restore
-			 * readers only understand the per-page wire format.
-			 * A region-compressed image must use the local
+			 * readers only understand page-sized blocks.
+			 * A multi-page region-compressed image must use the local
 			 * restore path.
 			 */
-			if (opts.compress_mode == COMPRESS_REGION) {
+			if (opts.compress_region_size > PAGE_SIZE) {
 				if (opts.stream) {
-					pr_err("Region-compressed image cannot be restored with --stream\n");
+					pr_err("Multi-page region image cannot be restored with --stream\n");
 					goto out_err;
 				}
 				if (opts.use_page_server || opts.addr) {
-					pr_err("Region-compressed image cannot be restored via page-server\n");
+					pr_err("Multi-page region image cannot be restored via page-server\n");
 					goto out_err;
 				}
 			}
 #endif
 		}
 
-		if (opts.compress_mode == COMPRESS_REGION)
-			pr_debug("Region decompression of memory pages is enabled\n");
-		else if (opts.compress_mode == COMPRESS_PER_PAGE)
-			pr_debug("Per-page decompression of memory pages is enabled\n");
+		pr_debug("Region decompression of memory pages is enabled\n");
 	} else if (restore) {
 		/*
 		 * Image without compression metadata (e.g. an older image).

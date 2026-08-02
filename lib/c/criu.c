@@ -378,7 +378,7 @@ void criu_set_track_mem(bool track_mem)
 
 int criu_local_set_compress(criu_opts *opts, enum criu_compress_mode mode)
 {
-	if (mode < CRIU_COMPRESS_OFF || mode > CRIU_COMPRESS_REGION)
+	if (mode != CRIU_COMPRESS_OFF && mode != CRIU_COMPRESS_REGION)
 		return -EINVAL;
 
 	opts->rpc->has_compress = true;
@@ -402,15 +402,27 @@ int criu_set_compress(enum criu_compress_mode mode)
 int criu_local_set_compress_acceleration(criu_opts *opts,
 					 unsigned int acceleration)
 {
+	bool enable_page_compression;
+	long page_size = 0;
+
 	if (acceleration < 1 || acceleration > CRIU_COMPRESS_MAX_ACCELERATION)
 		return -EINVAL;
 
+	enable_page_compression = !opts->rpc->has_compress ||
+				  opts->rpc->compress == CRIU_COMPRESS_OFF;
+	if (enable_page_compression) {
+		page_size = sysconf(_SC_PAGESIZE);
+		if (page_size <= 0 || page_size > UINT_MAX)
+			return -EINVAL;
+	}
+
 	opts->rpc->has_compress_acceleration = true;
 	opts->rpc->compress_acceleration = acceleration;
-	if (!opts->rpc->has_compress ||
-	    opts->rpc->compress == CRIU_COMPRESS_OFF) {
+	if (enable_page_compression) {
 		opts->rpc->has_compress = true;
-		opts->rpc->compress = CRIU_COMPRESS_PER_PAGE;
+		opts->rpc->compress = CRIU_COMPRESS_REGION;
+		opts->rpc->has_compress_region_size = true;
+		opts->rpc->compress_region_size = (unsigned int)page_size;
 	}
 	return 0;
 }

@@ -58,7 +58,7 @@ struct page_read_region_state {
 
 	/*
 	 * In region mode: pages already consumed (read or skipped) from
-	 * the current block. Always 0 in per-page mode. Reset to 0 on
+	 * the current block (0 when granularity is one page). Reset to 0 on
 	 * advance() and whenever the reader crosses a block boundary.
 	 */
 	unsigned int block_offset;

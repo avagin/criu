@@ -13,7 +13,7 @@ struct page_region_layout {
 	uint32_t *sizes;        /* Payload byte size per block in the image */
 	size_t nr_blocks;       /* Total number of blocks (pages or regions) */
 	uint64_t total_bytes;   /* Sum of all block payload sizes */
-	uint32_t pages_per_reg; /* Granularity: virtual pages per block (1 in per-page mode) */
+	uint32_t pages_per_reg; /* Granularity: virtual pages per block (1 for page-sized regions) */
 };
 
 /*
