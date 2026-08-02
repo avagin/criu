@@ -46,6 +46,41 @@
  */
 
 struct encoded_read_ctx;
+struct page_read;
+
+struct page_read_region_state {
+	/*
+	 * Index into pe->regions->region_sizes[] for the current pagemap
+	 * entry. Tracks which block we are on when reading or skipping.
+	 * Reset to 0 on advance().
+	 */
+	size_t block_idx;
+
+	/*
+	 * In region mode: pages already consumed (read or skipped) from
+	 * the current block. Always 0 in per-page mode. Reset to 0 on
+	 * advance() and whenever the reader crosses a block boundary.
+	 */
+	unsigned int block_offset;
+
+	/*
+	 * Last decompressed region block for repeated partial reads. A page
+	 * reader belongs to one pages image, so its virtual address and size
+	 * uniquely identify the cached block. A zero size means no valid cache.
+	 */
+	char *cache_buf;
+	unsigned long cache_vaddr;
+	size_t cache_size;
+
+	/*
+	 * Bounded encoded buffers and workers. All readers in an incremental
+	 * parent chain use the context owned by encoded_owner, so a sync
+	 * initiated by a parent cannot acquire a second batch lease and deadlock
+	 * against its child. Only the owner releases the context at close.
+	 */
+	struct encoded_read_ctx *encoded_ctx;
+	struct page_read *encoded_owner;
+};
 
 struct page_read {
 	/* reads page from current pagemap */
@@ -106,38 +141,7 @@ struct page_read {
 	/* Alignment bytes a sequential image-streamer reader must discard. */
 	size_t stream_padding;
 
-	/*
-	 * Index into pe->compressed_size[] for the current pagemap
-	 * entry. Tracks which compressed block (page in per-page mode,
-	 * region in region mode) we are on when reading or skipping
-	 * compressed pages. Reset to 0 on advance().
-	 */
-	size_t compressed_size_index;
-
-	/*
-	 * In region mode: pages already consumed (read or skipped) from
-	 * the current block. Always 0 in per-page mode. Reset to 0 on
-	 * advance() and whenever the reader crosses a block boundary.
-	 */
-	unsigned int region_block_offset;
-
-	/*
-	 * Last decompressed region block for repeated partial reads. A page
-	 * reader belongs to one pages image, so its virtual address and size
-	 * uniquely identify the cached block. A zero size means no valid cache.
-	 */
-	char *cached_region;
-	unsigned long cached_region_vaddr;
-	size_t cached_region_size;
-
-	/*
-	 * Bounded encoded buffers and workers. All readers in an incremental
-	 * parent chain use the context owned by encoded_read_owner, so a sync
-	 * initiated by a parent cannot acquire a second batch lease and deadlock
-	 * against its child. Only the owner releases the context at close.
-	 */
-	struct encoded_read_ctx *encoded_read_ctx;
-	struct page_read *encoded_read_owner;
+	struct page_read_region_state reg;
 
 	/* Record consequent neighbour iov-ecs to punch together */
 	struct iovec bunch;
