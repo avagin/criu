@@ -1344,10 +1344,10 @@ static int restore_priv_vma_content(struct pstree_item *t, struct page_read *pr)
 				nr = min_t(unsigned long, nr_pages - i,
 					   (vma->e->end - va) / PAGE_SIZE);
 				nr = min(nr, COW_READ_BATCH_PAGES);
-				if (pr->pe->has_region_pages && pr->pe->region_pages &&
+				if (pr->pe->regions && pr->pe->regions->pages_per_region > 1 &&
 				    nr < nr_pages - i) {
 					unsigned long aligned =
-						nr - nr % pr->pe->region_pages;
+						nr - nr % pr->pe->regions->pages_per_region;
 
 					if (aligned)
 						nr = aligned;
