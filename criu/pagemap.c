@@ -16,6 +16,7 @@
 #include "restorer.h"
 #include "rst-malloc.h"
 #include "page-xfer.h"
+#include "pagemap-region.h"
 #include "compression.h"
 
 #include "fault-injection.h"
@@ -610,7 +611,7 @@ static int piov_add_compressed_blocks(struct page_read_iov *piov,
 				       region_pages, pr->pe->nr_pages);
 			return -1;
 		}
-		n_blocks = (nr_pages + region_pages - 1) / region_pages;
+		n_blocks = region_nr_blocks(nr_pages, region_pages);
 	} else {
 		n_blocks = nr_pages;
 	}
@@ -866,7 +867,7 @@ static int advance_compressed_offsets(struct page_read *pr, unsigned long nr)
 	}
 
 	if (region_pages)
-		n_blocks = (nr + region_pages - 1) / region_pages;
+		n_blocks = region_nr_blocks(nr, region_pages);
 	else
 		n_blocks = nr;
 
@@ -2887,9 +2888,7 @@ static int validate_compressed_pagemap_entry(PagemapEntry *pe)
 		       pe->vaddr, region_pages, MAX_REGION_PAGES);
 		return -1;
 	}
-	expected_blocks = pe->nr_pages / region_pages;
-	if (pe->nr_pages % region_pages)
-		expected_blocks++;
+	expected_blocks = region_nr_blocks(pe->nr_pages, region_pages);
 
 	if (expected_blocks > SIZE_MAX ||
 	    pe->regions->n_region_sizes != (size_t)expected_blocks) {
@@ -3141,8 +3140,7 @@ static int page_read_range_needs_decode(struct page_read *pr,
 			    (end_page % region_pages && overlap_end != pe_end))
 				parallel_zero_entry = false;
 			first_block = first_page / region_pages;
-			last_block = (end_page + region_pages - 1) /
-				     region_pages;
+			last_block = region_nr_blocks(end_page, region_pages);
 		} else {
 			first_block = (overlap_start - pe_start) / PAGE_SIZE;
 			last_block = (overlap_end - pe_start) / PAGE_SIZE;
