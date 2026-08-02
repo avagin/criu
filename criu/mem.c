@@ -1146,19 +1146,23 @@ static int premap_priv_vmas(struct pstree_item *t, struct vm_area_list *vmas, vo
 		 * pagemap entries contain raw/zero blocks only.  Reject an image
 		 * which violates that invariant before the destructive restore.
 		 */
-		if (opts.compress_mode) {
-			if (exceptional) {
-				has_lz4 = page_read_range_has_lz4(pr, vma->e->start, vma->e->end);
-				if (has_lz4 < 0) {
-					ret = -1;
-					break;
-				}
-			} else {
-				needs_premap = page_read_range_needs_premap(pr, vma->e->start, vma->e->end);
-				if (needs_premap < 0) {
-					ret = -1;
-					break;
-				}
+		/*
+		 * Inspect each layer's pagemap rather than trusting the top-level
+		 * inventory mode. Incremental chains may mix compressed and ordinary
+		 * entries, and PIE must never receive an encoded block even when the
+		 * final inventory reports compression as disabled.
+		 */
+		if (exceptional) {
+			has_lz4 = page_read_range_has_lz4(pr, vma->e->start, vma->e->end);
+			if (has_lz4 < 0) {
+				ret = -1;
+				break;
+			}
+		} else {
+			needs_premap = page_read_range_needs_premap(pr, vma->e->start, vma->e->end);
+			if (needs_premap < 0) {
+				ret = -1;
+				break;
 			}
 		}
 		if (exceptional) {

@@ -264,15 +264,13 @@ static int write_pages_to_server_compressed(struct page_xfer *xfer, int p, unsig
 		}
 		off += PAGE_SIZE;
 
-		if (page_is_all_zero(buf)) {
-			compressed_size = 0;
-		} else if (xfer->force_raw) {
+		if (xfer->force_raw) {
 			compressed_size = PAGE_SIZE;
 		} else {
-			int r = compress_data(buf, PAGE_SIZE, compressed_buf, PAGE_COMPRESSED_SIZE_BOUND, acceleration);
+			int r = compress_region(buf, 1, compressed_buf, PAGE_COMPRESSED_SIZE_BOUND, acceleration);
 			if (r < 0)
 				return -1;
-			compressed_size = (r >= PAGE_COMPRESSION_THRESHOLD) ? PAGE_SIZE : r;
+			compressed_size = r;
 		}
 
 		/* Send compressed size */
@@ -387,16 +385,12 @@ static int write_pagemap_loc_compressed(struct page_xfer *xfer, struct iovec *io
 		}
 
 		nr_pages = iov->iov_len / PAGE_SIZE;
-		if (opts.compress_mode == COMPRESS_REGION) {
-			region_pages = opts.compress_region_size / PAGE_SIZE;
-			if (region_pages == 0 || region_pages > MAX_REGION_PAGES) {
-				pr_err("Invalid region_pages %u\n", region_pages);
-				return -1;
-			}
-			total_blocks = region_nr_blocks(nr_pages, region_pages);
-		} else {
-			total_blocks = nr_pages;
+		region_pages = opts.compress_region_size ? opts.compress_region_size / PAGE_SIZE : 1;
+		if (region_pages == 0 || region_pages > MAX_REGION_PAGES) {
+			pr_err("Invalid region_pages %u\n", region_pages);
+			return -1;
 		}
+		total_blocks = region_nr_blocks(nr_pages, region_pages);
 
 		/* Buffer the entry; write_pages will flush it. */
 		xfer->pending_pe.vaddr = encode_pointer(iov->iov_base);
@@ -561,15 +555,10 @@ static bool pending_entry_is_all_raw(const struct page_xfer *xfer)
 	size_t i;
 
 	for (i = 0; i < xfer->pending_pe.r_layout.nr_blocks; i++) {
-		size_t block_bytes = PAGE_SIZE;
-
-		if (region_pages) {
-			unsigned long pages_done = i * (unsigned long)region_pages;
-			unsigned long pages_left = xfer->pending_pe.nr_pages - pages_done;
-			unsigned int block_pages = pages_left < region_pages ? (unsigned int)pages_left : region_pages;
-
-			block_bytes = (size_t)block_pages * PAGE_SIZE;
-		}
+		unsigned long pages_done = i * (unsigned long)region_pages;
+		unsigned long pages_left = xfer->pending_pe.nr_pages - pages_done;
+		unsigned int block_pages = pages_left < region_pages ? (unsigned int)pages_left : region_pages;
+		size_t block_bytes = (size_t)block_pages * PAGE_SIZE;
 
 		if (xfer->pending_pe.r_layout.sizes[i] != block_bytes)
 			return false;
@@ -583,6 +572,11 @@ static int write_pages_loc_compressed(struct page_xfer *xfer, int p, unsigned lo
 	unsigned long off = 0;
 	int acceleration = LZ4_DEFAULT_ACCELERATION;
 	unsigned int region_pages = xfer->pending_pe.r_layout.pages_per_reg;
+	size_t region_bytes_max;
+	size_t cap;
+	unsigned long pages_done;
+	char *src_buf, *dst_buf;
+	int rc = -1;
 
 	if (len / PAGE_SIZE > xfer->pending_pe.nr_pages) {
 		pr_err("write_pages len %lu exceeds pending pagemap (%lu pages)\n", len, xfer->pending_pe.nr_pages);
@@ -598,113 +592,64 @@ static int write_pages_loc_compressed(struct page_xfer *xfer, int p, unsigned lo
 	if (opts.compress_acceleration)
 		acceleration = opts.compress_acceleration;
 
-	if (region_pages == 0) {
-		/* Per-page mode: keep the original tight stack-buffered loop. */
-		char buf[PAGE_SIZE], compressed_buf[PAGE_COMPRESSED_SIZE_BOUND];
+	/*
+	 * Accumulate region_pages worth of data and compress as one LZ4 block.
+	 * The last region may be short if nr_pages % region_pages != 0.
+	 */
+	region_bytes_max = (size_t)region_pages * PAGE_SIZE;
+	cap = REGION_COMPRESSED_SIZE_BOUND(region_pages);
+	src_buf = xmalloc(region_bytes_max);
+	dst_buf = xfer->force_raw ? NULL : xmalloc(cap);
+	if (!src_buf || (!xfer->force_raw && !dst_buf))
+		goto region_out;
 
-		while (off < len) {
-			int cs;
-			size_t idx;
+	pages_done = (unsigned long)xfer->pending_pe.n_compressed * region_pages;
 
-			if (read_pipe_full(p, buf, PAGE_SIZE))
-				return -1;
-			off += PAGE_SIZE;
+	while (off < len) {
+		unsigned long pages_left = xfer->pending_pe.nr_pages - pages_done;
+		unsigned int this_region = pages_left < region_pages ? pages_left : region_pages;
+		size_t region_bytes = (size_t)this_region * PAGE_SIZE;
+		const char *payload = dst_buf;
+		int cs;
+		size_t idx;
 
-			idx = xfer->pending_pe.n_compressed++;
-
-			if (page_is_all_zero(buf)) {
-				xfer->pending_pe.r_layout.sizes[idx] = 0;
-				continue;
-			}
-			if (xfer->force_raw) {
-				xfer->pending_pe.r_layout.sizes[idx] = PAGE_SIZE;
-				xfer->pending_pe.r_layout.total_bytes += PAGE_SIZE;
-				if (write_compressed_payload(xfer, buf, PAGE_SIZE, true))
-					return -1;
-				continue;
-			}
-
-			cs = compress_data(buf, PAGE_SIZE, compressed_buf, PAGE_COMPRESSED_SIZE_BOUND, acceleration);
-			if (cs < 0)
-				return -1;
-
-			if (cs >= PAGE_COMPRESSION_THRESHOLD) {
-				xfer->pending_pe.r_layout.sizes[idx] = PAGE_SIZE;
-				xfer->pending_pe.r_layout.total_bytes += PAGE_SIZE;
-				if (write_compressed_payload(xfer, buf, PAGE_SIZE, true))
-					return -1;
-			} else {
-				xfer->pending_pe.r_layout.sizes[idx] = cs;
-				xfer->pending_pe.r_layout.total_bytes += cs;
-				if (write_compressed_payload(xfer, compressed_buf, cs, false))
-					return -1;
-			}
-		}
-	} else {
-		/*
-		 * Region mode: accumulate region_pages worth of data and
-		 * compress as one LZ4 block. The last region may be short
-		 * if nr_pages % region_pages != 0.
-		 */
-		size_t region_bytes_max = (size_t)region_pages * PAGE_SIZE;
-		size_t cap = REGION_COMPRESSED_SIZE_BOUND(region_pages);
-		unsigned long pages_done;
-		char *src_buf, *dst_buf;
-		int rc = -1;
-
-		src_buf = xmalloc(region_bytes_max);
-		dst_buf = xfer->force_raw ? NULL : xmalloc(cap);
-		if (!src_buf || (!xfer->force_raw && !dst_buf))
+		if (off + region_bytes > len) {
+			pr_err("write_pages len mismatch in region mode\n");
 			goto region_out;
+		}
 
-		pages_done = (unsigned long)xfer->pending_pe.n_compressed * region_pages;
+		if (read_pipe_full(p, src_buf, region_bytes))
+			goto region_out;
+		off += region_bytes;
+		pages_done += this_region;
 
-		while (off < len) {
-			unsigned long pages_left = xfer->pending_pe.nr_pages - pages_done;
-			unsigned int this_region = pages_left < region_pages ? pages_left : region_pages;
-			size_t region_bytes = (size_t)this_region * PAGE_SIZE;
-			const char *payload = dst_buf;
-			int cs;
-			size_t idx;
+		idx = xfer->pending_pe.n_compressed++;
 
-			if (off + region_bytes > len) {
-				pr_err("write_pages len mismatch in region mode\n");
-				goto region_out;
-			}
-
-			if (read_pipe_full(p, src_buf, region_bytes))
-				goto region_out;
-			off += region_bytes;
-			pages_done += this_region;
-
-			idx = xfer->pending_pe.n_compressed++;
-
-			if (xfer->force_raw) {
-				if (region_is_all_zero(src_buf, this_region)) {
-					cs = 0;
-				} else {
-					cs = (int)region_bytes;
-					payload = src_buf;
-				}
+		if (xfer->force_raw) {
+			if (region_is_all_zero(src_buf, this_region)) {
+				cs = 0;
 			} else {
-				cs = compress_region(src_buf, this_region, dst_buf, cap, acceleration);
-				if (cs < 0)
-					goto region_out;
+				cs = (int)region_bytes;
+				payload = src_buf;
 			}
-
-			xfer->pending_pe.r_layout.sizes[idx] = cs;
-			xfer->pending_pe.r_layout.total_bytes += cs;
-			if (cs > 0 && write_compressed_payload(xfer, payload, cs, (size_t)cs == region_bytes))
+		} else {
+			cs = compress_region(src_buf, this_region, dst_buf, cap, acceleration);
+			if (cs < 0)
 				goto region_out;
 		}
 
-		rc = 0;
-region_out:
-		xfree(src_buf);
-		xfree(dst_buf);
-		if (rc < 0)
-			return -1;
+		xfer->pending_pe.r_layout.sizes[idx] = cs;
+		xfer->pending_pe.r_layout.total_bytes += cs;
+		if (cs > 0 && write_compressed_payload(xfer, payload, cs, (size_t)cs == region_bytes))
+			goto region_out;
 	}
+
+	rc = 0;
+region_out:
+	xfree(src_buf);
+	xfree(dst_buf);
+	if (rc < 0)
+		return -1;
 
 	/* When all blocks are compressed, flush the pagemap entry */
 	if (xfer->pending_pe.n_compressed == xfer->pending_pe.r_layout.nr_blocks) {
@@ -726,7 +671,7 @@ region_out:
 			regions.region_sizes = xfer->pending_pe.r_layout.sizes;
 			regions.n_region_sizes = xfer->pending_pe.r_layout.nr_blocks;
 			regions.total_payload_size = xfer->pending_pe.r_layout.total_bytes;
-			regions.pages_per_region = region_pages ? region_pages : 1;
+			regions.pages_per_region = region_pages;
 			pe.regions = &regions;
 		}
 

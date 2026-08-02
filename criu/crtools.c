@@ -557,7 +557,7 @@ usage:
 	       "  --pre-dump-mode       splice - parasite based pre-dumping (default)\n"
 	       "                        read   - process_vm_readv syscall based pre-dumping\n"
 #ifdef CONFIG_LZ4
-	       "  -c|--compress         enable LZ4 per-page compression of memory pages\n"
+	       "  -c|--compress         enable page-sized LZ4 memory compression\n"
 	       "  --compress-region size\n"
 	       "                        enable memory page compression for given region size;\n"
 	       "                        size accepts K/M/G suffixes (e.g. 256K, 1M);\n"

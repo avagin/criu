@@ -18,7 +18,6 @@
  */
 enum compress_mode {
 	COMPRESS_OFF		= 0,
-	COMPRESS_PER_PAGE	= 1,
 	COMPRESS_REGION		= 2,
 };
 
@@ -152,12 +151,6 @@ struct encoded_read_ctx {
 
 #ifdef CONFIG_LZ4
 
-int compress_data(const char *input_data, size_t input_size,
-		  char *compressed_data, size_t output_size,
-		  int acceleration);
-int decompress_data(const char *compressed_data, int compressed_size,
-		    int original_size, char *decompressed_data);
-
 /*
  * Compress @n_pages pages from @src into one LZ4 region block.
  *
@@ -236,18 +229,6 @@ int encoded_prefetch_take(struct encoded_read_ctx *ctx,
 			  const void *token, size_t expected_count);
 
 #else /* !CONFIG_LZ4 */
-
-static inline int compress_data(const char *in, size_t in_sz, char *out,
-				size_t out_sz, int acceleration)
-{
-	return -1;
-}
-
-static inline int decompress_data(const char *in, int in_sz, int out_sz,
-				  char *out)
-{
-	return -1;
-}
 
 static inline int compress_region(const char *src, unsigned int n_pages,
 				  char *dst, size_t dst_cap, int accel)

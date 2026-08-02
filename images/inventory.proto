@@ -37,7 +37,6 @@ message inventory_entry {
 	/*
 	 * Memory page compression mode. Encodes enum compress_mode:
 	 *   0 = COMPRESS_OFF
-	 *   1 = COMPRESS_PER_PAGE
 	 *   2 = COMPRESS_REGION
 	 * Absent or 0 means no compression was applied to the dump.
 	 */
