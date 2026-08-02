@@ -245,10 +245,10 @@ def test_exceptional_mappings_and_timestamps():
 
         task_pm = load(directory, "pagemap-100.img")["entries"][1]
         shared_pm = load(directory, "pagemap-shmem-77.img")["entries"][1]
-        assert task_pm["compressed_size"][:2] == [PAGE_SIZE, PAGE_SIZE]
-        assert 0 < task_pm["compressed_size"][2] < PAGE_SIZE
-        assert shared_pm["compressed_size"][0] == PAGE_SIZE
-        assert 0 < shared_pm["compressed_size"][1] < PAGE_SIZE
+        assert task_pm["regions"]["region_sizes"][:2] == [PAGE_SIZE, PAGE_SIZE]
+        assert 0 < task_pm["regions"]["region_sizes"][2] < PAGE_SIZE
+        assert shared_pm["regions"]["region_sizes"][0] == PAGE_SIZE
+        assert 0 < shared_pm["regions"]["region_sizes"][1] < PAGE_SIZE
 
         decompressed_times = {}
         for index, path in enumerate(
@@ -308,11 +308,11 @@ def test_acceleration():
             pagemap_entry = load(directory, "pagemap-1.img")["entries"][1]
             encoded = expected[acceleration]
             if len(encoded) >= crit_main.PAGE_COMPRESSION_THRESHOLD:
-                assert "compressed_size" not in pagemap_entry
+                assert "regions" not in pagemap_entry
                 with open(os.path.join(directory, "pages-1.img"), "rb") as pages:
                     assert pages.read() == page
             else:
-                assert pagemap_entry["compressed_size"] == [len(encoded)]
+                assert pagemap_entry["regions"]["region_sizes"] == [len(encoded)]
                 with open(os.path.join(directory, "pages-1.img"), "rb") as pages:
                     assert pages.read() == encoded
 

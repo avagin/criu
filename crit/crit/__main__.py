@@ -609,17 +609,16 @@ def _aligned_payload_offset(offset):
 
 
 def _has_compression_metadata(entry):
-    return (bool(entry.get('compressed_size')) or
-            'total_compressed_size' in entry or
-            'region_pages' in entry)
+    return bool(entry.get('regions'))
 
 
 def _compressed_payload_size(pagemap_name, index, entry, nr_pages,
-                             compressed_sizes):
-    region_pages = entry.get('region_pages', 0)
+                             region_sizes):
+    regions = entry.get('regions', {})
+    region_pages = regions.get('pages_per_region', 1)
     if not isinstance(region_pages, int) or region_pages < 0:
         _entry_error(pagemap_name, index,
-                     "invalid region_pages %r" % region_pages)
+                     "invalid pages_per_region %r" % region_pages)
     if region_pages * PAGE_SIZE > MAX_REGION_SIZE:
         _entry_error(pagemap_name, index,
                      "region size %d exceeds maximum %d bytes" %
@@ -627,14 +626,14 @@ def _compressed_payload_size(pagemap_name, index, entry, nr_pages,
 
     block_pages = region_pages or 1
     expected_blocks = (nr_pages + block_pages - 1) // block_pages
-    if len(compressed_sizes) != expected_blocks:
+    if len(region_sizes) != expected_blocks:
         _entry_error(pagemap_name, index,
                      "%d compressed blocks, expected %d" %
-                     (len(compressed_sizes), expected_blocks))
+                     (len(region_sizes), expected_blocks))
 
     payload_size = 0
     pages_done = 0
-    for block_index, compressed_size in enumerate(compressed_sizes):
+    for block_index, compressed_size in enumerate(region_sizes):
         pages = min(block_pages, nr_pages - pages_done)
         block_bytes = pages * PAGE_SIZE
         if not isinstance(compressed_size, int) or compressed_size < 0:
@@ -657,10 +656,10 @@ def _compressed_payload_size(pagemap_name, index, entry, nr_pages,
                      "%d pages covered, expected %d" %
                      (pages_done, nr_pages))
 
-    recorded_size = entry.get('total_compressed_size')
+    recorded_size = regions.get('total_payload_size')
     if recorded_size is not None and recorded_size != payload_size:
         _entry_error(pagemap_name, index,
-                     "total_compressed_size %r does not match "
+                     "total_payload_size %r does not match "
                      "block sum %d" % (recorded_size, payload_size))
     return payload_size
 
@@ -672,7 +671,8 @@ def _validate_pagemap(pagemap_name, pages_path, pagemap,
     for index, entry in enumerate(pagemap['entries'][1:], 1):
         nr_pages = _get_nr_pages(entry)
         flags = _pagemap_flags(entry)
-        compressed_sizes = entry.get('compressed_size', [])
+        regions = entry.get('regions', {})
+        region_sizes = regions.get('region_sizes', [])
         has_compression_metadata = _has_compression_metadata(entry)
 
         if not isinstance(nr_pages, int) or nr_pages <= 0:
@@ -713,14 +713,14 @@ def _validate_pagemap(pagemap_name, pages_path, pagemap,
                              "aligned compressed payload flag is present in "
                              "an uncompressed checkpoint")
 
-        if not compressed_sizes:
+        if not region_sizes:
             if has_compression_metadata:
                 _entry_error(pagemap_name, index,
                              "incomplete compression metadata")
             entry_payload = nr_pages * PAGE_SIZE
         else:
             entry_payload = _compressed_payload_size(pagemap_name, index, entry, nr_pages,
-                                                     compressed_sizes)
+                                                     region_sizes)
 
         if flags & PE_PAYLOAD_ALIGNED:
             payload_size = _aligned_payload_offset(payload_size)
@@ -1303,9 +1303,7 @@ def _encode_page(page, force_raw, lz4_block, acceleration):
 
 
 def _remove_compression_metadata(entry):
-    entry.pop('compressed_size', None)
-    entry.pop('total_compressed_size', None)
-    entry.pop('region_pages', None)
+    entry.pop('regions', None)
 
 
 def _compress_pages_image(pages_in, pages_out, pages_name, pagemap,
@@ -1356,8 +1354,11 @@ def _compress_pages_image(pages_in, pages_out, pages_name, pagemap,
             # image, so avoid restore-side metadata work.
             _remove_compression_metadata(entry)
         else:
-            entry['compressed_size'] = compressed_sizes
-            entry['total_compressed_size'] = total_compressed_size
+            entry['regions'] = {
+                'region_sizes': compressed_sizes,
+                'total_payload_size': total_compressed_size,
+                'pages_per_region': 1
+            }
 
     return total_pages, input_size, output_size
 
@@ -1402,8 +1403,9 @@ def _decompress_pages_image(pages_in, pages_out, pages_name, pagemap,
             input_size += _skip_input_padding(pages_in, pages_name)
             entry['flags'] = flags & ~PE_PAYLOAD_ALIGNED
 
-        compressed_sizes = entry.get('compressed_size')
-        if not compressed_sizes:
+        regions = entry.get('regions', {})
+        region_sizes = regions.get('region_sizes')
+        if not region_sizes:
             uncompressed_size = nr_pages * PAGE_SIZE
             _copy_exact(pages_in, pages_out, uncompressed_size, pages_name)
             input_size += uncompressed_size
@@ -1411,12 +1413,12 @@ def _decompress_pages_image(pages_in, pages_out, pages_name, pagemap,
             total_pages += nr_pages
             continue
 
-        # region_pages > 0 means each compressed_size entry covers up to
-        # region_pages pages as one LZ4 block.
-        region_pages = entry.get('region_pages', 0)
+        # pages_per_region > 1 means each region_sizes entry covers up to
+        # pages_per_region pages as one block.
+        region_pages = regions.get('pages_per_region', 1)
         remaining_pages = nr_pages
 
-        for compressed_size in compressed_sizes:
+        for compressed_size in region_sizes:
             block_pages = min(region_pages or 1, remaining_pages)
             block_bytes = block_pages * PAGE_SIZE
             _decode_block(pages_in, pages_out, compressed_size, block_bytes,

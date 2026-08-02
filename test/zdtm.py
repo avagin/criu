@@ -1447,9 +1447,11 @@ class criu:
                     offset = ((offset + mmap.PAGESIZE - 1) //
                               mmap.PAGESIZE * mmap.PAGESIZE)
 
-                compressed_sizes = entry.get("compressed_size", [])
-                if compressed_sizes:
-                    offset += sum(int(size) for size in compressed_sizes)
+                regions = entry.get("regions")
+                if regions and regions.get("region_sizes"):
+                    offset += int(regions.get(
+                        "total_payload_size",
+                        sum(int(s) for s in regions["region_sizes"])))
                 else:
                     offset += nr_pages * mmap.PAGESIZE
                 page_count += nr_pages

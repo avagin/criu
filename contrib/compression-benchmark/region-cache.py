@@ -169,12 +169,13 @@ def analyze_partial_region_reads(pre_entries, final_entries, mapping_start,
             continue
         if not _pagemap_flags(entry) & PE_PRESENT:
             raise TrialError("pre-dump does not contain the workload pages")
-        if entry.get("region_pages") != region_pages:
+        regions = entry.get("regions", {})
+        if regions.get("pages_per_region") != region_pages:
             raise TrialError("pre-dump does not use the requested region size")
 
-        compressed_sizes = entry.get("compressed_size", [])
+        region_sizes = regions.get("region_sizes", [])
         expected_blocks = (entry_pages + region_pages - 1) // region_pages
-        if len(compressed_sizes) != expected_blocks:
+        if len(region_sizes) != expected_blocks:
             raise TrialError("pre-dump has incomplete region metadata")
 
         first_page = (overlap_start - mapping_start) // PAGE_SIZE
@@ -183,7 +184,7 @@ def analyze_partial_region_reads(pre_entries, final_entries, mapping_start,
 
         block_start = entry_start
         pages_left = entry_pages
-        for compressed_size in compressed_sizes:
+        for compressed_size in region_sizes:
             block_pages = min(region_pages, pages_left)
             block_end = block_start + block_pages * PAGE_SIZE
             if (block_end > mapping_start and block_start < mapping_end and
