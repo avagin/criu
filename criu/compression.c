@@ -24,21 +24,12 @@
 #define PARALLEL_DECOMPRESS_MAX_BATCHES 2
 
 /*
- * asyncd can restore several shmem or memfd objects concurrently.  Each of
+ * asyncd can restore several shmem or memfd objects concurrently. Each of
  * those requests may enter decompress_jobs_parallel_pool(), so limiting one
  * invocation to the available CPUs is not sufficient: independent calls can
  * otherwise multiply the worker count. Account for the calling thread as
- * well as workers. Restore processes use one budget in shared restore memory;
- * callers outside restore fall back to a process-wide budget.
+ * well as workers using a shared budget in restore memory.
  */
-static pthread_once_t decompress_budget_once = PTHREAD_ONCE_INIT;
-static pthread_mutex_t decompress_budget_lock = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t decompress_budget_cond = PTHREAD_COND_INITIALIZER;
-static unsigned int decompress_budget_available = 1;
-static unsigned int decompress_budget_capacity_cached = 1;
-static pthread_mutex_t decompress_batch_lock = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t decompress_batch_cond = PTHREAD_COND_INITIALIZER;
-static unsigned int decompress_batches_available = PARALLEL_DECOMPRESS_MAX_BATCHES;
 static struct decompression_shared_budget *decompress_shared_budget;
 
 static unsigned int decompression_available_cpus(void)
@@ -113,12 +104,6 @@ static unsigned int decompression_budget_capacity(unsigned int configured_thread
 	return decompression_cpu_limit(configured_threads);
 }
 
-static void decompress_budget_init(void)
-{
-	decompress_budget_capacity_cached = decompression_cpu_limit(0);
-	decompress_budget_available = decompress_budget_capacity_cached;
-}
-
 void decompression_shared_budget_init(struct decompression_shared_budget *budget, unsigned int requested_threads)
 {
 	unsigned int threads = decompression_budget_capacity(requested_threads);
@@ -146,21 +131,10 @@ void decompression_use_shared_budget(struct decompression_shared_budget *budget)
 
 bool compressed_restore_has_parallel_capacity(unsigned int requested_threads)
 {
-	unsigned int capacity;
-	int err;
-
-	if (requested_threads == 1)
+	if (requested_threads == 1 || !decompress_shared_budget)
 		return false;
-	if (decompress_shared_budget)
-		capacity = decompress_shared_budget->thread_capacity;
-	else {
-		err = pthread_once(&decompress_budget_once, decompress_budget_init);
-		if (err)
-			return false;
-		capacity = decompress_budget_capacity_cached;
-	}
 
-	return decompression_thread_limit(requested_threads, capacity) > 1;
+	return decompression_thread_limit(requested_threads, decompress_shared_budget->thread_capacity) > 1;
 }
 
 static unsigned int shared_budget_acquire(futex_t *available, unsigned int requested)
@@ -205,58 +179,16 @@ static void shared_budget_release(futex_t *available, unsigned int amount)
 
 static unsigned int decompress_budget_acquire(unsigned int requested)
 {
-	unsigned int granted;
-	int err;
-
-	if (decompress_shared_budget)
-		return shared_budget_acquire(&decompress_shared_budget->threads, requested);
-
-	err = pthread_once(&decompress_budget_once, decompress_budget_init);
-	if (err) {
-		pr_warn("Unable to initialize decompression CPU budget: %s\n", strerror(err));
+	if (!decompress_shared_budget)
 		return 0;
-	}
-
-	err = pthread_mutex_lock(&decompress_budget_lock);
-	if (err) {
-		pr_warn("Unable to lock decompression CPU budget: %s\n", strerror(err));
-		return 0;
-	}
-
-	while (!decompress_budget_available) {
-		err = pthread_cond_wait(&decompress_budget_cond, &decompress_budget_lock);
-		if (err) {
-			pr_warn("Unable to wait for decompression CPU budget: %s\n", strerror(err));
-			pthread_mutex_unlock(&decompress_budget_lock);
-			return 0;
-		}
-	}
-
-	granted = min(requested, decompress_budget_available);
-	decompress_budget_available -= granted;
-	pthread_mutex_unlock(&decompress_budget_lock);
-	return granted;
+	return shared_budget_acquire(&decompress_shared_budget->threads, requested);
 }
 
 static void decompress_budget_release(unsigned int nr_threads)
 {
-	int err;
-
-	if (!nr_threads)
+	if (!nr_threads || !decompress_shared_budget)
 		return;
-	if (decompress_shared_budget) {
-		shared_budget_release(&decompress_shared_budget->threads, nr_threads);
-		return;
-	}
-
-	err = pthread_mutex_lock(&decompress_budget_lock);
-	if (err) {
-		pr_err("Unable to lock decompression CPU budget for release: %s\n", strerror(err));
-		BUG();
-	}
-	decompress_budget_available += nr_threads;
-	pthread_cond_broadcast(&decompress_budget_cond);
-	pthread_mutex_unlock(&decompress_budget_lock);
+	shared_budget_release(&decompress_shared_budget->threads, nr_threads);
 }
 
 static void decompress_budget_trim_reservation(unsigned int *threads_held, unsigned int threads_to_keep)
@@ -268,66 +200,23 @@ static void decompress_budget_trim_reservation(unsigned int *threads_held, unsig
 
 void decompression_batch_acquire(void)
 {
-	int err;
-
-	if (decompress_shared_budget) {
-		shared_budget_acquire(&decompress_shared_budget->batches, 1);
+	if (!decompress_shared_budget)
 		return;
-	}
-	err = pthread_mutex_lock(&decompress_batch_lock);
-	if (err) {
-		pr_err("Unable to lock decompression batch budget: %s\n", strerror(err));
-		BUG();
-	}
-	while (!decompress_batches_available) {
-		err = pthread_cond_wait(&decompress_batch_cond, &decompress_batch_lock);
-		if (err) {
-			pr_err("Unable to wait for decompression batch budget: %s\n", strerror(err));
-			BUG();
-		}
-	}
-	decompress_batches_available--;
-	pthread_mutex_unlock(&decompress_batch_lock);
+	shared_budget_acquire(&decompress_shared_budget->batches, 1);
 }
 
 bool decompression_batch_try_acquire(void)
 {
-	bool acquired = false;
-	int err;
-
-	if (decompress_shared_budget)
-		return shared_budget_try_acquire(&decompress_shared_budget->batches);
-
-	err = pthread_mutex_lock(&decompress_batch_lock);
-	if (err) {
-		pr_warn("Unable to lock compressed-page batch budget: %s\n", strerror(err));
-		return false;
-	}
-	if (decompress_batches_available) {
-		decompress_batches_available--;
-		acquired = true;
-	}
-	pthread_mutex_unlock(&decompress_batch_lock);
-
-	return acquired;
+	if (!decompress_shared_budget)
+		return true;
+	return shared_budget_try_acquire(&decompress_shared_budget->batches);
 }
 
 void decompression_batch_release(void)
 {
-	int err;
-
-	if (decompress_shared_budget) {
-		shared_budget_release(&decompress_shared_budget->batches, 1);
+	if (!decompress_shared_budget)
 		return;
-	}
-	err = pthread_mutex_lock(&decompress_batch_lock);
-	if (err) {
-		pr_err("Unable to lock decompression batch budget for release: %s\n", strerror(err));
-		BUG();
-	}
-	decompress_batches_available++;
-	pthread_cond_signal(&decompress_batch_cond);
-	pthread_mutex_unlock(&decompress_batch_lock);
+	shared_budget_release(&decompress_shared_budget->batches, 1);
 }
 
 static int decompress_data_nolog(const char *compressed_data,
