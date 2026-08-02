@@ -119,6 +119,37 @@ struct decompression_shared_budget {
 	unsigned int thread_capacity;
 };
 
+struct encoded_prefetch {
+	char *buffer;
+	size_t count;
+	size_t done;
+	off_t offset;
+	int fd;
+	int saved_errno;
+	bool complete;
+};
+
+/*
+ * Reusable storage for encoded reads. The top-level page reader owns one
+ * context for its whole parent chain. Buffers are reused during one active
+ * read and then released; decompression workers remain reusable across reads.
+ */
+struct encoded_read_ctx {
+	struct decompress_job *jobs;
+	size_t jobs_cap;
+	char *compressed;
+	size_t compressed_cap;
+	char *prefetch_buffer;
+	size_t prefetch_cap;
+	const void *prefetched_token;
+	struct encoded_prefetch prefetch;
+	char *scratch;
+	size_t scratch_cap;
+	struct decompression_pool *pool;
+	bool batch_acquired;
+	bool prefetch_batch_acquired;
+};
+
 #ifdef CONFIG_LZ4
 
 int compress_data(const char *input_data, size_t input_size,
@@ -191,6 +222,18 @@ bool compressed_restore_has_parallel_capacity(unsigned int requested_threads);
 /* Apply the requested auto/explicit setting to the detected CPU capacity. */
 unsigned int decompression_thread_limit(unsigned int requested,
 					unsigned int available_cpus);
+
+void encoded_read_ctx_begin_work(struct encoded_read_ctx *ctx);
+void encoded_read_ctx_end_work(struct encoded_read_ctx *ctx);
+void encoded_read_ctx_fini(struct encoded_read_ctx *ctx);
+void encoded_prefetch_read(void *arg);
+void encoded_prefetch_disable(struct encoded_read_ctx *ctx);
+bool encoded_prefetch_prepare(struct encoded_read_ctx *ctx, int fd,
+			      off_t offset, size_t count);
+void encoded_prefetch_publish(struct encoded_read_ctx *ctx,
+			      const void *token);
+int encoded_prefetch_take(struct encoded_read_ctx *ctx,
+			  const void *token, size_t expected_count);
 
 #else /* !CONFIG_LZ4 */
 
@@ -266,6 +309,43 @@ static inline bool compressed_restore_has_parallel_capacity(
 	unsigned int requested_threads)
 {
 	return false;
+}
+
+static inline void encoded_read_ctx_begin_work(struct encoded_read_ctx *ctx)
+{
+}
+
+static inline void encoded_read_ctx_end_work(struct encoded_read_ctx *ctx)
+{
+}
+
+static inline void encoded_read_ctx_fini(struct encoded_read_ctx *ctx)
+{
+}
+
+static inline void encoded_prefetch_read(void *arg)
+{
+}
+
+static inline void encoded_prefetch_disable(struct encoded_read_ctx *ctx)
+{
+}
+
+static inline bool encoded_prefetch_prepare(struct encoded_read_ctx *ctx,
+					    int fd, off_t offset, size_t count)
+{
+	return false;
+}
+
+static inline void encoded_prefetch_publish(struct encoded_read_ctx *ctx,
+					    const void *token)
+{
+}
+
+static inline int encoded_prefetch_take(struct encoded_read_ctx *ctx,
+					const void *token, size_t expected_count)
+{
+	return 0;
 }
 
 #endif /* CONFIG_LZ4 */

@@ -987,3 +987,159 @@ int decompress_jobs_parallel_pool(struct decompression_pool **poolp,
 		poolp, jobs, nr_jobs, total_uncompressed, requested_threads,
 		NULL, NULL);
 }
+
+void encoded_read_ctx_begin_work(struct encoded_read_ctx *ctx)
+{
+	BUG_ON(ctx->batch_acquired);
+	decompression_batch_acquire();
+	ctx->batch_acquired = true;
+}
+
+void encoded_read_ctx_end_work(struct encoded_read_ctx *ctx)
+{
+	if (!ctx || !ctx->batch_acquired)
+		return;
+
+	xfree(ctx->scratch);
+	ctx->scratch = NULL;
+	ctx->scratch_cap = 0;
+	xfree(ctx->compressed);
+	ctx->compressed = NULL;
+	ctx->compressed_cap = 0;
+	xfree(ctx->prefetch_buffer);
+	ctx->prefetch_buffer = NULL;
+	ctx->prefetch_cap = 0;
+	ctx->prefetched_token = NULL;
+	memset(&ctx->prefetch, 0, sizeof(ctx->prefetch));
+	xfree(ctx->jobs);
+	ctx->jobs = NULL;
+	ctx->jobs_cap = 0;
+	if (ctx->prefetch_batch_acquired) {
+		ctx->prefetch_batch_acquired = false;
+		decompression_batch_release();
+	}
+	ctx->batch_acquired = false;
+	decompression_batch_release();
+}
+
+void encoded_read_ctx_fini(struct encoded_read_ctx *ctx)
+{
+	if (!ctx)
+		return;
+	encoded_read_ctx_end_work(ctx);
+	decompression_pool_destroy(ctx->pool);
+}
+
+void encoded_prefetch_read(void *arg)
+{
+	struct encoded_prefetch *prefetch = arg;
+
+	while (prefetch->done < prefetch->count) {
+		ssize_t ret;
+
+		ret = pread(prefetch->fd, prefetch->buffer + prefetch->done,
+			    prefetch->count - prefetch->done,
+			    prefetch->offset + (off_t)prefetch->done);
+		if (ret < 0) {
+			if (errno == EINTR)
+				continue;
+			prefetch->saved_errno = errno;
+			break;
+		}
+		if (!ret)
+			break;
+		prefetch->done += ret;
+	}
+	prefetch->complete = true;
+}
+
+void encoded_prefetch_disable(struct encoded_read_ctx *ctx)
+{
+	ctx->prefetched_token = NULL;
+	memset(&ctx->prefetch, 0, sizeof(ctx->prefetch));
+	xfree(ctx->prefetch_buffer);
+	ctx->prefetch_buffer = NULL;
+	ctx->prefetch_cap = 0;
+	if (ctx->prefetch_batch_acquired) {
+		ctx->prefetch_batch_acquired = false;
+		decompression_batch_release();
+	}
+}
+
+bool encoded_prefetch_prepare(struct encoded_read_ctx *ctx, int fd,
+			      off_t offset, size_t count)
+{
+	void *new_buffer;
+
+	BUG_ON(ctx->prefetched_token || ctx->prefetch.complete || !count);
+	if (!ctx->prefetch_batch_acquired) {
+		if (!decompression_batch_try_acquire())
+			return false;
+		ctx->prefetch_batch_acquired = true;
+	}
+	if (ctx->prefetch_cap < count) {
+		new_buffer = xrealloc(ctx->prefetch_buffer, count);
+		if (!new_buffer) {
+			encoded_prefetch_disable(ctx);
+			return false;
+		}
+		ctx->prefetch_buffer = new_buffer;
+		ctx->prefetch_cap = count;
+	}
+
+	ctx->prefetch.buffer = ctx->prefetch_buffer;
+	ctx->prefetch.count = count;
+	ctx->prefetch.done = 0;
+	ctx->prefetch.offset = offset;
+	ctx->prefetch.fd = fd;
+	ctx->prefetch.saved_errno = 0;
+	return true;
+}
+
+void encoded_prefetch_publish(struct encoded_read_ctx *ctx,
+			      const void *token)
+{
+	void *buffer;
+	size_t capacity;
+
+	BUG_ON(!ctx->prefetch.complete);
+	buffer = ctx->compressed;
+	capacity = ctx->compressed_cap;
+	ctx->compressed = ctx->prefetch_buffer;
+	ctx->compressed_cap = ctx->prefetch_cap;
+	ctx->prefetch_buffer = buffer;
+	ctx->prefetch_cap = capacity;
+	ctx->prefetched_token = token;
+}
+
+int encoded_prefetch_take(struct encoded_read_ctx *ctx,
+			  const void *token, size_t expected_count)
+{
+	if (!ctx->prefetched_token)
+		return 0;
+	if (ctx->prefetched_token != token) {
+		pr_err("Encoded prefetch does not match the next request\n");
+		return -1;
+	}
+	ctx->prefetched_token = NULL;
+	ctx->prefetch.complete = false;
+	if (ctx->prefetch.count != expected_count) {
+		pr_err("Encoded prefetch size changed before use\n");
+		return -1;
+	}
+
+	if (ctx->prefetch.saved_errno) {
+		errno = ctx->prefetch.saved_errno;
+		pr_perror("Can't read %zu encoded bytes at offset %lld",
+			  ctx->prefetch.count, (long long)ctx->prefetch.offset);
+		return -1;
+	}
+	if (ctx->prefetch.done != ctx->prefetch.count) {
+		pr_err("Short encoded read %zu/%zu at offset %lld\n",
+		       ctx->prefetch.done, ctx->prefetch.count,
+		       (long long)ctx->prefetch.offset);
+		return -1;
+	}
+
+	return 1;
+}

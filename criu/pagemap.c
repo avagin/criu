@@ -81,77 +81,6 @@ struct page_read_iov {
 	struct list_head l;
 };
 
-struct encoded_prefetch {
-	char *buffer;
-	size_t count;
-	size_t done;
-	off_t offset;
-	int fd;
-	int saved_errno;
-	bool complete;
-};
-
-/*
- * Reusable storage for encoded reads. The top-level page reader owns one
- * context for its whole parent chain. Buffers are reused during one active
- * read and then released; decompression workers remain reusable across reads.
- */
-struct encoded_read_ctx {
-	struct decompress_job *jobs;
-	size_t jobs_cap;
-	char *compressed;
-	size_t compressed_cap;
-	char *prefetch_buffer;
-	size_t prefetch_cap;
-	struct page_read_iov *prefetched_piov;
-	struct encoded_prefetch prefetch;
-	char *scratch;
-	size_t scratch_cap;
-	struct decompression_pool *pool;
-	bool batch_acquired;
-	bool prefetch_batch_acquired;
-};
-
-/* Reserve one restore-wide encoded working set for this active read. */
-static void encoded_read_ctx_begin_work(struct encoded_read_ctx *ctx)
-{
-	BUG_ON(ctx->batch_acquired);
-	decompression_batch_acquire();
-	ctx->batch_acquired = true;
-}
-
-/*
- * Return the batch slot only after its process-local buffers are gone. Worker
- * threads remain reusable, but idle page readers no longer pin a 32 MiB slot
- * or retain memory outside the restore-wide bound.
- */
-static void encoded_read_ctx_end_work(struct encoded_read_ctx *ctx)
-{
-	if (!ctx || !ctx->batch_acquired)
-		return;
-
-	xfree(ctx->scratch);
-	ctx->scratch = NULL;
-	ctx->scratch_cap = 0;
-	xfree(ctx->compressed);
-	ctx->compressed = NULL;
-	ctx->compressed_cap = 0;
-	xfree(ctx->prefetch_buffer);
-	ctx->prefetch_buffer = NULL;
-	ctx->prefetch_cap = 0;
-	ctx->prefetched_piov = NULL;
-	memset(&ctx->prefetch, 0, sizeof(ctx->prefetch));
-	xfree(ctx->jobs);
-	ctx->jobs = NULL;
-	ctx->jobs_cap = 0;
-	if (ctx->prefetch_batch_acquired) {
-		ctx->prefetch_batch_acquired = false;
-		decompression_batch_release();
-	}
-	ctx->batch_acquired = false;
-	decompression_batch_release();
-}
-
 static inline bool can_extend_bunch(struct iovec *bunch, unsigned long off, unsigned long len)
 {
 	return /* The next region is the continuation of the existing */
@@ -1280,121 +1209,6 @@ static int pread_full(int fd, void *buf, size_t count, off_t offset)
 	return 0;
 }
 
-/* Read without logging: an error is reported only if this payload is used. */
-static void encoded_prefetch_read(void *arg)
-{
-	struct encoded_prefetch *prefetch = arg;
-
-	while (prefetch->done < prefetch->count) {
-		ssize_t ret;
-
-		ret = pread(prefetch->fd, prefetch->buffer + prefetch->done,
-			    prefetch->count - prefetch->done,
-			    prefetch->offset + (off_t)prefetch->done);
-		if (ret < 0) {
-			if (errno == EINTR)
-				continue;
-			prefetch->saved_errno = errno;
-			break;
-		}
-		if (!ret)
-			break;
-		prefetch->done += ret;
-	}
-	prefetch->complete = true;
-}
-
-static void encoded_prefetch_disable(struct encoded_read_ctx *ctx)
-{
-	ctx->prefetched_piov = NULL;
-	memset(&ctx->prefetch, 0, sizeof(ctx->prefetch));
-	xfree(ctx->prefetch_buffer);
-	ctx->prefetch_buffer = NULL;
-	ctx->prefetch_cap = 0;
-	if (ctx->prefetch_batch_acquired) {
-		ctx->prefetch_batch_acquired = false;
-		decompression_batch_release();
-	}
-}
-
-static bool encoded_prefetch_prepare(struct encoded_read_ctx *ctx, int fd,
-				     off_t offset, size_t count)
-{
-	void *new_buffer;
-
-	BUG_ON(ctx->prefetched_piov || ctx->prefetch.complete || !count);
-	if (!ctx->prefetch_batch_acquired) {
-		if (!decompression_batch_try_acquire())
-			return false;
-		ctx->prefetch_batch_acquired = true;
-	}
-	if (ctx->prefetch_cap < count) {
-		new_buffer = xrealloc(ctx->prefetch_buffer, count);
-		if (!new_buffer) {
-			encoded_prefetch_disable(ctx);
-			return false;
-		}
-		ctx->prefetch_buffer = new_buffer;
-		ctx->prefetch_cap = count;
-	}
-
-	ctx->prefetch.buffer = ctx->prefetch_buffer;
-	ctx->prefetch.count = count;
-	ctx->prefetch.done = 0;
-	ctx->prefetch.offset = offset;
-	ctx->prefetch.fd = fd;
-	ctx->prefetch.saved_errno = 0;
-	return true;
-}
-
-static void encoded_prefetch_publish(struct encoded_read_ctx *ctx,
-				     struct page_read_iov *piov)
-{
-	void *buffer;
-	size_t capacity;
-
-	BUG_ON(!ctx->prefetch.complete);
-	buffer = ctx->compressed;
-	capacity = ctx->compressed_cap;
-	ctx->compressed = ctx->prefetch_buffer;
-	ctx->compressed_cap = ctx->prefetch_cap;
-	ctx->prefetch_buffer = buffer;
-	ctx->prefetch_cap = capacity;
-	ctx->prefetched_piov = piov;
-}
-
-static int encoded_prefetch_take(struct encoded_read_ctx *ctx,
-				 struct page_read_iov *piov)
-{
-	if (!ctx->prefetched_piov)
-		return 0;
-	if (ctx->prefetched_piov != piov) {
-		pr_err("Encoded prefetch does not match the next request\n");
-		return -1;
-	}
-	ctx->prefetched_piov = NULL;
-	ctx->prefetch.complete = false;
-	if (ctx->prefetch.count != piov->r_layout.total_bytes) {
-		pr_err("Encoded prefetch size changed before use\n");
-		return -1;
-	}
-
-	if (ctx->prefetch.saved_errno) {
-		errno = ctx->prefetch.saved_errno;
-		pr_perror("Can't read %zu encoded bytes at offset %lld",
-			  ctx->prefetch.count, (long long)ctx->prefetch.offset);
-		return -1;
-	}
-	if (ctx->prefetch.done != ctx->prefetch.count) {
-		pr_err("Short encoded read %zu/%zu at offset %lld\n",
-		       ctx->prefetch.done, ctx->prefetch.count,
-		       (long long)ctx->prefetch.offset);
-		return -1;
-	}
-
-	return 1;
-}
-
 /*
  * Advance compressed offset tracking by @nr pages without
  * reading any data. Used when enqueuing async compressed reads.
@@ -2235,14 +2049,6 @@ static int transfer_async_block(const struct page_read_iov *piov,
 	return 0;
 }
 
-static void encoded_read_ctx_fini(struct encoded_read_ctx *ctx)
-{
-	if (!ctx)
-		return;
-	encoded_read_ctx_end_work(ctx);
-	decompression_pool_destroy(ctx->pool);
-}
-
 static bool page_read_chain_has_encoded_async(struct page_read *pr)
 {
 	struct page_read_iov *piov;
@@ -2581,7 +2387,7 @@ static int process_async_reads_ctx(struct page_read *pr,
 			if (!encoded_ctx->batch_acquired)
 				encoded_read_ctx_begin_work(encoded_ctx);
 
-			payload_ready = encoded_prefetch_take(encoded_ctx, piov);
+			payload_ready = encoded_prefetch_take(encoded_ctx, piov, piov->r_layout.total_bytes);
 			if (payload_ready < 0) {
 				ret = -1;
 				goto err;
