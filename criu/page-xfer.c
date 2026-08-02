@@ -28,6 +28,7 @@
 #include "rst_info.h"
 #include "stats.h"
 #include "tls.h"
+#include "pagemap-region.h"
 #include "compression.h"
 
 static int page_server_sk = -1;
@@ -392,7 +393,7 @@ static int write_pagemap_loc_compressed(struct page_xfer *xfer, struct iovec *io
 				pr_err("Invalid region_pages %u\n", region_pages);
 				return -1;
 			}
-			total_blocks = (nr_pages + region_pages - 1) / region_pages;
+			total_blocks = region_nr_blocks(nr_pages, region_pages);
 		} else {
 			total_blocks = nr_pages;
 		}
@@ -2150,7 +2151,7 @@ static int decode_page_pipe(struct page_read *pr, struct page_pipe *pp)
 					 * chunk falls back to synchronous partial decompression.
 					 */
 					if (region_pages)
-						batch_pages -= batch_pages % region_pages;
+						batch_pages = region_align_down(batch_pages, region_pages);
 					if (!batch_pages) {
 						pr_err("Compression region %u exceeds page-server decode buffer\n",
 						       region_pages);
