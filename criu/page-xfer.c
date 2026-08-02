@@ -402,13 +402,13 @@ static int write_pagemap_loc_compressed(struct page_xfer *xfer, struct iovec *io
 		xfer->pending_pe.vaddr = encode_pointer(iov->iov_base);
 		xfer->pending_pe.nr_pages = nr_pages;
 		xfer->pending_pe.flags = flags;
-		xfer->pending_pe.region_pages = region_pages;
-		xfer->pending_pe.total_blocks = total_blocks;
-		xfer->pending_pe.compressed_size = xzalloc(total_blocks * sizeof(uint32_t));
-		if (!xfer->pending_pe.compressed_size)
+		xfer->pending_pe.r_layout.pages_per_reg = region_pages;
+		xfer->pending_pe.r_layout.nr_blocks = total_blocks;
+		xfer->pending_pe.r_layout.sizes = xzalloc(total_blocks * sizeof(uint32_t));
+		if (!xfer->pending_pe.r_layout.sizes)
 			return -1;
 		xfer->pending_pe.n_compressed = 0;
-		xfer->pending_pe.total_compressed_size = 0;
+		xfer->pending_pe.r_layout.total_bytes = 0;
 		xfer->pending_pe.payload_started = false;
 		return 0;
 	}
@@ -557,10 +557,10 @@ static bool region_is_all_zero(const char *buf, unsigned int nr_pages)
 
 static bool pending_entry_is_all_raw(const struct page_xfer *xfer)
 {
-	unsigned int region_pages = xfer->pending_pe.region_pages;
+	unsigned int region_pages = xfer->pending_pe.r_layout.pages_per_reg;
 	size_t i;
 
-	for (i = 0; i < xfer->pending_pe.total_blocks; i++) {
+	for (i = 0; i < xfer->pending_pe.r_layout.nr_blocks; i++) {
 		size_t block_bytes = PAGE_SIZE;
 
 		if (region_pages) {
@@ -571,7 +571,7 @@ static bool pending_entry_is_all_raw(const struct page_xfer *xfer)
 			block_bytes = (size_t)block_pages * PAGE_SIZE;
 		}
 
-		if (xfer->pending_pe.compressed_size[i] != block_bytes)
+		if (xfer->pending_pe.r_layout.sizes[i] != block_bytes)
 			return false;
 	}
 
@@ -582,7 +582,7 @@ static int write_pages_loc_compressed(struct page_xfer *xfer, int p, unsigned lo
 {
 	unsigned long off = 0;
 	int acceleration = LZ4_DEFAULT_ACCELERATION;
-	unsigned int region_pages = xfer->pending_pe.region_pages;
+	unsigned int region_pages = xfer->pending_pe.r_layout.pages_per_reg;
 
 	if (len / PAGE_SIZE > xfer->pending_pe.nr_pages) {
 		pr_err("write_pages len %lu exceeds pending pagemap (%lu pages)\n", len, xfer->pending_pe.nr_pages);
@@ -613,12 +613,12 @@ static int write_pages_loc_compressed(struct page_xfer *xfer, int p, unsigned lo
 			idx = xfer->pending_pe.n_compressed++;
 
 			if (page_is_all_zero(buf)) {
-				xfer->pending_pe.compressed_size[idx] = 0;
+				xfer->pending_pe.r_layout.sizes[idx] = 0;
 				continue;
 			}
 			if (xfer->force_raw) {
-				xfer->pending_pe.compressed_size[idx] = PAGE_SIZE;
-				xfer->pending_pe.total_compressed_size += PAGE_SIZE;
+				xfer->pending_pe.r_layout.sizes[idx] = PAGE_SIZE;
+				xfer->pending_pe.r_layout.total_bytes += PAGE_SIZE;
 				if (write_compressed_payload(xfer, buf, PAGE_SIZE, true))
 					return -1;
 				continue;
@@ -629,13 +629,13 @@ static int write_pages_loc_compressed(struct page_xfer *xfer, int p, unsigned lo
 				return -1;
 
 			if (cs >= PAGE_COMPRESSION_THRESHOLD) {
-				xfer->pending_pe.compressed_size[idx] = PAGE_SIZE;
-				xfer->pending_pe.total_compressed_size += PAGE_SIZE;
+				xfer->pending_pe.r_layout.sizes[idx] = PAGE_SIZE;
+				xfer->pending_pe.r_layout.total_bytes += PAGE_SIZE;
 				if (write_compressed_payload(xfer, buf, PAGE_SIZE, true))
 					return -1;
 			} else {
-				xfer->pending_pe.compressed_size[idx] = cs;
-				xfer->pending_pe.total_compressed_size += cs;
+				xfer->pending_pe.r_layout.sizes[idx] = cs;
+				xfer->pending_pe.r_layout.total_bytes += cs;
 				if (write_compressed_payload(xfer, compressed_buf, cs, false))
 					return -1;
 			}
@@ -692,8 +692,8 @@ static int write_pages_loc_compressed(struct page_xfer *xfer, int p, unsigned lo
 					goto region_out;
 			}
 
-			xfer->pending_pe.compressed_size[idx] = cs;
-			xfer->pending_pe.total_compressed_size += cs;
+			xfer->pending_pe.r_layout.sizes[idx] = cs;
+			xfer->pending_pe.r_layout.total_bytes += cs;
 			if (cs > 0 && write_compressed_payload(xfer, payload, cs, (size_t)cs == region_bytes))
 				goto region_out;
 		}
@@ -707,7 +707,7 @@ region_out:
 	}
 
 	/* When all blocks are compressed, flush the pagemap entry */
-	if (xfer->pending_pe.n_compressed == xfer->pending_pe.total_blocks) {
+	if (xfer->pending_pe.n_compressed == xfer->pending_pe.r_layout.nr_blocks) {
 		PagemapEntry pe = PAGEMAP_ENTRY__INIT;
 		PagemapRegions regions = PAGEMAP_REGIONS__INIT;
 		bool all_raw = pending_entry_is_all_raw(xfer);
@@ -723,9 +723,9 @@ region_out:
 		 * compression metadata lets restore take the uncompressed fast path.
 		 */
 		if (!all_raw) {
-			regions.region_sizes = xfer->pending_pe.compressed_size;
-			regions.n_region_sizes = xfer->pending_pe.total_blocks;
-			regions.total_payload_size = xfer->pending_pe.total_compressed_size;
+			regions.region_sizes = xfer->pending_pe.r_layout.sizes;
+			regions.n_region_sizes = xfer->pending_pe.r_layout.nr_blocks;
+			regions.total_payload_size = xfer->pending_pe.r_layout.total_bytes;
 			regions.pages_per_region = region_pages ? region_pages : 1;
 			pe.regions = &regions;
 		}
@@ -733,8 +733,8 @@ region_out:
 		if (pb_write_one(xfer->pmi, &pe, PB_PAGEMAP) < 0)
 			return -1;
 
-		xfree(xfer->pending_pe.compressed_size);
-		xfer->pending_pe.compressed_size = NULL;
+		xfree(xfer->pending_pe.r_layout.sizes);
+		xfer->pending_pe.r_layout.sizes = NULL;
 		xfer->pending_pe.payload_started = false;
 	}
 
@@ -868,8 +868,8 @@ static void close_page_xfer(struct page_xfer *xfer)
 		xfree(xfer->parent);
 		xfer->parent = NULL;
 	}
-	xfree(xfer->pending_pe.compressed_size);
-	xfer->pending_pe.compressed_size = NULL;
+	xfree(xfer->pending_pe.r_layout.sizes);
+	xfer->pending_pe.r_layout.sizes = NULL;
 	close_image(xfer->pi);
 	close_image(xfer->pmi);
 }
@@ -933,7 +933,7 @@ static int open_page_local_xfer(struct page_xfer *xfer, int fd_type, unsigned lo
 	}
 
 out:
-	xfer->pending_pe.compressed_size = NULL;
+	xfer->pending_pe.r_layout.sizes = NULL;
 	xfer->pending_pe.payload_started = false;
 	xfer->pages_image_offset = 0;
 	xfer->force_raw = false;

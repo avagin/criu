@@ -58,22 +58,13 @@ struct page_read_iov {
 	unsigned int nr;  /* their number */
 	enum restore_vma_io_storage storage;
 
-	size_t n_compressed_size; /* Number of compressed blocks (pages or regions) */
-	uint32_t *compressed_size; /* Per-block compressed sizes */
-	uint64_t total_compressed_size; /* Sum of all compressed sizes */
+	struct page_region_layout r_layout;
 	unsigned long n_pages; /* Total uncompressed pages in this batch (cap input) */
 	/*
-	 * Region size in pages when this iov holds region-compressed data.
-	 * 0 means per-page compression (or no compression).
-	 * Iovs with different region_pages cannot be coalesced into one
-	 * async batch.
-	 */
-	unsigned int region_pages;
-	/*
-	 * Per-block page count when region_pages > 0. Most blocks have
-	 * exactly region_pages pages; the last block of any pagemap
+	 * Per-block page count when r_layout.pages_per_reg > 0. Most blocks have
+	 * exactly r_layout.pages_per_reg pages; the last block of any pagemap
 	 * entry that spans this piov may be shorter if the entry's
-	 * nr_pages is not a multiple of region_pages.
+	 * nr_pages is not a multiple of r_layout.pages_per_reg.
 	 */
 	uint16_t *block_pages;
 
@@ -580,7 +571,7 @@ static int piov_add_compressed_blocks(struct page_read_iov *piov,
 				      enum restore_vma_io_storage storage)
 {
 	unsigned int region_pages = pagemap_region_pages(pr->pe);
-	size_t first = piov->n_compressed_size;
+	size_t first = piov->r_layout.nr_blocks;
 	unsigned long n_blocks;
 	uint16_t *new_bp = NULL;
 	uint32_t *new_cs;
@@ -625,10 +616,10 @@ static int piov_add_compressed_blocks(struct page_read_iov *piov,
 	}
 
 	new_n = first + n_blocks;
-	new_cs = xrealloc(piov->compressed_size, new_n * sizeof(*piov->compressed_size));
+	new_cs = xrealloc(piov->r_layout.sizes, new_n * sizeof(*piov->r_layout.sizes));
 	if (!new_cs)
 		return -1;
-	piov->compressed_size = new_cs;
+	piov->r_layout.sizes = new_cs;
 
 	if (region_pages) {
 		new_bp = xrealloc(piov->block_pages, new_n * sizeof(*piov->block_pages));
@@ -653,15 +644,15 @@ static int piov_add_compressed_blocks(struct page_read_iov *piov,
 			return -1;
 		}
 
-		piov->compressed_size[first + i] = cs;
+		piov->r_layout.sizes[first + i] = cs;
 		if (region_pages)
 			piov->block_pages[first + i] = (uint16_t)block_pages;
 		added += cs;
 	}
 
-	piov->total_compressed_size += added;
-	piov->n_compressed_size = new_n;
-	piov->region_pages = region_pages;
+	piov->r_layout.total_bytes += added;
+	piov->r_layout.nr_blocks = new_n;
+	piov->r_layout.pages_per_reg = region_pages;
 	piov->end += added;
 
 	return 0;
@@ -728,7 +719,7 @@ static int enqueue_async_iov(struct page_read *pr, void *buf, unsigned long len,
 
 err:
 	xfree(pr_iov->block_pages);
-	xfree(pr_iov->compressed_size);
+	xfree(pr_iov->r_layout.sizes);
 	xfree(iov);
 	xfree(pr_iov);
 	return -1;
@@ -758,18 +749,18 @@ int pagemap_render_iovec(struct list_head *from, struct task_restore_args *ta)
 		piov->rio_cs_off = 0;
 		piov->rio_bp_off = 0;
 
-		if (!piov->n_compressed_size)
+		if (!piov->r_layout.nr_blocks)
 			continue;
 
-		sz = piov->n_compressed_size * sizeof(uint32_t);
+		sz = piov->r_layout.nr_blocks * sizeof(uint32_t);
 		piov->rio_cs_off = rst_mem_align_cpos(RM_PRIVATE);
 		p = rst_mem_alloc(sz, RM_PRIVATE);
 		if (!p)
 			return -1;
-		memcpy(p, piov->compressed_size, sz);
+		memcpy(p, piov->r_layout.sizes, sz);
 
-		if (piov->region_pages) {
-			sz = piov->n_compressed_size * sizeof(uint16_t);
+		if (piov->r_layout.pages_per_reg) {
+			sz = piov->r_layout.nr_blocks * sizeof(uint16_t);
 			piov->rio_bp_off = rst_mem_align_cpos(RM_PRIVATE);
 			p = rst_mem_alloc(sz, RM_PRIVATE);
 			if (!p)
@@ -795,27 +786,27 @@ int pagemap_render_iovec(struct list_head *from, struct task_restore_args *ta)
 		rio->storage = piov->storage;
 
 		/* Ordinary reads do not carry compressed block metadata. */
-		if (!piov->n_compressed_size) {
-			rio->compressed_size = NULL;
-			rio->n_compressed_size = 0;
-			rio->total_compressed_size = 0;
-			rio->region_pages = 0;
+		if (!piov->r_layout.nr_blocks) {
+			rio->r_layout.sizes = NULL;
+			rio->r_layout.nr_blocks = 0;
+			rio->r_layout.total_bytes = 0;
+			rio->r_layout.pages_per_reg = 0;
 			rio->n_pages = 0;
 			rio->block_pages = NULL;
 		} else {
 			/* Use the block metadata copied in pass 1. */
-			rio->compressed_size = (uint32_t *)piov->rio_cs_off;
-			rio->n_compressed_size = piov->n_compressed_size;
-			rio->total_compressed_size = piov->total_compressed_size;
-			rio->region_pages = piov->region_pages;
+			rio->r_layout.sizes = (uint32_t *)piov->rio_cs_off;
+			rio->r_layout.nr_blocks = piov->r_layout.nr_blocks;
+			rio->r_layout.total_bytes = piov->r_layout.total_bytes;
+			rio->r_layout.pages_per_reg = piov->r_layout.pages_per_reg;
 
 			/* The final region may contain fewer pages. */
-			if (piov->region_pages) {
+			if (piov->r_layout.pages_per_reg) {
 				uint64_t pages_total = 0;
 				size_t i;
 
 				rio->block_pages = (uint16_t *)piov->rio_bp_off;
-				for (i = 0; i < piov->n_compressed_size; i++)
+				for (i = 0; i < piov->r_layout.nr_blocks; i++)
 					pages_total += piov->block_pages[i];
 
 				if (pages_total > INT_MAX) {
@@ -828,12 +819,12 @@ int pagemap_render_iovec(struct list_head *from, struct task_restore_args *ta)
 				/* Per-page mode uses one page per block. */
 				rio->block_pages = NULL;
 
-				if (piov->n_compressed_size > (size_t)INT_MAX) {
+				if (piov->r_layout.nr_blocks > (size_t)INT_MAX) {
 					pr_err("restore_vma_io exceeds int page count limit: %zu\n",
-					       piov->n_compressed_size);
+					       piov->r_layout.nr_blocks);
 					return -1;
 				}
-				rio->n_pages = piov->n_compressed_size;
+				rio->n_pages = piov->r_layout.nr_blocks;
 			}
 		}
 
@@ -1002,7 +993,7 @@ static int pagemap_enqueue_iovec_one(struct page_read *pr, void *buf,
 	 * Don't merge piovs with different region modes: each piov is
 	 * decompressed with a single algorithm.
 	 */
-	if (cur_async->region_pages != new_region_pages)
+	if (cur_async->r_layout.pages_per_reg != new_region_pages)
 		return enqueue_async_iov(pr, buf, len, to, storage);
 
 	/*
@@ -1116,9 +1107,9 @@ int pagemap_enqueue_iovec(struct page_read *pr, void *buf, unsigned long len, st
 	if (!list_empty(to)) {
 		original_tail = list_entry(to->prev, struct page_read_iov, l);
 		original_end = original_tail->end;
-		original_n_compressed_size = original_tail->n_compressed_size;
+		original_n_compressed_size = original_tail->r_layout.nr_blocks;
 		original_total_compressed_size =
-			original_tail->total_compressed_size;
+			original_tail->r_layout.total_bytes;
 		original_n_pages = original_tail->n_pages;
 		original_nr = original_tail->nr;
 		original_last_iov_len = original_tail->to[original_nr - 1].iov_len;
@@ -1181,16 +1172,16 @@ int pagemap_enqueue_iovec(struct page_read *pr, void *buf, unsigned long len, st
 				list_entry(to->prev, struct page_read_iov, l);
 
 			list_del(&piov->l);
-			xfree(piov->compressed_size);
+			xfree(piov->r_layout.sizes);
 			xfree(piov->block_pages);
 			xfree(piov->to);
 			xfree(piov);
 		}
 		if (original_tail) {
 			original_tail->end = original_end;
-			original_tail->n_compressed_size =
+			original_tail->r_layout.nr_blocks =
 				original_n_compressed_size;
-			original_tail->total_compressed_size =
+			original_tail->r_layout.total_bytes =
 				original_total_compressed_size;
 			original_tail->n_pages = original_n_pages;
 			original_tail->nr = original_nr;
@@ -1383,7 +1374,7 @@ static int encoded_prefetch_take(struct encoded_read_ctx *ctx,
 	}
 	ctx->prefetched_piov = NULL;
 	ctx->prefetch.complete = false;
-	if (ctx->prefetch.count != piov->total_compressed_size) {
+	if (ctx->prefetch.count != piov->r_layout.total_bytes) {
 		pr_err("Encoded prefetch size changed before use\n");
 		return -1;
 	}
@@ -2114,7 +2105,7 @@ static void drain_async_queue(struct page_read *pr)
 
 	list_for_each_entry_safe(piov, n, &pr->async, l) {
 		list_del(&piov->l);
-		xfree(piov->compressed_size);
+		xfree(piov->r_layout.sizes);
 		xfree(piov->block_pages);
 		xfree(piov->to);
 		xfree(piov);
@@ -2140,24 +2131,24 @@ static int validate_direct_compressed_iov(const struct page_read_iov *piov)
 	if (piov->storage != VMA_IO_PACKED_RAW &&
 	    piov->storage != VMA_IO_ZERO)
 		return -1;
-	if (!piov->n_compressed_size || !piov->compressed_size) {
+	if (!piov->r_layout.nr_blocks || !piov->r_layout.sizes) {
 		pr_err("Direct compressed I/O job has no block metadata\n");
 		return -1;
 	}
-	if (piov->region_pages && !piov->block_pages) {
+	if (piov->r_layout.pages_per_reg && !piov->block_pages) {
 		pr_err("Direct region I/O job has no block-page metadata\n");
 		return -1;
 	}
 
 	/* Sum and validate each block without overflowing either byte count. */
-	for (i = 0; i < piov->n_compressed_size; i++) {
-		unsigned int block_pages = piov->region_pages ?
+	for (i = 0; i < piov->r_layout.nr_blocks; i++) {
+		unsigned int block_pages = piov->r_layout.pages_per_reg ?
 						piov->block_pages[i] : 1;
 		uint64_t block_bytes;
-		uint32_t compressed_size = piov->compressed_size[i];
+		uint32_t compressed_size = piov->r_layout.sizes[i];
 
 		if (!block_pages ||
-		    (piov->region_pages && block_pages > piov->region_pages)) {
+		    (piov->r_layout.pages_per_reg && block_pages > piov->r_layout.pages_per_reg)) {
 			pr_err("Invalid page count %u for direct block %zu\n",
 			       block_pages, i);
 			return -1;
@@ -2192,7 +2183,7 @@ static int validate_direct_compressed_iov(const struct page_read_iov *piov)
 		iov_bytes += piov->to[i].iov_len;
 	}
 
-	if (payload_bytes != piov->total_compressed_size ||
+	if (payload_bytes != piov->r_layout.total_bytes ||
 	    output_bytes != iov_bytes || piov->end < piov->from ||
 	    payload_bytes != (uint64_t)(piov->end - piov->from) ||
 	    piov->n_pages > UINT64_MAX / PAGE_SIZE ||
@@ -2200,7 +2191,7 @@ static int validate_direct_compressed_iov(const struct page_read_iov *piov)
 		pr_err("Inconsistent direct compressed I/O sizes: payload=%" PRIu64
 		       " metadata=%" PRIu64 " output=%" PRIu64 " iov=%" PRIu64
 		       " range=%jd\n", payload_bytes,
-		       piov->total_compressed_size, output_bytes, iov_bytes,
+		       piov->r_layout.total_bytes, output_bytes, iov_bytes,
 		       (intmax_t)(piov->end - piov->from));
 		return -1;
 	}
@@ -2281,7 +2272,7 @@ static int process_encoded_async_read(int fd, struct page_read_iov *piov,
 	char *scratch;
 	size_t scratch_cap;
 	size_t compressed_offset = 0;
-	size_t total_compressed = piov->total_compressed_size;
+	size_t total_compressed = piov->r_layout.total_bytes;
 	size_t jobs_uncompressed = 0;
 	size_t output_bytes = 0;
 	size_t expected_output;
@@ -2298,21 +2289,21 @@ static int process_encoded_async_read(int fd, struct page_read_iov *piov,
 		return -1;
 	}
 	parallel_zero = compressed_restore_has_parallel_capacity(opts.decompress_threads);
-	if (!piov->n_compressed_size || !piov->compressed_size) {
+	if (!piov->r_layout.nr_blocks || !piov->r_layout.sizes) {
 		pr_err("Encoded async I/O job has no block metadata\n");
 		return -1;
 	}
-	if (piov->n_compressed_size > (size_t)INT_MAX ||
-	    piov->n_compressed_size > SIZE_MAX / sizeof(*jobs)) {
+	if (piov->r_layout.nr_blocks > (size_t)INT_MAX ||
+	    piov->r_layout.nr_blocks > SIZE_MAX / sizeof(*jobs)) {
 		pr_err("Encoded async I/O job has too many blocks: %zu\n",
-		       piov->n_compressed_size);
+		       piov->r_layout.nr_blocks);
 		return -1;
 	}
-	if (piov->region_pages && !piov->block_pages) {
+	if (piov->r_layout.pages_per_reg && !piov->block_pages) {
 		pr_err("Encoded region I/O job has no block-page metadata\n");
 		return -1;
 	}
-	if ((uint64_t)total_compressed != piov->total_compressed_size) {
+	if ((uint64_t)total_compressed != piov->r_layout.total_bytes) {
 		pr_err("Encoded async I/O size does not fit in size_t\n");
 		return -1;
 	}
@@ -2323,14 +2314,14 @@ static int process_encoded_async_read(int fd, struct page_read_iov *piov,
 	expected_output = (size_t)piov->n_pages * (size_t)PAGE_SIZE;
 	/* Grow buffers under the active read's bounded working-set lease. */
 
-	if (ctx->jobs_cap < piov->n_compressed_size) {
+	if (ctx->jobs_cap < piov->r_layout.nr_blocks) {
 		void *new_jobs = xrealloc(ctx->jobs,
-					  piov->n_compressed_size * sizeof(*jobs));
+					  piov->r_layout.nr_blocks * sizeof(*jobs));
 
 		if (!new_jobs)
 			goto out;
 		ctx->jobs = new_jobs;
-		ctx->jobs_cap = piov->n_compressed_size;
+		ctx->jobs_cap = piov->r_layout.nr_blocks;
 	}
 	jobs = ctx->jobs;
 
@@ -2360,23 +2351,23 @@ static int process_encoded_async_read(int fd, struct page_read_iov *piov,
 	scratch_cap = ctx->scratch_cap;
 
 	/* Build disjoint zero/LZ4 jobs while completing raw blocks inline. */
-	for (i = 0; i < piov->n_compressed_size; i++) {
-		uint32_t compressed_size = piov->compressed_size[i];
+	for (i = 0; i < piov->r_layout.nr_blocks; i++) {
+		uint32_t compressed_size = piov->r_layout.sizes[i];
 		unsigned int block_pages = 1;
 		size_t block_bytes;
 		size_t bound = PAGE_COMPRESSED_SIZE_BOUND;
 		char *direct_dst = NULL;
 
-		if (piov->region_pages)
+		if (piov->r_layout.pages_per_reg)
 			block_pages = piov->block_pages[i];
 		if (!block_pages ||
-		    (piov->region_pages && block_pages > piov->region_pages)) {
+		    (piov->r_layout.pages_per_reg && block_pages > piov->r_layout.pages_per_reg)) {
 			pr_err("Async: invalid page count %u for block %zu\n",
 			       block_pages, i);
 			goto out;
 		}
 		block_bytes = (size_t)block_pages * PAGE_SIZE;
-		if (piov->region_pages)
+		if (piov->r_layout.pages_per_reg)
 			bound = REGION_COMPRESSED_SIZE_BOUND(block_pages);
 		if (compressed_size > bound ||
 		    compressed_size > total_compressed - compressed_offset) {
@@ -2483,7 +2474,7 @@ static bool encoded_prefetch_eligible(const struct page_read *pr,
 				      const struct page_read_iov *current,
 				      const struct page_read_iov *next)
 {
-	size_t next_size = next->total_compressed_size;
+	size_t next_size = next->r_layout.total_bytes;
 
 	if (opts.stream || pr->use_direct || next->storage != VMA_IO_ENCODED)
 		return false;
@@ -2493,11 +2484,11 @@ static bool encoded_prefetch_eligible(const struct page_read *pr,
 	    next->n_pages < PARALLEL_RESTORE_MIN_BATCH_BYTES / PAGE_SIZE)
 		return false;
 	if (!next_size || next_size > ASYNC_BATCH_MAX_BYTES ||
-	    (uint64_t)next_size != next->total_compressed_size ||
+	    (uint64_t)next_size != next->r_layout.total_bytes ||
 	    next->end < next->from)
 		return false;
 	if ((uint64_t)(next->end - next->from) !=
-	    next->total_compressed_size)
+	    next->r_layout.total_bytes)
 		return false;
 
 	return true;
@@ -2599,7 +2590,7 @@ static int process_async_reads_ctx(struct page_read *pr,
 			    encoded_prefetch_eligible(pr, piov, n)) {
 				prefetch_prepared = encoded_prefetch_prepare(
 					encoded_ctx, fd, n->from,
-					(size_t)n->total_compressed_size);
+					(size_t)n->r_layout.total_bytes);
 			} else if (encoded_ctx->prefetch_batch_acquired) {
 				encoded_prefetch_disable(encoded_ctx);
 			}
@@ -2672,7 +2663,7 @@ static int process_async_reads_ctx(struct page_read *pr,
 	next:
 		BUG_ON(pr->io_complete); /* FIXME -- implement once needed */
 		list_del(&piov->l);
-		xfree(piov->compressed_size);
+		xfree(piov->r_layout.sizes);
 		xfree(piov->block_pages);
 		xfree(iovs);
 		xfree(piov);
