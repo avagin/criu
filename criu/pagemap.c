@@ -249,10 +249,10 @@ int dedup_one_iovec(struct page_read *pr, unsigned long off, unsigned long len)
 
 void page_read_free_cache(struct page_read *pr)
 {
-	xfree(pr->cached_region);
-	pr->cached_region = NULL;
-	pr->cached_region_vaddr = 0;
-	pr->cached_region_size = 0;
+	xfree(pr->reg.cache_buf);
+	pr->reg.cache_buf = NULL;
+	pr->reg.cache_vaddr = 0;
+	pr->reg.cache_size = 0;
 }
 
 static int advance(struct page_read *pr)
@@ -280,8 +280,8 @@ static int advance(struct page_read *pr)
 		pr->pi_off = aligned;
 	}
 
-	pr->compressed_size_index = 0;
-	pr->region_block_offset = 0;
+	pr->reg.block_idx = 0;
+	pr->reg.block_offset = 0;
 
 	return 1;
 }
@@ -294,7 +294,7 @@ static int advance(struct page_read *pr)
 static unsigned int current_block_pages(struct page_read *pr)
 {
 	unsigned int region_pages = pr->pe->regions ? pr->pe->regions->pages_per_region : 1;
-	uint64_t pages_before = (uint64_t)pr->compressed_size_index * region_pages;
+	uint64_t pages_before = (uint64_t)pr->reg.block_idx * region_pages;
 	uint64_t pages_left = pr->pe->nr_pages - pages_before;
 
 	return pages_left < region_pages ? (unsigned int)pages_left : region_pages;
@@ -313,8 +313,8 @@ static void skip_pagemap_pages(struct page_read *pr, unsigned long len)
 	if (pagemap_present(pr->pe)) {
 		if (!pr->pe->regions || !pr->pe->regions->n_region_sizes) {
 			pr->pi_off += len;
-		} else if (pr->compressed_size_index == 0 &&
-			   pr->region_block_offset == 0 &&
+		} else if (pr->reg.block_idx == 0 &&
+			   pr->reg.block_offset == 0 &&
 			   (uint64_t)(len / PAGE_SIZE) == pr->pe->nr_pages) {
 			/*
 			 * Fast path: skipping a whole compressed entry from
@@ -325,7 +325,7 @@ static void skip_pagemap_pages(struct page_read *pr, unsigned long len)
 			 * reader state matches the block-by-block paths below.
 			 */
 			pr->pi_off += pr->pe->regions->total_payload_size;
-			pr->compressed_size_index = pr->pe->regions->n_region_sizes;
+			pr->reg.block_idx = pr->pe->regions->n_region_sizes;
 		} else if (pr->pe->regions->pages_per_region > 1) {
 			/*
 			 * Region mode: each region_sizes[] entry covers
@@ -337,27 +337,27 @@ static void skip_pagemap_pages(struct page_read *pr, unsigned long len)
 
 			while (nr > 0) {
 				unsigned int bp = current_block_pages(pr);
-				unsigned int avail = bp - pr->region_block_offset;
+				unsigned int avail = bp - pr->reg.block_offset;
 				unsigned int take = avail;
 
 				if (nr < avail)
 					take = (unsigned int)nr;
 
-				if (pr->compressed_size_index >= pr->pe->regions->n_region_sizes) {
+				if (pr->reg.block_idx >= pr->pe->regions->n_region_sizes) {
 					pr_err("skip_pagemap_pages: index out of bounds: "
 					       "%zu >= %zu\n",
-					       pr->compressed_size_index,
+					       pr->reg.block_idx,
 					       pr->pe->regions->n_region_sizes);
 					BUG();
 				}
 
-				pr->region_block_offset += take;
+				pr->reg.block_offset += take;
 				nr -= take;
 
-				if (pr->region_block_offset == bp) {
-					pr->pi_off += pr->pe->regions->region_sizes[pr->compressed_size_index];
-					pr->compressed_size_index++;
-					pr->region_block_offset = 0;
+				if (pr->reg.block_offset == bp) {
+					pr->pi_off += pr->pe->regions->region_sizes[pr->reg.block_idx];
+					pr->reg.block_idx++;
+					pr->reg.block_offset = 0;
 				}
 			}
 		} else {
@@ -365,16 +365,16 @@ static void skip_pagemap_pages(struct page_read *pr, unsigned long len)
 			unsigned long nr = len / PAGE_SIZE;
 			unsigned long i;
 
-			if (pr->compressed_size_index + nr > pr->pe->regions->n_region_sizes) {
+			if (pr->reg.block_idx + nr > pr->pe->regions->n_region_sizes) {
 				pr_err("skip_pagemap_pages: index out of bounds: %zu + %lu > %zu\n",
-				       pr->compressed_size_index, nr,
+				       pr->reg.block_idx, nr,
 				       pr->pe->regions->n_region_sizes);
 				BUG();
 			}
 
 			for (i = 0; i < nr; i++)
-				pr->pi_off += pr->pe->regions->region_sizes[pr->compressed_size_index + i];
-			pr->compressed_size_index += nr;
+				pr->pi_off += pr->pe->regions->region_sizes[pr->reg.block_idx + i];
+			pr->reg.block_idx += nr;
 		}
 	}
 	pr->cvaddr += len;
@@ -580,7 +580,7 @@ static int piov_add_compressed_blocks(struct page_read_iov *piov,
 	unsigned long i;
 
 	if (region_pages) {
-		uint64_t pages_consumed = (uint64_t)pr->compressed_size_index * region_pages;
+		uint64_t pages_consumed = (uint64_t)pr->reg.block_idx * region_pages;
 		uint64_t end_page = pages_consumed + nr_pages;
 
 		/*
@@ -594,11 +594,11 @@ static int piov_add_compressed_blocks(struct page_read_iov *piov,
 		     end_page != pr->pe->nr_pages)) {
 			if (first)
 				pr_err("Region-mode async append not aligned: idx=%zu nr=%lu region=%u nr_pages=%" PRIu64 "\n",
-				       pr->compressed_size_index, nr_pages,
+				       pr->reg.block_idx, nr_pages,
 				       region_pages, pr->pe->nr_pages);
 			else
 				pr_err("Region-mode async enqueue not aligned: idx=%zu nr=%lu region=%u nr_pages=%" PRIu64 "\n",
-				       pr->compressed_size_index, nr_pages,
+				       pr->reg.block_idx, nr_pages,
 				       region_pages, pr->pe->nr_pages);
 			return -1;
 		}
@@ -607,10 +607,10 @@ static int piov_add_compressed_blocks(struct page_read_iov *piov,
 		n_blocks = nr_pages;
 	}
 
-	if (!pr->pe->regions || pr->compressed_size_index + n_blocks >
+	if (!pr->pe->regions || pr->reg.block_idx + n_blocks >
 	    pr->pe->regions->n_region_sizes) {
 		pr_err("Compressed size index out of bounds: %zu + %lu > %zu\n",
-		       pr->compressed_size_index, n_blocks,
+		       pr->reg.block_idx, n_blocks,
 		       pr->pe->regions ? pr->pe->regions->n_region_sizes : 0);
 		return -1;
 	}
@@ -629,7 +629,7 @@ static int piov_add_compressed_blocks(struct page_read_iov *piov,
 	}
 
 	for (i = 0; i < n_blocks; i++) {
-		size_t idx = pr->compressed_size_index + i;
+		size_t idx = pr->reg.block_idx + i;
 		enum restore_vma_io_storage block_storage;
 		unsigned int block_pages;
 		uint32_t cs = pr->pe->regions->region_sizes[idx];
@@ -850,10 +850,10 @@ static int advance_compressed_offsets(struct page_read *pr, unsigned long nr)
 	 * region_block_offset is 0 here, so compressed_size_index == 0 means
 	 * we are at the start.
 	 */
-	if (pr->compressed_size_index == 0 && pr->pe->regions &&
+	if (pr->reg.block_idx == 0 && pr->pe->regions &&
 	    (uint64_t)nr == pr->pe->nr_pages) {
 		pr->pi_off += pr->pe->regions->total_payload_size;
-		pr->compressed_size_index = pr->pe->regions->n_region_sizes;
+		pr->reg.block_idx = pr->pe->regions->n_region_sizes;
 		return 0;
 	}
 
@@ -862,15 +862,15 @@ static int advance_compressed_offsets(struct page_read *pr, unsigned long nr)
 	else
 		n_blocks = nr;
 
-	if (!pr->pe->regions || pr->compressed_size_index + n_blocks > pr->pe->regions->n_region_sizes) {
+	if (!pr->pe->regions || pr->reg.block_idx + n_blocks > pr->pe->regions->n_region_sizes) {
 		pr_err("advance_compressed_offsets: index out of bounds: %zu + %lu > %zu\n",
-		       pr->compressed_size_index, n_blocks, pr->pe->regions ? pr->pe->regions->n_region_sizes : 0);
+		       pr->reg.block_idx, n_blocks, pr->pe->regions ? pr->pe->regions->n_region_sizes : 0);
 		return -1;
 	}
 
 	for (i = 0; i < n_blocks; i++)
-		pr->pi_off += pr->pe->regions->region_sizes[pr->compressed_size_index + i];
-	pr->compressed_size_index += n_blocks;
+		pr->pi_off += pr->pe->regions->region_sizes[pr->reg.block_idx + i];
+	pr->reg.block_idx += n_blocks;
 
 	return 0;
 }
@@ -879,7 +879,7 @@ static int compressed_request_has_lz4(struct page_read *pr,
 				       unsigned long nr_pages, bool *has_lz4,
 				       bool *mixed_direct)
 {
-	size_t index = pr->compressed_size_index;
+	size_t index = pr->reg.block_idx;
 	enum restore_vma_io_storage previous_storage = VMA_IO_UNCOMPRESSED;
 	bool have_previous_storage = false;
 	unsigned long pages_done = 0;
@@ -918,7 +918,7 @@ static int compressed_storage_run(struct page_read *pr,
 				  unsigned long *run_pages,
 				  size_t *run_blocks)
 {
-	size_t index = pr->compressed_size_index;
+	size_t index = pr->reg.block_idx;
 	enum restore_vma_io_storage first_storage;
 	unsigned int block_pages;
 
@@ -953,7 +953,7 @@ static int compressed_storage_run(struct page_read *pr,
 
 	if (!*run_pages) {
 		pr_err("Unable to form compressed storage run at block %zu\n",
-		       pr->compressed_size_index);
+		       pr->reg.block_idx);
 		return -1;
 	}
 	*storage = first_storage;
@@ -1102,8 +1102,8 @@ int pagemap_enqueue_iovec(struct page_read *pr, void *buf, unsigned long len, st
 		parallel_zero = compressed_restore_has_parallel_capacity(opts.decompress_threads);
 
 	pi_off = pr->pi_off;
-	compressed_size_index = pr->compressed_size_index;
-	region_block_offset = pr->region_block_offset;
+	compressed_size_index = pr->reg.block_idx;
+	region_block_offset = pr->reg.block_offset;
 	if (!list_empty(to)) {
 		original_tail = list_entry(to->prev, struct page_read_iov, l);
 		original_end = original_tail->end;
@@ -1156,8 +1156,8 @@ int pagemap_enqueue_iovec(struct page_read *pr, void *buf, unsigned long len, st
 	}
 
 	pr->pi_off = pi_off;
-	pr->compressed_size_index = compressed_size_index;
-	pr->region_block_offset = region_block_offset;
+	pr->reg.block_idx = compressed_size_index;
+	pr->reg.block_offset = region_block_offset;
 	if (ret) {
 		/*
 		 * One logical request may be split into multiple storage runs. If
@@ -1422,7 +1422,7 @@ static int read_compressed_pages(struct page_read *pr, int fd,
 	unsigned long i;
 
 	for (i = 0; i < nr; i++) {
-		size_t idx = pr->compressed_size_index + i;
+		size_t idx = pr->reg.block_idx + i;
 		uint32_t cs = pr->pe->regions->region_sizes[idx];
 
 		if (cs > PAGE_SIZE) {
@@ -1457,7 +1457,7 @@ static int read_compressed_pages(struct page_read *pr, int fd,
 	}
 
 	pr->pi_off += compressed_offset;
-	pr->compressed_size_index += nr;
+	pr->reg.block_idx += nr;
 
 	return 0;
 }
@@ -1465,8 +1465,8 @@ static int read_compressed_pages(struct page_read *pr, int fd,
 static bool region_cache_hit(struct page_read *pr, unsigned long vaddr,
 			     size_t size)
 {
-	return pr->cached_region_size == size &&
-	       pr->cached_region_vaddr == vaddr;
+	return pr->reg.cache_size == size &&
+	       pr->reg.cache_vaddr == vaddr;
 }
 
 static int region_cache_load(struct page_read *pr, int fd, char *compressed_buf,
@@ -1474,41 +1474,41 @@ static int region_cache_load(struct page_read *pr, int fd, char *compressed_buf,
 			     unsigned int pages, size_t bytes)
 {
 	char *cache;
-	size_t old_size = pr->cached_region_size;
+	size_t old_size = pr->reg.cache_size;
 
 	/* Do not expose partially overwritten data as a valid cache entry. */
-	pr->cached_region_size = 0;
+	pr->reg.cache_size = 0;
 
 	if (bytes != old_size) {
-		cache = xrealloc(pr->cached_region, bytes);
+		cache = xrealloc(pr->reg.cache_buf, bytes);
 		if (!cache)
 			return -1;
-		pr->cached_region = cache;
+		pr->reg.cache_buf = cache;
 	}
 
 	if (pread_full(fd, compressed_buf, cs, pr->pi_off))
 		return -1;
 
-	if (decompress_region(compressed_buf, cs, pages, pr->cached_region)) {
+	if (decompress_region(compressed_buf, cs, pages, pr->reg.cache_buf)) {
 		pr_err("Region decompression failed (idx=%zu cs=%u region=%u)\n",
 		       idx, cs, pages);
 		return -1;
 	}
 
-	pr->cached_region_vaddr = vaddr;
-	pr->cached_region_size = bytes;
+	pr->reg.cache_vaddr = vaddr;
+	pr->reg.cache_size = bytes;
 	return 0;
 }
 
 /*
  * Region-mode synchronous compressed read. Each compressed_size[]
  * entry covers up to region_pages pages. Reads may start mid-region
- * (when pr->region_block_offset > 0) and may end mid-region.
+ * (when pr->reg.block_offset > 0) and may end mid-region.
  *
  * For each block touched, read its compressed bytes, decompress into
  * a heap scratch buffer once, then memcpy the requested page slice
- * out. Crossing a block boundary advances pr->compressed_size_index
- * and pr->pi_off; staying within a block bumps region_block_offset.
+ * out. Crossing a block boundary advances pr->reg.block_idx
+ * and pr->pi_off; staying within a block bumps block_offset.
  */
 static int read_compressed_pages_region(struct page_read *pr, int fd,
 					unsigned long vaddr, unsigned long nr,
@@ -1520,11 +1520,11 @@ static int read_compressed_pages_region(struct page_read *pr, int fd,
 	char *scratch = NULL;
 
 	while (pages_done < nr) {
-		size_t idx = pr->compressed_size_index;
+		size_t idx = pr->reg.block_idx;
 		uint32_t cs;
 		unsigned int this_region;
 		size_t this_bytes;
-		unsigned int off = pr->region_block_offset;
+		unsigned int off = pr->reg.block_offset;
 		unsigned int avail;
 		unsigned int take;
 		size_t out_bytes;
@@ -1603,17 +1603,17 @@ static int read_compressed_pages_region(struct page_read *pr, int fd,
 					goto out;
 			}
 			memcpy((char *)buf + pages_done * PAGE_SIZE,
-			       pr->cached_region + (size_t)off * PAGE_SIZE,
+			       pr->reg.cache_buf + (size_t)off * PAGE_SIZE,
 			       out_bytes);
 		}
 
 		pages_done += take;
-		pr->region_block_offset = off + take;
+		pr->reg.block_offset = off + take;
 
-		if (pr->region_block_offset == this_region) {
+		if (pr->reg.block_offset == this_region) {
 			pr->pi_off += cs;
-			pr->compressed_size_index++;
-			pr->region_block_offset = 0;
+			pr->reg.block_idx++;
+			pr->reg.block_offset = 0;
 		}
 	}
 
@@ -1654,9 +1654,9 @@ static int maybe_read_page_local_compressed(struct page_read *pr, unsigned long 
 	}
 
 	if (!region_pages &&
-	    pr->compressed_size_index + nr > pr->pe->regions->n_region_sizes) {
+	    pr->reg.block_idx + nr > pr->pe->regions->n_region_sizes) {
 		pr_err("Compressed size index out of bounds: %zu + %lu > %zu\n",
-		       pr->compressed_size_index, nr,
+		       pr->reg.block_idx, nr,
 		       pr->pe->regions->n_region_sizes);
 		return -1;
 	}
@@ -1677,10 +1677,10 @@ static int maybe_read_page_local_compressed(struct page_read *pr, unsigned long 
 		bool can_async = true;
 
 		if (region_pages) {
-			uint64_t pages_consumed = (uint64_t)pr->compressed_size_index * region_pages;
+			uint64_t pages_consumed = (uint64_t)pr->reg.block_idx * region_pages;
 			uint64_t end_page = pages_consumed + nr;
 
-			can_async = (pr->region_block_offset == 0) &&
+			can_async = (pr->reg.block_offset == 0) &&
 				    (nr % region_pages == 0 ||
 				     end_page == pr->pe->nr_pages);
 		}
@@ -1804,7 +1804,7 @@ static int maybe_read_page_img_streamer(struct page_read *pr, unsigned long vadd
  */
 static int maybe_read_page_img_streamer_compressed(struct page_read *pr, unsigned long vaddr, unsigned long nr, void *buf, unsigned flags)
 {
-	struct page_read *owner = pr->encoded_read_owner;
+	struct page_read *owner = pr->reg.encoded_owner;
 	struct encoded_read_ctx *ctx = NULL;
 	uint64_t total_payload = 0;
 	unsigned long pages_done = 0;
@@ -1849,10 +1849,10 @@ static int maybe_read_page_img_streamer_compressed(struct page_read *pr, unsigne
 
 	BUG_ON(pr->cvaddr != vaddr);
 
-	if (pr->compressed_size_index > pr->pe->regions->n_region_sizes ||
-	    nr > pr->pe->regions->n_region_sizes - pr->compressed_size_index) {
+	if (pr->reg.block_idx > pr->pe->regions->n_region_sizes ||
+	    nr > pr->pe->regions->n_region_sizes - pr->reg.block_idx) {
 		pr_err("Compressed size index out of bounds: %zu + %lu > %zu\n",
-		       pr->compressed_size_index, nr,
+		       pr->reg.block_idx, nr,
 		       pr->pe->regions->n_region_sizes);
 		return -1;
 	}
@@ -1865,7 +1865,7 @@ static int maybe_read_page_img_streamer_compressed(struct page_read *pr, unsigne
 	while (pages_done < nr) {
 		unsigned long batch_pages = min(nr - pages_done,
 						 ASYNC_BATCH_MAX_PAGES);
-		size_t first = pr->compressed_size_index + pages_done;
+		size_t first = pr->reg.block_idx + pages_done;
 		size_t batch_payload = 0;
 		size_t payload_offset = 0;
 		size_t jobs_uncompressed = 0;
@@ -1904,12 +1904,12 @@ static int maybe_read_page_img_streamer_compressed(struct page_read *pr, unsigne
 				pr_err("Streaming page reader has no encoded-read context owner\n");
 				goto out;
 			}
-			if (!owner->encoded_read_ctx)
-				owner->encoded_read_ctx =
-					xzalloc(sizeof(*owner->encoded_read_ctx));
-			if (!owner->encoded_read_ctx)
+			if (!owner->reg.encoded_ctx)
+				owner->reg.encoded_ctx =
+					xzalloc(sizeof(*owner->reg.encoded_ctx));
+			if (!owner->reg.encoded_ctx)
 				goto out;
-			ctx = owner->encoded_read_ctx;
+			ctx = owner->reg.encoded_ctx;
 
 			if (!ctx->batch_acquired)
 				encoded_read_ctx_begin_work(ctx);
@@ -1998,7 +1998,7 @@ static int maybe_read_page_img_streamer_compressed(struct page_read *pr, unsigne
 		ret = pr->io_complete(pr, vaddr, nr);
 
 	pr->pi_off += (off_t)total_payload;
-	pr->compressed_size_index += nr;
+	pr->reg.block_idx += nr;
 
 out:
 	encoded_read_ctx_end_work(ctx);
@@ -2696,7 +2696,7 @@ err:
 
 static int process_async_reads(struct page_read *pr)
 {
-	struct page_read *owner = pr->encoded_read_owner;
+	struct page_read *owner = pr->reg.encoded_owner;
 	struct encoded_read_ctx *ctx = NULL;
 	int ret;
 
@@ -2708,15 +2708,15 @@ static int process_async_reads(struct page_read *pr)
 
 	/* Raw/zero/uncompressed-only syncs need neither buffers nor a lease. */
 	if (page_read_chain_has_encoded_async(pr)) {
-		if (!owner->encoded_read_ctx) {
-			owner->encoded_read_ctx =
-				xzalloc(sizeof(*owner->encoded_read_ctx));
+		if (!owner->reg.encoded_ctx) {
+			owner->reg.encoded_ctx =
+				xzalloc(sizeof(*owner->reg.encoded_ctx));
 		}
-		if (!owner->encoded_read_ctx) {
+		if (!owner->reg.encoded_ctx) {
 			drain_async_queue(pr);
 			return -1;
 		}
-		ctx = owner->encoded_read_ctx;
+		ctx = owner->reg.encoded_ctx;
 	}
 
 	ret = process_async_reads_ctx(pr, ctx);
@@ -2732,10 +2732,10 @@ static void close_page_read(struct page_read *pr)
 	 * remap the PIE bootstrap. Page-server readers close after their last
 	 * sync, so one pool also spans its bounded decode chunks.
 	 */
-	if (pr->encoded_read_owner == pr) {
-		encoded_read_ctx_fini(pr->encoded_read_ctx);
-		xfree(pr->encoded_read_ctx);
-		pr->encoded_read_ctx = NULL;
+	if (pr->reg.encoded_owner == pr) {
+		encoded_read_ctx_fini(pr->reg.encoded_ctx);
+		xfree(pr->reg.encoded_ctx);
+		pr->reg.encoded_ctx = NULL;
 	}
 
 	if (pr->bunch.iov_len > 0) {
@@ -2765,8 +2765,8 @@ static void reset_pagemap(struct page_read *pr)
 	pr->cvaddr = 0;
 	pr->pi_off = 0;
 	pr->stream_padding = 0;
-	pr->compressed_size_index = 0;
-	pr->region_block_offset = 0;
+	pr->reg.block_idx = 0;
+	pr->reg.block_offset = 0;
 	pr->curr_pme = -1;
 	pr->pe = NULL;
 
@@ -2824,7 +2824,7 @@ err:
 static void set_encoded_read_owner(struct page_read *pr,
 				   struct page_read *owner)
 {
-	pr->encoded_read_owner = owner;
+	pr->reg.encoded_owner = owner;
 	if (pr->parent)
 		set_encoded_read_owner(pr->parent, owner);
 }
@@ -3412,13 +3412,8 @@ int open_page_read_at(int dfd, unsigned long img_id, struct page_read *pr, int p
 	pr->cvaddr = 0;
 	pr->pi_off = 0;
 	pr->stream_padding = 0;
-	pr->compressed_size_index = 0;
-	pr->region_block_offset = 0;
-	pr->cached_region = NULL;
-	pr->cached_region_vaddr = 0;
-	pr->cached_region_size = 0;
-	pr->encoded_read_ctx = NULL;
-	pr->encoded_read_owner = pr;
+	memset(&pr->reg, 0, sizeof(pr->reg));
+	pr->reg.encoded_owner = pr;
 	pr->bunch.iov_len = 0;
 	pr->bunch.iov_base = NULL;
 	pr->pmes = NULL;
@@ -3535,15 +3530,15 @@ void dup_page_read(struct page_read *src, struct page_read *dst)
 	memcpy(dst, src, sizeof(*dst));
 	INIT_LIST_HEAD(&dst->async);
 	dst->id = src->id + DUP_IDS_BASE * dup_ids++;
-	dst->cached_region = NULL;
-	dst->cached_region_vaddr = 0;
-	dst->cached_region_size = 0;
-	dst->encoded_read_ctx = NULL;
+	dst->reg.cache_buf = NULL;
+	dst->reg.cache_vaddr = 0;
+	dst->reg.cache_size = 0;
+	dst->reg.encoded_ctx = NULL;
 	/*
 	 * UFFD fork readers are shallow duplicates and keep their root lpi alive
 	 * through its reference count. Reuse that root's chain context instead of
 	 * allocating an unowned context that lpi_fini() cannot release.
 	 */
-	dst->encoded_read_owner = src->encoded_read_owner;
+	dst->reg.encoded_owner = src->reg.encoded_owner;
 	dst->reset(dst);
 }
