@@ -35,6 +35,7 @@
 #include "prctl.h"
 #include "compel/infect-util.h"
 #include "pidfd-store.h"
+#include "pagemap-region.h"
 #include "compression.h"
 
 #include "protobuf.h"
@@ -1347,7 +1348,7 @@ static int restore_priv_vma_content(struct pstree_item *t, struct page_read *pr)
 				if (pr->pe->regions && pr->pe->regions->pages_per_region > 1 &&
 				    nr < nr_pages - i) {
 					unsigned long aligned =
-						nr - nr % pr->pe->regions->pages_per_region;
+						region_align_down(nr, pr->pe->regions->pages_per_region);
 
 					if (aligned)
 						nr = aligned;
