@@ -230,7 +230,6 @@ struct cr_options {
 	/*
 	 * Memory page compression mode (enum compress_mode):
 	 *   COMPRESS_OFF       (0) = no compression (default)
-	 *   COMPRESS_PER_PAGE  (1) = each system page is its own LZ4 block
 	 *   COMPRESS_REGION    (2) = regions of compress_region_size bytes
 	 *                            are compressed as one LZ4 block
 	 *

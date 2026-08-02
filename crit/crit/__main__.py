@@ -1508,7 +1508,8 @@ def compress_cmd(opts):
                 acceleration, lz4_block)
             stats.append((pagemap_name,) + pagemap_stats)
 
-        inventory['entries'][0]['compress'] = 1  # COMPRESS_PER_PAGE
+        inventory['entries'][0]['compress'] = 2  # COMPRESS_REGION
+        inventory['entries'][0]['compress_region_size'] = PAGE_SIZE
         inventory['entries'][0]['img_version'] = CRTOOLS_IMAGES_V1_2
         _stage_image_update(staged, inventory_path, inventory, image_metadata)
 

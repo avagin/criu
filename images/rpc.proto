@@ -153,7 +153,7 @@ message criu_opts {
 	optional criu_image_io_mode	image_io_mode		= 72 [default = IMAGE_IO_WRITEBACK];
 	/*
 	 * Memory page compression mode (enum compress_mode):
-	 *   0 = off, 1 = per-page, 2 = region. Default 0.
+	 *   0 = off, 2 = region. Default 0.
 	 */
 	optional uint32			compress		= 73;
 	optional uint32			compress_acceleration	= 74;

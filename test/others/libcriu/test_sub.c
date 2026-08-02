@@ -73,7 +73,7 @@ int main(int argc, char **argv)
 	if (getenv("CRIU_FEATURE_COMPRESS")) {
 		if (criu_set_compress_region_size(64 * 1024 + 1) != -EINVAL ||
 		    criu_set_compress_region_size(64 * 1024) ||
-		    criu_set_compress(CRIU_COMPRESS_PER_PAGE) ||
+		    criu_set_compress(CRIU_COMPRESS_REGION) ||
 		    criu_set_compress_acceleration(2) ||
 		    criu_set_compress_region_size(64 * 1024)) {
 			fprintf(stderr, "Failed to configure memory compression\n");

@@ -62,7 +62,6 @@ enum criu_image_io_mode {
 
 enum criu_compress_mode {
 	CRIU_COMPRESS_OFF = 0,
-	CRIU_COMPRESS_PER_PAGE = 1,
 	CRIU_COMPRESS_REGION = 2,
 };
 

@@ -330,32 +330,6 @@ void decompression_batch_release(void)
 	pthread_mutex_unlock(&decompress_batch_lock);
 }
 
-int compress_data(const char *input_data, size_t input_size,
-		  char *compressed_data, size_t output_size,
-		  int acceleration)
-{
-	int ret;
-
-	if (!input_data || !compressed_data || !input_size ||
-	    input_size > LZ4_MAX_INPUT_SIZE || output_size > INT_MAX) {
-		pr_err("Invalid compression buffer sizes: input=%zu output=%zu\n",
-		       input_size, output_size);
-		return -1;
-	}
-
-	if (acceleration < 1)
-		acceleration = 1;
-
-	ret = LZ4_compress_fast(input_data, compressed_data, input_size,
-				output_size, acceleration);
-	if (ret <= 0) {
-		pr_err("Failed to compress data: %d\n", ret);
-		return -1;
-	}
-
-	return ret;
-}
-
 static int decompress_data_nolog(const char *compressed_data,
 				 int compressed_size, int original_size,
 				 char *decompressed_data)
@@ -365,30 +339,6 @@ static int decompress_data_nolog(const char *compressed_data,
 	ret = LZ4_decompress_safe(compressed_data, decompressed_data,
 				  compressed_size, original_size);
 	return ret == original_size ? 0 : -1;
-}
-
-int decompress_data(const char *compressed_data, int compressed_size,
-		    int original_size, char *decompressed_data)
-{
-	int ret;
-
-	if (!compressed_data || !decompressed_data || compressed_size <= 0 ||
-	    original_size <= 0) {
-		pr_err("Invalid decompression buffer sizes: input=%d output=%d\n",
-		       compressed_size, original_size);
-		return -1;
-	}
-
-	ret = LZ4_decompress_safe(compressed_data, decompressed_data,
-				  compressed_size, original_size);
-
-	if (ret != original_size) {
-		pr_err("Decompression failed: expected %d bytes, got %d\n",
-		       original_size, ret);
-		return -1;
-	}
-
-	return 0;
 }
 
 int compress_region(const char *src, unsigned int n_pages, char *dst,

@@ -120,11 +120,11 @@ static void test_compress_roundtrip(const char *page, int acceleration)
 	char decompressed[PAGE_SIZE];
 	int cs;
 
-	cs = compress_data(page, PAGE_SIZE, compressed,
-			   PAGE_COMPRESSED_SIZE_BOUND, acceleration);
-	assert(cs > 0);
+	cs = compress_region(page, 1, compressed,
+			     PAGE_COMPRESSED_SIZE_BOUND, acceleration);
+	assert(cs >= 0);
 	assert(cs <= PAGE_COMPRESSED_SIZE_BOUND);
-	assert(decompress_data(compressed, cs, PAGE_SIZE, decompressed) == 0);
+	assert(decompress_region(compressed, cs, 1, decompressed) == 0);
 	assert(memcmp(page, decompressed, PAGE_SIZE) == 0);
 }
 
@@ -148,12 +148,12 @@ static void test_compression(void)
 		int accel = accels[a];
 		int cs;
 
-		/* Zero-filled page: should compress well */
+		/* Zero-filled page: should return 0 for zero-page block */
 		memset(cbuf, 0, sizeof(cbuf));
 		memset(page, 0, PAGE_SIZE);
-		cs = compress_data(page, PAGE_SIZE,
-				   cbuf, PAGE_COMPRESSED_SIZE_BOUND, accel);
-		assert(cs > 0 && cs < PAGE_SIZE);
+		cs = compress_region(page, 1,
+				     cbuf, PAGE_COMPRESSED_SIZE_BOUND, accel);
+		assert(cs == 0);
 		test_compress_roundtrip(page, accel);
 
 		/* Repeating pattern */
@@ -171,8 +171,8 @@ static void test_compression(void)
 		memset(cbuf, 0, sizeof(cbuf));
 		memset(page, 0, PAGE_SIZE);
 		page[0] = 0x42;
-		cs = compress_data(page, PAGE_SIZE,
-				   cbuf, PAGE_COMPRESSED_SIZE_BOUND, accel);
+		cs = compress_region(page, 1,
+				     cbuf, PAGE_COMPRESSED_SIZE_BOUND, accel);
 		assert(cs > 0 && cs < PAGE_SIZE);
 		test_compress_roundtrip(page, accel);
 	}

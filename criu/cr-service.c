@@ -843,8 +843,9 @@ static int setup_opts_from_req(int sk, CriuOpts *req)
 			pr_err("Invalid compress value %u\n", req->compress);
 			goto err;
 		}
-		opts.compress_mode = req->compress;
-		if (req->compress == COMPRESS_OFF) {
+		if (req->compress != COMPRESS_OFF)
+			opts.compress_mode = COMPRESS_REGION;
+		else {
 			/*
 			 * An explicit RPC setting has precedence over values loaded
 			 * from the service configuration. libcriu clears the related
@@ -856,6 +857,7 @@ static int setup_opts_from_req(int sk, CriuOpts *req)
 				pr_err("compress=off conflicts with compression tuning options\n");
 				goto err;
 			}
+			opts.compress_mode = COMPRESS_OFF;
 			opts.compress_acceleration = 0;
 			opts.compress_region_size = 0;
 		}
@@ -877,10 +879,6 @@ static int setup_opts_from_req(int sk, CriuOpts *req)
 		    req->compress_region_size > MAX_REGION_SIZE) {
 			pr_err("Invalid compress_region_size value %u\n",
 			       req->compress_region_size);
-			goto err;
-		}
-		if (opts.compress_mode == COMPRESS_PER_PAGE) {
-			pr_err("compress_region_size conflicts with compress=per-page\n");
 			goto err;
 		}
 		opts.compress_region_size = req->compress_region_size;
