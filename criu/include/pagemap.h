@@ -3,10 +3,15 @@
 
 #include <stddef.h>
 #include <sys/types.h>
+#include <sys/uio.h>
 
 #include "common/list.h"
 #include "images/pagemap.pb-c.h"
 #include "page.h"
+#include "pagemap-block.h"
+
+#define ASYNC_BATCH_MAX_BYTES (32UL << 20)
+#define ASYNC_BATCH_MAX_PAGES (ASYNC_BATCH_MAX_BYTES / PAGE_SIZE)
 
 /*
  * page_read -- engine, that reads pages from image file(s)
@@ -44,6 +49,25 @@
  *
  * All this is implemented in read_pagemap_page.
  */
+
+/*
+ * One "job" for the preadv() syscall in pagemap.c
+ */
+struct page_read_iov {
+	off_t from;       /* offset in pi file where to start reading from */
+	off_t end;        /* exclusive end offset in the pages image */
+	struct iovec *to; /* destination iovs */
+	unsigned int nr;  /* their number */
+	enum restore_vma_io_storage storage;
+
+	struct page_block_layout b_layout;
+	unsigned long n_pages; /* Total uncompressed pages in this batch (cap input) */
+	uint16_t *block_pages;
+	unsigned long rio_cs_off;
+	unsigned long rio_bp_off;
+
+	struct list_head l;
+};
 
 struct encoded_read_ctx;
 struct page_read;
@@ -225,6 +249,8 @@ int page_read_range_has_parent(struct page_read *pr, unsigned long start,
  * PAGE_SIZE is not a compile-time constant on aarch64, so the probe
  * buffer comes from posix_memalign().
  */
+int pread_full(int fd, void *buf, size_t count, off_t offset);
+
 int probe_pages_o_direct(int fd);
 
 /*

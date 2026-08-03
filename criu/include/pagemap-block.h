@@ -6,6 +6,21 @@
 #include <sys/types.h>
 
 /*
+ * Internal representation of a pages-image range queued for PIE restore.
+ *
+ * PACKED_RAW and ZERO originate from entries which still carry compression
+ * metadata.  They are separate from UNCOMPRESSED so that the restorer can
+ * bypass LZ4 without treating their packed image offsets as ordinary pages
+ * image offsets (in particular, --auto-dedup must not punch PACKED_RAW).
+ */
+enum restore_vma_io_storage {
+	VMA_IO_UNCOMPRESSED,
+	VMA_IO_ENCODED,
+	VMA_IO_PACKED_RAW,
+	VMA_IO_ZERO,
+};
+
+/*
  * Memory block payload layout describing how pagemap entries or I/O vectors
  * are chunked and stored in pages-*.img.
  */

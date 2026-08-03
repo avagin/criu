@@ -8,6 +8,9 @@
 #include "common/lock.h"
 #include "page.h"
 
+struct page_read;
+struct page_read_iov;
+
 /*
  * Compression mode for memory pages. Stored in opts.compress_mode and
  * encoded in inventory_entry.compress and criu_opts.compress on the wire.
@@ -228,6 +231,18 @@ void encoded_prefetch_publish(struct encoded_read_ctx *ctx,
 int encoded_prefetch_take(struct encoded_read_ctx *ctx,
 			  const void *token, size_t expected_count);
 
+struct encoded_read_ctx *encoded_read_ctx_alloc(void);
+void encoded_read_ctx_destroy(struct encoded_read_ctx *ctx);
+int validate_direct_compressed_iov(const struct page_read_iov *piov);
+int encoded_stream_read_batch(int fd, void *buf, const uint32_t *block_sizes,
+			      unsigned long batch_pages, size_t batch_payload,
+			      size_t nr_jobs, struct encoded_read_ctx *ctx,
+			      unsigned long first_page_idx);
+int encoded_async_read_batch(int fd, struct page_read_iov *piov,
+			     struct page_read_iov *next, bool is_last,
+			     struct encoded_read_ctx *ctx,
+			     const struct page_read *pr);
+
 #else /* !CONFIG_LZ4 */
 
 static inline int compress_block(const char *src, unsigned int n_pages,
@@ -327,6 +342,36 @@ static inline int encoded_prefetch_take(struct encoded_read_ctx *ctx,
 					const void *token, size_t expected_count)
 {
 	return 0;
+}
+
+static inline struct encoded_read_ctx *encoded_read_ctx_alloc(void)
+{
+	return NULL;
+}
+
+static inline void encoded_read_ctx_destroy(struct encoded_read_ctx *ctx)
+{
+}
+
+static inline int validate_direct_compressed_iov(const struct page_read_iov *piov)
+{
+	return -1;
+}
+
+static inline int encoded_stream_read_batch(int fd, void *buf, const uint32_t *block_sizes,
+					    unsigned long batch_pages, size_t batch_payload,
+					    size_t nr_jobs, struct encoded_read_ctx *ctx,
+					    unsigned long first_page_idx)
+{
+	return -1;
+}
+
+static inline int encoded_async_read_batch(int fd, struct page_read_iov *piov,
+					   struct page_read_iov *next, bool is_last,
+					   struct encoded_read_ctx *ctx,
+					   const struct page_read *pr)
+{
+	return -1;
 }
 
 #endif /* CONFIG_LZ4 */

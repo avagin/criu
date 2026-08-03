@@ -31,9 +31,6 @@
 
 #define MAX_BUNCH_SIZE 256
 #define PAGE_PADDING_CHUNK 4096
-/* Bound encoded payload, metadata, and destination working-set per batch. */
-#define ASYNC_BATCH_MAX_BYTES (32UL << 20)
-#define ASYNC_BATCH_MAX_PAGES (ASYNC_BATCH_MAX_BYTES / PAGE_SIZE)
 #define ASYNC_READAHEAD_MAX_GAP (1UL << 20)
 #define ASYNC_READAHEAD_MAX_BYTES (256UL << 20)
 #define DIRECT_COMPRESSED_RUN_MAX 128
@@ -47,39 +44,6 @@
 
 #define OFF_MAX (sizeof(off_t) == sizeof(long long) ? LLONG_MAX : sizeof(off_t) == sizeof(int) ? INT_MAX : -999999)
 #define OFF_MIN (sizeof(off_t) == sizeof(long long) ? LLONG_MIN : sizeof(off_t) == sizeof(int) ? INT_MIN : -999999)
-
-/*
- * One "job" for the preadv() syscall in pagemap.c
- */
-struct page_read_iov {
-	off_t from;	  /* offset in pi file where to start reading from */
-	off_t end;	  /* exclusive end offset in the pages image */
-	struct iovec *to; /* destination iovs */
-	unsigned int nr;  /* their number */
-	enum restore_vma_io_storage storage;
-
-	struct page_block_layout b_layout;
-	unsigned long n_pages; /* Total uncompressed pages in this batch (cap input) */
-	/*
-	 * Per-block page count when b_layout.pages_per_block > 0. Most blocks have
-	 * exactly b_layout.pages_per_block pages; the last block of any pagemap
-	 * entry that spans this piov may be shorter if the entry's
-	 * nr_pages is not a multiple of b_layout.pages_per_block.
-	 */
-	uint16_t *block_pages;
-
-	/*
-	 * RM_PRIVATE offsets of the compressed_size[] and block_pages[]
-	 * copies that pagemap_render_iovec() places in restorer memory.
-	 * Stored as offsets (not pointers) because struct restore_vma_io
-	 * references them via RST_MEM_FIXUP_PPTR, which adds the remapped
-	 * arena base to the stored value.
-	 */
-	unsigned long rio_cs_off;
-	unsigned long rio_bp_off;
-
-	struct list_head l;
-};
 
 static inline bool can_extend_bunch(struct iovec *bunch, unsigned long off, unsigned long len)
 {
@@ -1141,7 +1105,7 @@ static int maybe_read_page_local(struct page_read *pr, unsigned long vaddr, unsi
 	return ret;
 }
 
-static int pread_full(int fd, void *buf, size_t count, off_t offset)
+int pread_full(int fd, void *buf, size_t count, off_t offset)
 {
 	size_t rd = 0;
 
@@ -1566,8 +1530,6 @@ static int maybe_read_page_img_streamer_compressed(struct page_read *pr, unsigne
 						 ASYNC_BATCH_MAX_PAGES);
 		size_t first = pr->blk.block_idx + pages_done;
 		size_t batch_payload = 0;
-		size_t payload_offset = 0;
-		size_t jobs_uncompressed = 0;
 		size_t nr_jobs = 0;
 		size_t i;
 
@@ -1604,88 +1566,16 @@ static int maybe_read_page_img_streamer_compressed(struct page_read *pr, unsigne
 				goto out;
 			}
 			if (!owner->blk.encoded_ctx)
-				owner->blk.encoded_ctx =
-					xzalloc(sizeof(*owner->blk.encoded_ctx));
+				owner->blk.encoded_ctx = encoded_read_ctx_alloc();
 			if (!owner->blk.encoded_ctx)
 				goto out;
 			ctx = owner->blk.encoded_ctx;
-
-			if (!ctx->batch_acquired)
-				encoded_read_ctx_begin_work(ctx);
-			if (ctx->compressed_cap < batch_payload) {
-				void *new_compressed =
-					xrealloc(ctx->compressed, batch_payload);
-
-				if (!new_compressed)
-					goto out;
-				ctx->compressed = new_compressed;
-				ctx->compressed_cap = batch_payload;
-			}
-			if (ctx->jobs_cap < nr_jobs) {
-				void *new_jobs = xrealloc(ctx->jobs,
-							  nr_jobs * sizeof(*ctx->jobs));
-
-				if (!new_jobs)
-					goto out;
-				ctx->jobs = new_jobs;
-				ctx->jobs_cap = nr_jobs;
-			}
 		}
 
-		/* Consume this batch in one sequential read from the image stream. */
-		if (batch_payload) {
-			bytes = read_all(fd, ctx->compressed, batch_payload);
-			if (bytes < 0) {
-				pr_perror("Can't read compressed streaming batch");
-				goto out;
-			}
-			if ((size_t)bytes != batch_payload) {
-				pr_err("Reached EOF reading compressed streaming batch: %zd of %zu bytes\n",
-				       bytes, batch_payload);
-				goto out;
-			}
-		}
-
-		/* Fill zero/raw pages and describe disjoint LZ4 destinations. */
-		nr_jobs = 0;
-		for (i = 0; i < batch_pages; i++) {
-			size_t idx = first + i;
-			uint32_t cs = pr->pe->blocks->block_sizes[idx];
-			char *dst = (char *)buf +
-				    (pages_done + i) * PAGE_SIZE;
-
-			if (!cs) {
-				memset(dst, 0, PAGE_SIZE);
-			} else if (cs == PAGE_SIZE) {
-				memcpy(dst, ctx->compressed + payload_offset,
-				       PAGE_SIZE);
-			} else {
-				struct decompress_job *job = &ctx->jobs[nr_jobs++];
-
-				job->src = ctx->compressed + payload_offset;
-				job->dst = dst;
-				job->compressed_size = cs;
-				job->pages = 1;
-				job->block_index = i;
-				jobs_uncompressed += PAGE_SIZE;
-			}
-			payload_offset += cs;
-		}
-
-		if (payload_offset != batch_payload) {
-			pr_err("Compressed streaming batch metadata mismatch: %zu != %zu\n",
-			       payload_offset, batch_payload);
+		if (encoded_stream_read_batch(fd, (char *)buf + pages_done * PAGE_SIZE,
+					      &pr->pe->blocks->block_sizes[first],
+					      batch_pages, batch_payload, nr_jobs, ctx, first) < 0)
 			goto out;
-		}
-		/* Source pointers remain stable until all jobs in the batch finish. */
-		if (nr_jobs &&
-		    decompress_jobs_parallel_pool(&ctx->pool, ctx->jobs, nr_jobs,
-						  jobs_uncompressed,
-						  opts.decompress_threads)) {
-			pr_err("Unable to decompress streaming batch at page %zu\n",
-			       first);
-			goto out;
-		}
 
 		total_payload += batch_payload;
 		pages_done += batch_pages;
@@ -1813,127 +1703,6 @@ static void drain_async_queue(struct page_read *pr)
 		drain_async_queue(pr->parent);
 }
 
-/*
- * Validate a raw/zero compressed-format request before it bypasses LZ4.
- * Block metadata must describe exactly the destination bytes; packed-raw
- * payload bytes must also match the pages-image extent, while zero requests
- * have no payload. This keeps both the local preadv path and rendered PIE
- * requests from trusting inconsistent counts.
- */
-static int validate_direct_compressed_iov(const struct page_read_iov *piov)
-{
-	uint64_t payload_bytes = 0;
-	uint64_t output_bytes = 0;
-	uint64_t iov_bytes = 0;
-	size_t i;
-
-	if (piov->storage != VMA_IO_PACKED_RAW &&
-	    piov->storage != VMA_IO_ZERO)
-		return -1;
-	if (!piov->b_layout.nr_blocks || !piov->b_layout.sizes) {
-		pr_err("Direct compressed I/O job has no block metadata\n");
-		return -1;
-	}
-	if (piov->b_layout.pages_per_block && !piov->block_pages) {
-		pr_err("Direct block I/O job has no block-page metadata\n");
-		return -1;
-	}
-
-	/* Sum and validate each block without overflowing either byte count. */
-	for (i = 0; i < piov->b_layout.nr_blocks; i++) {
-		unsigned int block_pages = piov->b_layout.pages_per_block ?
-						piov->block_pages[i] : 1;
-		uint64_t block_bytes;
-		uint32_t compressed_size = piov->b_layout.sizes[i];
-
-		if (!block_pages ||
-		    (piov->b_layout.pages_per_block && block_pages > piov->b_layout.pages_per_block)) {
-			pr_err("Invalid page count %u for direct block %zu\n",
-			       block_pages, i);
-			return -1;
-		}
-		block_bytes = (uint64_t)block_pages * PAGE_SIZE;
-		if (piov->storage == VMA_IO_PACKED_RAW &&
-		    compressed_size != block_bytes) {
-			pr_err("Packed-raw block %zu has size %u, expected %" PRIu64 "\n",
-			       i, compressed_size, block_bytes);
-			return -1;
-		}
-		if (piov->storage == VMA_IO_ZERO && compressed_size) {
-			pr_err("Zero block %zu has payload size %u\n", i,
-			       compressed_size);
-			return -1;
-		}
-		if (payload_bytes > UINT64_MAX - compressed_size ||
-		    output_bytes > UINT64_MAX - block_bytes) {
-			pr_err("Direct compressed I/O size overflows\n");
-			return -1;
-		}
-		payload_bytes += compressed_size;
-		output_bytes += block_bytes;
-	}
-
-	/* Independently account the scatter/gather destination. */
-	for (i = 0; i < piov->nr; i++) {
-		if (iov_bytes > UINT64_MAX - piov->to[i].iov_len) {
-			pr_err("Direct compressed destination size overflows\n");
-			return -1;
-		}
-		iov_bytes += piov->to[i].iov_len;
-	}
-
-	if (payload_bytes != piov->b_layout.total_bytes ||
-	    output_bytes != iov_bytes || piov->end < piov->from ||
-	    payload_bytes != (uint64_t)(piov->end - piov->from) ||
-	    piov->n_pages > UINT64_MAX / PAGE_SIZE ||
-	    output_bytes != (uint64_t)piov->n_pages * PAGE_SIZE) {
-		pr_err("Inconsistent direct compressed I/O sizes: payload=%" PRIu64
-		       " metadata=%" PRIu64 " output=%" PRIu64 " iov=%" PRIu64
-		       " range=%jd\n", payload_bytes,
-		       piov->b_layout.total_bytes, output_bytes, iov_bytes,
-		       (intmax_t)(piov->end - piov->from));
-		return -1;
-	}
-
-	return 0;
-}
-
-static int transfer_async_block(const struct page_read_iov *piov,
-				unsigned int *iov_index, size_t *iov_offset,
-				const char *src, size_t bytes)
-{
-	while (bytes) {
-		char *dst;
-		size_t chunk;
-
-		while (*iov_index < piov->nr &&
-		       *iov_offset >= piov->to[*iov_index].iov_len) {
-			*iov_offset -= piov->to[*iov_index].iov_len;
-			(*iov_index)++;
-		}
-		if (*iov_index >= piov->nr) {
-			pr_err("Async decompression ran out of destination iovecs\n");
-			return -1;
-		}
-
-		dst = (char *)piov->to[*iov_index].iov_base + *iov_offset;
-		chunk = piov->to[*iov_index].iov_len - *iov_offset;
-		if (chunk > bytes)
-			chunk = bytes;
-
-		if (src) {
-			memcpy(dst, src, chunk);
-			src += chunk;
-		} else {
-			memset(dst, 0, chunk);
-		}
-		*iov_offset += chunk;
-		bytes -= chunk;
-	}
-
-	return 0;
-}
-
 static bool page_read_chain_has_encoded_async(struct page_read *pr)
 {
 	struct page_read_iov *piov;
@@ -1944,245 +1713,6 @@ static bool page_read_chain_has_encoded_async(struct page_read *pr)
 	}
 
 	return pr->parent && page_read_chain_has_encoded_async(pr->parent);
-}
-
-/*
- * Restore one bounded encoded piov. Validate its immutable block metadata,
- * read the packed payload once, complete raw blocks inline, and describe
- * zero/LZ4 blocks as independent worker jobs. Blocks spanning multiple
- * destination iovecs use the reusable scratch buffer. The caller owns queue
- * removal; this routine leaves the piov intact on both success and failure.
- */
-static int process_encoded_async_read(int fd, struct page_read_iov *piov,
-				      struct encoded_read_ctx *ctx,
-				      bool payload_ready,
-				      struct encoded_prefetch *prefetch)
-{
-	struct decompress_job *jobs;
-	char *compressed;
-	char *scratch;
-	size_t scratch_cap;
-	size_t compressed_offset = 0;
-	size_t total_compressed = piov->b_layout.total_bytes;
-	size_t jobs_uncompressed = 0;
-	size_t output_bytes = 0;
-	size_t expected_output;
-	size_t nr_jobs = 0;
-	unsigned int iov_index = 0;
-	size_t iov_offset = 0;
-	bool parallel_zero = false;
-	size_t i;
-	int ret = -1;
-
-	/* Validate counts before they drive buffer growth or offset arithmetic. */
-	if (!ctx || !ctx->batch_acquired) {
-		pr_err("Encoded async I/O job has no active shared read context\n");
-		return -1;
-	}
-	parallel_zero = compressed_restore_has_parallel_capacity(opts.decompress_threads);
-	if (!piov->b_layout.nr_blocks || !piov->b_layout.sizes) {
-		pr_err("Encoded async I/O job has no block metadata\n");
-		return -1;
-	}
-	if (piov->b_layout.nr_blocks > (size_t)INT_MAX ||
-	    piov->b_layout.nr_blocks > SIZE_MAX / sizeof(*jobs)) {
-		pr_err("Encoded async I/O job has too many blocks: %zu\n",
-		       piov->b_layout.nr_blocks);
-		return -1;
-	}
-	if (piov->b_layout.pages_per_block && !piov->block_pages) {
-		pr_err("Encoded block I/O job has no block-page metadata\n");
-		return -1;
-	}
-	if ((uint64_t)total_compressed != piov->b_layout.total_bytes) {
-		pr_err("Encoded async I/O size does not fit in size_t\n");
-		return -1;
-	}
-	if (piov->n_pages > SIZE_MAX / PAGE_SIZE) {
-		pr_err("Encoded async I/O page count does not fit in size_t\n");
-		return -1;
-	}
-	expected_output = (size_t)piov->n_pages * (size_t)PAGE_SIZE;
-	/* Grow buffers under the active read's bounded working-set lease. */
-
-	if (ctx->jobs_cap < piov->b_layout.nr_blocks) {
-		void *new_jobs = xrealloc(ctx->jobs,
-					  piov->b_layout.nr_blocks * sizeof(*jobs));
-
-		if (!new_jobs)
-			goto out;
-		ctx->jobs = new_jobs;
-		ctx->jobs_cap = piov->b_layout.nr_blocks;
-	}
-	jobs = ctx->jobs;
-
-	if (total_compressed) {
-		if (ctx->compressed_cap < total_compressed) {
-			void *new_compressed;
-
-			if (payload_ready) {
-				pr_err("Prefetched encoded payload exceeds its buffer\n");
-				goto out;
-			}
-			new_compressed = xrealloc(ctx->compressed,
-						  total_compressed);
-
-			if (!new_compressed)
-				goto out;
-			ctx->compressed = new_compressed;
-			ctx->compressed_cap = total_compressed;
-		}
-		compressed = ctx->compressed;
-		if (!payload_ready &&
-		    pread_full(fd, compressed, total_compressed, piov->from))
-			goto out;
-	} else
-		compressed = NULL;
-	scratch = ctx->scratch;
-	scratch_cap = ctx->scratch_cap;
-
-	/* Build disjoint zero/LZ4 jobs while completing raw blocks inline. */
-	for (i = 0; i < piov->b_layout.nr_blocks; i++) {
-		uint32_t compressed_size = piov->b_layout.sizes[i];
-		unsigned int block_pages = 1;
-		size_t block_bytes;
-		size_t bound = PAGE_COMPRESSED_SIZE_BOUND;
-		char *direct_dst = NULL;
-
-		if (piov->b_layout.pages_per_block)
-			block_pages = piov->block_pages[i];
-		if (!block_pages ||
-		    (piov->b_layout.pages_per_block && block_pages > piov->b_layout.pages_per_block)) {
-			pr_err("Async: invalid page count %u for block %zu\n",
-			       block_pages, i);
-			goto out;
-		}
-		block_bytes = (size_t)block_pages * PAGE_SIZE;
-		if (piov->b_layout.pages_per_block)
-			bound = BLOCK_COMPRESSED_SIZE_BOUND(block_pages);
-		if (compressed_size > bound ||
-		    compressed_size > total_compressed - compressed_offset) {
-			pr_err("Async: invalid compressed size %u for block %zu\n",
-			       compressed_size, i);
-			goto out;
-		}
-		if (output_bytes > SIZE_MAX - block_bytes) {
-			pr_err("Async decompressed size overflows\n");
-			goto out;
-		}
-		output_bytes += block_bytes;
-
-		while (iov_index < piov->nr && iov_offset >= piov->to[iov_index].iov_len) {
-			iov_offset -= piov->to[iov_index].iov_len;
-			iov_index++;
-		}
-		if (iov_index >= piov->nr) {
-			pr_err("Async: ran out of iovecs at block %zu\n", i);
-			goto out;
-		}
-		if (block_bytes <= piov->to[iov_index].iov_len - iov_offset)
-			direct_dst = (char *)piov->to[iov_index].iov_base + iov_offset;
-
-		if (!compressed_size && (!direct_dst || !parallel_zero)) {
-			if (transfer_async_block(piov, &iov_index, &iov_offset,
-						 NULL, block_bytes))
-				goto out;
-		} else if (compressed_size == block_bytes) {
-			if (transfer_async_block(piov, &iov_index, &iov_offset,
-						 compressed + compressed_offset,
-						 block_bytes))
-				goto out;
-		} else if (compressed_size >= block_bytes) {
-			pr_err("Async: LZ4 block %zu has invalid size %u for %zu bytes\n",
-			       i, compressed_size, block_bytes);
-			goto out;
-		} else if (direct_dst) {
-			struct decompress_job *job = &jobs[nr_jobs++];
-
-			job->src = compressed_size ? compressed + compressed_offset : NULL;
-			job->dst = direct_dst;
-			job->compressed_size = compressed_size;
-			job->pages = block_pages;
-			job->block_index = i;
-			if (jobs_uncompressed > SIZE_MAX - block_bytes) {
-				pr_err("Parallel decompression size overflows\n");
-				goto out;
-			}
-			jobs_uncompressed += block_bytes;
-			iov_offset += block_bytes;
-		} else {
-			void *new_scratch;
-
-			/* A block crossing iovecs needs one serial staging copy. */
-			if (scratch_cap < block_bytes) {
-				new_scratch = xrealloc(scratch, block_bytes);
-				if (!new_scratch)
-					goto out;
-				scratch = new_scratch;
-				scratch_cap = block_bytes;
-				ctx->scratch = scratch;
-				ctx->scratch_cap = scratch_cap;
-			}
-			if (decompress_block(compressed + compressed_offset,
-					     compressed_size, block_pages,
-					     scratch)) {
-				pr_err("Async decompression failed at split block %zu\n", i);
-				goto out;
-			}
-			if (transfer_async_block(piov, &iov_index, &iov_offset,
-						 scratch, block_bytes))
-				goto out;
-		}
-
-		compressed_offset += compressed_size;
-	}
-
-	while (iov_index < piov->nr && iov_offset >= piov->to[iov_index].iov_len) {
-		iov_offset -= piov->to[iov_index].iov_len;
-		iov_index++;
-	}
-	if (compressed_offset != total_compressed || iov_index != piov->nr ||
-	    iov_offset || output_bytes != expected_output) {
-		pr_err("Inconsistent encoded async I/O sizes: payload=%zu/%zu output=%zu/%zu\n",
-		       compressed_offset, total_compressed, output_bytes,
-		       expected_output);
-		goto out;
-	}
-
-	/* The caller can read the next payload while pool workers run these jobs. */
-	if (decompress_jobs_parallel_pool_with_caller_work(
-		    &ctx->pool, jobs, nr_jobs, jobs_uncompressed,
-		    opts.decompress_threads,
-		    prefetch ? encoded_prefetch_read : NULL, prefetch))
-		goto out;
-
-	ret = 0;
-out:
-	return ret;
-}
-
-static bool encoded_prefetch_eligible(const struct page_read *pr,
-				      const struct page_read_iov *current,
-				      const struct page_read_iov *next)
-{
-	size_t next_size = next->b_layout.total_bytes;
-
-	if (opts.stream || pr->use_direct || next->storage != VMA_IO_ENCODED)
-		return false;
-	if (!compressed_restore_has_parallel_capacity(opts.decompress_threads))
-		return false;
-	if (current->n_pages < PARALLEL_RESTORE_MIN_BATCH_BYTES / PAGE_SIZE ||
-	    next->n_pages < PARALLEL_RESTORE_MIN_BATCH_BYTES / PAGE_SIZE)
-		return false;
-	if (!next_size || next_size > ASYNC_BATCH_MAX_BYTES ||
-	    (uint64_t)next_size != next->b_layout.total_bytes ||
-	    next->end < next->from)
-		return false;
-	if ((uint64_t)(next->end - next->from) !=
-	    next->b_layout.total_bytes)
-		return false;
-
-	return true;
 }
 
 /*
@@ -2261,41 +1791,10 @@ static int process_async_reads_ctx(struct page_read *pr,
 		}
 
 		if (piov->storage == VMA_IO_ENCODED) {
-			bool prefetch_prepared = false;
-			int payload_ready;
+			bool is_last = list_is_last(&piov->l, &pr->async);
 
-			if (!encoded_ctx) {
-				pr_err("Encoded async I/O job has no shared read context\n");
-				ret = -1;
-				goto err;
-			}
-			if (!encoded_ctx->batch_acquired)
-				encoded_read_ctx_begin_work(encoded_ctx);
-
-			payload_ready = encoded_prefetch_take(encoded_ctx, piov,
-							      piov->b_layout.total_bytes);
-			if (payload_ready < 0) {
-				ret = -1;
-				goto err;
-			}
-			if (!list_is_last(&piov->l, &pr->async) &&
-			    encoded_prefetch_eligible(pr, piov, n)) {
-				prefetch_prepared = encoded_prefetch_prepare(
-					encoded_ctx, fd, n->from,
-					(size_t)n->b_layout.total_bytes);
-			} else if (encoded_ctx->prefetch_batch_acquired) {
-				encoded_prefetch_disable(encoded_ctx);
-			}
-
-			ret = process_encoded_async_read(
-				fd, piov, encoded_ctx, payload_ready > 0,
-				prefetch_prepared ? &encoded_ctx->prefetch : NULL);
-			if (prefetch_prepared) {
-				if (ret < 0 || !encoded_ctx->prefetch.complete)
-					encoded_prefetch_disable(encoded_ctx);
-				else
-					encoded_prefetch_publish(encoded_ctx, n);
-			}
+			ret = encoded_async_read_batch(fd, piov, is_last ? NULL : n,
+						       is_last, encoded_ctx, pr);
 			if (ret < 0)
 				goto err;
 			goto next;
@@ -2400,10 +1899,8 @@ static int process_async_reads(struct page_read *pr)
 
 	/* Raw/zero/uncompressed-only syncs need neither buffers nor a lease. */
 	if (page_read_chain_has_encoded_async(pr)) {
-		if (!owner->blk.encoded_ctx) {
-			owner->blk.encoded_ctx =
-				xzalloc(sizeof(*owner->blk.encoded_ctx));
-		}
+		if (!owner->blk.encoded_ctx)
+			owner->blk.encoded_ctx = encoded_read_ctx_alloc();
 		if (!owner->blk.encoded_ctx) {
 			drain_async_queue(pr);
 			return -1;
@@ -2425,8 +1922,7 @@ static void close_page_read(struct page_read *pr)
 	 * sync, so one pool also spans its bounded decode chunks.
 	 */
 	if (pr->blk.encoded_owner == pr) {
-		encoded_read_ctx_fini(pr->blk.encoded_ctx);
-		xfree(pr->blk.encoded_ctx);
+		encoded_read_ctx_destroy(pr->blk.encoded_ctx);
 		pr->blk.encoded_ctx = NULL;
 	}
 
