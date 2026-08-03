@@ -23,7 +23,7 @@
 
 #include <time.h>
 
-#include "pagemap-region.h"
+#include "pagemap-block.h"
 #include "images/mm.pb-c.h"
 
 /*
@@ -155,7 +155,7 @@ struct restore_vma_io {
 	int nr_iovs;
 	loff_t off;
 	enum restore_vma_io_storage storage;
-	struct page_region_layout r_layout;
+	struct page_block_layout b_layout;
 	int n_pages;
 	uint16_t *block_pages;
 	struct iovec iovs[0];

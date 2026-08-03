@@ -245,10 +245,10 @@ def test_exceptional_mappings_and_timestamps():
 
         task_pm = load(directory, "pagemap-100.img")["entries"][1]
         shared_pm = load(directory, "pagemap-shmem-77.img")["entries"][1]
-        assert task_pm["regions"]["region_sizes"][:2] == [PAGE_SIZE, PAGE_SIZE]
-        assert 0 < task_pm["regions"]["region_sizes"][2] < PAGE_SIZE
-        assert shared_pm["regions"]["region_sizes"][0] == PAGE_SIZE
-        assert 0 < shared_pm["regions"]["region_sizes"][1] < PAGE_SIZE
+        assert task_pm["blocks"]["block_sizes"][:2] == [PAGE_SIZE, PAGE_SIZE]
+        assert 0 < task_pm["blocks"]["block_sizes"][2] < PAGE_SIZE
+        assert shared_pm["blocks"]["block_sizes"][0] == PAGE_SIZE
+        assert 0 < shared_pm["blocks"]["block_sizes"][1] < PAGE_SIZE
 
         decompressed_times = {}
         for index, path in enumerate(
@@ -308,11 +308,11 @@ def test_acceleration():
             pagemap_entry = load(directory, "pagemap-1.img")["entries"][1]
             encoded = expected[acceleration]
             if len(encoded) >= crit_main.PAGE_COMPRESSION_THRESHOLD:
-                assert "regions" not in pagemap_entry
+                assert "blocks" not in pagemap_entry
                 with open(os.path.join(directory, "pages-1.img"), "rb") as pages:
                     assert pages.read() == page
             else:
-                assert pagemap_entry["regions"]["region_sizes"] == [len(encoded)]
+                assert pagemap_entry["blocks"]["block_sizes"] == [len(encoded)]
                 with open(os.path.join(directory, "pages-1.img"), "rb") as pages:
                     assert pages.read() == encoded
 
@@ -320,16 +320,17 @@ def test_acceleration():
 def test_unknown_compression_mode():
     # Unknown enum values must be rejected before the "already compressed"
     # no-op and before any temporary or replacement image is created.
-    for command in ("compress", "decompress"):
-        with tempfile.TemporaryDirectory(dir=".") as directory:
-            ordinary_checkpoint(directory, b"F" * PAGE_SIZE)
-            inventory_image = load(directory, "inventory.img")
-            inventory_image["entries"][0]["compress"] = 0xFFFFFFFF
-            write_image(directory, "inventory.img", inventory_image)
-            before = image_bytes(directory)
-            assert run_transform(command, directory) == 1
-            assert image_bytes(directory) == before
-            assert not glob.glob(os.path.join(directory, ".*.crit-*"))
+    for compression_mode in (2, 0xFFFFFFFF):
+        for command in ("compress", "decompress"):
+            with tempfile.TemporaryDirectory(dir=".") as directory:
+                ordinary_checkpoint(directory, b"F" * PAGE_SIZE)
+                inventory_image = load(directory, "inventory.img")
+                inventory_image["entries"][0]["compress"] = compression_mode
+                write_image(directory, "inventory.img", inventory_image)
+                before = image_bytes(directory)
+                assert run_transform(command, directory) == 1
+                assert image_bytes(directory) == before
+                assert not glob.glob(os.path.join(directory, ".*.crit-*"))
 
 
 def run_transform(command, directory):
@@ -340,7 +341,7 @@ def run_transform(command, directory):
     return crit_main.decompress_cmd({"dir": directory, "in_place": True})
 
 
-def test_zero_region_granularity():
+def test_zero_block_granularity():
     with tempfile.TemporaryDirectory(dir=".") as directory:
         inventory(directory, compress=1, image_version=3)
         with open(os.path.join(directory, "pages-1.img"), "wb") as pages:
@@ -355,9 +356,9 @@ def test_zero_region_granularity():
                     "compat_nr_pages": 1,
                     "nr_pages": 1,
                     "flags": PE_PRESENT,
-                    "regions": {
-                        "pages_per_region": 0,
-                        "region_sizes": [PAGE_SIZE],
+                    "blocks": {
+                        "pages_per_block": 0,
+                        "block_sizes": [PAGE_SIZE],
                         "total_payload_size": PAGE_SIZE,
                     },
                 }
@@ -439,7 +440,7 @@ def main():
     test_exceptional_mappings_and_timestamps()
     test_acceleration()
     test_unknown_compression_mode()
-    test_zero_region_granularity()
+    test_zero_block_granularity()
     test_unsupported_image_version()
     test_compression_requires_v1_2_inventory()
     test_uncompressed_v1_2_inventory_is_valid()
