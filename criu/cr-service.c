@@ -839,15 +839,12 @@ static int setup_opts_from_req(int sk, CriuOpts *req)
 		opts.mntns_compat_mode = true;
 
 	if (req->has_compress) {
-		if (req->compress > COMPRESS_REGION) {
+		if (req->compress > COMPRESS_BLOCK) {
 			pr_err("Invalid compress value %u\n", req->compress);
 			goto err;
 		}
 		if (req->compress != COMPRESS_OFF) {
-			opts.compress_mode = COMPRESS_REGION;
-			/* Legacy per-page RPC mode maps to a page-sized region. */
-			if (req->compress == 1)
-				opts.compress_region_size = PAGE_SIZE;
+			opts.compress_mode = COMPRESS_BLOCK;
 		} else {
 			/*
 			 * An explicit RPC setting has precedence over values loaded
@@ -856,13 +853,13 @@ static int setup_opts_from_req(int sk, CriuOpts *req)
 			 * RPC request which asks for both settings at once.
 			 */
 			if (req->has_compress_acceleration ||
-			    req->has_compress_region_size) {
+			    req->has_compress_block_size) {
 				pr_err("compress=off conflicts with compression tuning options\n");
 				goto err;
 			}
 			opts.compress_mode = COMPRESS_OFF;
 			opts.compress_acceleration = 0;
-			opts.compress_region_size = 0;
+			opts.compress_block_size = 0;
 		}
 	}
 
@@ -874,23 +871,23 @@ static int setup_opts_from_req(int sk, CriuOpts *req)
 			goto err;
 		}
 		opts.compress_acceleration = req->compress_acceleration;
-		if (!req->has_compress_region_size &&
-		    (!req->has_compress || req->compress == 1)) {
-			opts.compress_mode = COMPRESS_REGION;
-			opts.compress_region_size = PAGE_SIZE;
+		if (!req->has_compress_block_size &&
+		    !req->has_compress) {
+			opts.compress_mode = COMPRESS_BLOCK;
+			opts.compress_block_size = PAGE_SIZE;
 		}
 	}
 
-	if (req->has_compress_region_size) {
-		if (req->compress_region_size == 0 ||
-		    req->compress_region_size % PAGE_SIZE != 0 ||
-		    req->compress_region_size > MAX_REGION_SIZE) {
-			pr_err("Invalid compress_region_size value %u\n",
-			       req->compress_region_size);
+	if (req->has_compress_block_size) {
+		if (req->compress_block_size == 0 ||
+		    req->compress_block_size % PAGE_SIZE != 0 ||
+		    req->compress_block_size > MAX_BLOCK_SIZE) {
+			pr_err("Invalid compress_block_size value %u\n",
+			       req->compress_block_size);
 			goto err;
 		}
-		opts.compress_region_size = req->compress_region_size;
-		opts.compress_mode = COMPRESS_REGION;
+		opts.compress_block_size = req->compress_block_size;
+		opts.compress_mode = COMPRESS_BLOCK;
 	}
 
 	if (req->has_decompress_threads) {

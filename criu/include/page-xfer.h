@@ -1,7 +1,7 @@
 #ifndef __CR_PAGE_XFER__H__
 #define __CR_PAGE_XFER__H__
 #include "pagemap.h"
-#include "pagemap-region.h"
+#include "pagemap-block.h"
 
 struct ps_info {
 	int pid;
@@ -66,15 +66,14 @@ struct page_xfer {
 	 * compresses all pages. Once done, write_pages writes
 	 * the complete pagemap entry.
 	 *
-	 * In region mode (region_pages > 0) the compressed_size[]
-	 * array holds one element per region (length n_compressed
-	 * == ceil(nr_pages / region_pages)).
+	 * The sizes[] array holds one element per compressed block (length
+	 * n_compressed == ceil(nr_pages / pages_per_block)).
 	 */
 	struct {
 		unsigned long vaddr;
 		unsigned long nr_pages;
 		u32 flags;
-		struct page_region_layout r_layout;
+		struct page_block_layout b_layout;
 		/* Number of compressed blocks emitted so far. */
 		size_t n_compressed;
 		/* Whether this entry has emitted its first non-zero payload. */

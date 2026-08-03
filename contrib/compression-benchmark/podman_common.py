@@ -48,16 +48,27 @@ PODMAN = "podman"
 RUNC_CONF_BEGIN = "# BEGIN criu-compression-benchmark"
 RUNC_CONF_END = "# END criu-compression-benchmark"
 PAGE_SIZE = os.sysconf("SC_PAGE_SIZE")
-MAX_REGION_SIZE = 4 * 1024 * 1024
+MAX_BLOCK_SIZE = 4 * 1024 * 1024
 MAX_COMPRESSION_ACCELERATION = 65537
 MAX_DECOMPRESSION_THREADS = 1024
 COMPRESSION_OPTIONS = {
-    "compress", "compress-region", "compress-acceleration",
+    "compress", "compress-block", "compress-acceleration",
     "decompress-threads",
 }
 HF_TOKEN_ENV_VARS = ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN")
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 SIGNALS = (signal.SIGINT, signal.SIGHUP, signal.SIGTERM)
+
+
+def default_block_sizes(page_size):
+    candidates = (page_size, 64 * 1024, 256 * 1024, 1024 * 1024)
+    return list(dict.fromkeys(
+        size for size in candidates
+        if size <= MAX_BLOCK_SIZE and size % page_size == 0
+    ))
+
+
+DEFAULT_BLOCK_SIZES = default_block_sizes(PAGE_SIZE)
 
 
 class ServingBenchmark:
@@ -197,9 +208,7 @@ def format_duration(microseconds):
 def cfg_label(cfg):
     if cfg["mode"] == "uncompressed":
         return "Uncompressed"
-    if cfg["mode"] == "lz4-page":
-        return f"LZ4 per page ({PAGE_SIZE // 1024} KiB blocks)"
-    return f"LZ4 regions ({cfg['region_size'] // 1024} KiB blocks)"
+    return f"LZ4 blocks ({cfg['block_size'] // 1024} KiB)"
 
 
 def decompress_threads_label(threads):
@@ -768,10 +777,7 @@ def strip_compression_runc_options(text):
 def compression_config_lines(cfg, acceleration, decompress_threads=None):
     if cfg["mode"] == "uncompressed":
         return []
-    if cfg["mode"] == "lz4-page":
-        lines = ["compress"]
-    else:
-        lines = [f"compress-region {cfg['region_size']}"]
+    lines = [f"compress-block {cfg['block_size']}"]
     if acceleration != 1:
         lines.append(f"compress-acceleration {acceleration}")
     if decompress_threads is not None:
@@ -960,7 +966,7 @@ def inventory_entry_from_archive(archive):
 
 def verify_archive_compression(archive, cfg):
     entry = inventory_entry_from_archive(archive)
-    expected = {"uncompressed": 0, "lz4-page": 1, "lz4-region": 2}[cfg["mode"]]
+    expected = {"uncompressed": 0, "lz4-block": 1}[cfg["mode"]]
     try:
         actual = int(entry.get("compress", 0))
     except (TypeError, ValueError) as exc:
@@ -970,17 +976,17 @@ def verify_archive_compression(archive, cfg):
             "checkpoint compression mode does not match the benchmark "
             f"configuration: expected {expected}, found {actual}"
         )
-    if expected == 2:
+    if expected == 1:
         try:
-            region_size = int(entry.get("compress_region_size", 0))
+            block_size = int(entry.get("compress_block_size", 0))
         except (TypeError, ValueError) as exc:
             raise RuntimeError(
-                "checkpoint inventory has an invalid compression region size"
+                "checkpoint inventory has an invalid compression block size"
             ) from exc
-        if region_size != cfg["region_size"]:
+        if block_size != cfg["block_size"]:
             raise RuntimeError(
-                "checkpoint compression region does not match the benchmark "
-                f"configuration: expected {cfg['region_size']}, found {region_size}"
+                "checkpoint compression block does not match the benchmark "
+                f"configuration: expected {cfg['block_size']}, found {block_size}"
             )
     return actual
 
@@ -1154,13 +1160,14 @@ def run_main(benchmark, argv=None, description=None):
     ap.add_argument("--container-name", default=adapter.default_container_name)
     ap.add_argument("-n", "--iterations", type=int, default=3)
     ap.add_argument("--modes", nargs="+",
-                    default=["uncompressed", "lz4-page", "lz4-region"],
-                    choices=["uncompressed", "lz4-page", "lz4-region"],
+                    default=["uncompressed", "lz4-block"],
+                    choices=["uncompressed", "lz4-block"],
                     help="CRIU memory page compression modes to compare")
-    ap.add_argument("--region-sizes", nargs="+", type=int,
-                    default=[65536, 262144, 1048576],
-                    help="Region sizes in bytes when --modes contains "
-                         "lz4-region")
+    ap.add_argument("--block-sizes", nargs="+", type=int,
+                    default=DEFAULT_BLOCK_SIZES,
+                    help="Block sizes in bytes when --modes contains "
+                         "lz4-block (default: page size and supported values "
+                         "among 64K, 256K, and 1M)")
     ap.add_argument("--compress-acceleration", type=int, default=1,
                     help="CRIU LZ4 acceleration level")
     ap.add_argument("--decompress-threads", type=int, default=None,
@@ -1228,14 +1235,14 @@ def run_main(benchmark, argv=None, description=None):
             not 0 <= args.decompress_threads <= MAX_DECOMPRESSION_THREADS:
         ap.error("--decompress-threads must be between 0 and "
                  f"{MAX_DECOMPRESSION_THREADS}")
-    if any(size <= 0 or size > MAX_REGION_SIZE or size % PAGE_SIZE
-           for size in args.region_sizes):
-        ap.error(f"--region-sizes must be positive multiples of {PAGE_SIZE} "
-                 f"not exceeding {MAX_REGION_SIZE}")
+    if any(size <= 0 or size > MAX_BLOCK_SIZE or size % PAGE_SIZE
+           for size in args.block_sizes):
+        ap.error(f"--block-sizes must be positive multiples of {PAGE_SIZE} "
+                 f"not exceeding {MAX_BLOCK_SIZE}")
     if len(args.modes) != len(set(args.modes)):
         ap.error("--modes must not contain duplicate values")
-    if len(args.region_sizes) != len(set(args.region_sizes)):
-        ap.error("--region-sizes must not contain duplicate values")
+    if len(args.block_sizes) != len(set(args.block_sizes)):
+        ap.error("--block-sizes must not contain duplicate values")
     if any(item.split("=", 1)[0] in HF_TOKEN_ENV_VARS for item in args.env):
         ap.error("set Hugging Face tokens in the host environment instead of "
                  "passing their values through --env")
@@ -1277,11 +1284,11 @@ def run_main(benchmark, argv=None, description=None):
 
     cfgs = []
     for mode in args.modes:
-        if mode == "lz4-region":
-            for rs in args.region_sizes:
-                cfgs.append({"mode": "lz4-region", "region_size": rs})
+        if mode == "lz4-block":
+            for bs in args.block_sizes:
+                cfgs.append({"mode": "lz4-block", "block_size": bs})
         else:
-            cfgs.append({"mode": mode, "region_size": 0})
+            cfgs.append({"mode": mode, "block_size": 0})
     labels = [cfg_label(cfg) for cfg in cfgs]
 
     print(f"  Config : {args.iterations}+1 iterations, "
