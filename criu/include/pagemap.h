@@ -48,23 +48,23 @@
 struct encoded_read_ctx;
 struct page_read;
 
-struct page_read_region_state {
+struct page_read_block_state {
 	/*
-	 * Index into pe->regions->region_sizes[] for the current pagemap
+	 * Index into pe->blocks->block_sizes[] for the current pagemap
 	 * entry. Tracks which block we are on when reading or skipping.
 	 * Reset to 0 on advance().
 	 */
 	size_t block_idx;
 
 	/*
-	 * In region mode: pages already consumed (read or skipped) from
-	 * the current block (0 when granularity is one page). Reset to 0 on
-	 * advance() and whenever the reader crosses a block boundary.
+	 * Pages already consumed (read or skipped) from the current block
+	 * (0 when granularity is one page). Reset to 0 on advance() and
+	 * whenever the reader crosses a block boundary.
 	 */
 	unsigned int block_offset;
 
 	/*
-	 * Last decompressed region block for repeated partial reads. A page
+	 * Last decompressed block for repeated partial reads. A page
 	 * reader belongs to one pages image, so its virtual address and size
 	 * uniquely identify the cached block. A zero size means no valid cache.
 	 */
@@ -141,7 +141,7 @@ struct page_read {
 	/* Alignment bytes a sequential image-streamer reader must discard. */
 	size_t stream_padding;
 
-	struct page_read_region_state reg;
+	struct page_read_block_state blk;
 
 	/* Record consequent neighbour iov-ecs to punch together */
 	struct iovec bunch;

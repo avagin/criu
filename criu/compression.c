@@ -231,24 +231,24 @@ static int decompress_data_nolog(const char *compressed_data,
 	return ret == original_size ? 0 : -1;
 }
 
-int compress_region(const char *src, unsigned int n_pages, char *dst,
-		    size_t dst_cap, int acceleration)
+int compress_block(const char *src, unsigned int n_pages, char *dst,
+		   size_t dst_cap, int acceleration)
 {
-	size_t region_bytes;
+	size_t block_bytes;
 	unsigned int i;
 	int ret;
 
-	if (n_pages == 0 || n_pages > MAX_REGION_PAGES) {
-		pr_err("compress_region: invalid n_pages %u\n", n_pages);
+	if (n_pages == 0 || n_pages > MAX_BLOCK_PAGES) {
+		pr_err("compress_block: invalid n_pages %u\n", n_pages);
 		return -1;
 	}
 	if (!src || !dst) {
-		pr_err("compress_region: invalid buffer\n");
+		pr_err("compress_block: invalid buffer\n");
 		return -1;
 	}
-	region_bytes = (size_t)n_pages * PAGE_SIZE;
+	block_bytes = (size_t)n_pages * PAGE_SIZE;
 
-	/* Cheap pre-pass: every page in the region zero-filled? */
+	/* Cheap pre-pass: every page in the block zero-filled? */
 	for (i = 0; i < n_pages; i++) {
 		if (!page_is_all_zero(src + (size_t)i * PAGE_SIZE))
 			break;
@@ -256,68 +256,68 @@ int compress_region(const char *src, unsigned int n_pages, char *dst,
 	if (i == n_pages)
 		return 0;
 
-	if (dst_cap < region_bytes) {
-		pr_err("compress_region: dst buffer (%zu) smaller than region (%zu)\n",
-		       dst_cap, region_bytes);
+	if (dst_cap < block_bytes) {
+		pr_err("compress_block: dst buffer (%zu) smaller than block (%zu)\n",
+		       dst_cap, block_bytes);
 		return -1;
 	}
 
 	if (acceleration < 1)
 		acceleration = 1;
 
-	ret = LZ4_compress_fast(src, dst, region_bytes, dst_cap, acceleration);
-	if (ret <= 0 || (size_t)ret >= REGION_COMPRESSION_THRESHOLD(region_bytes)) {
+	ret = LZ4_compress_fast(src, dst, block_bytes, dst_cap, acceleration);
+	if (ret <= 0 || (size_t)ret >= BLOCK_COMPRESSION_THRESHOLD(block_bytes)) {
 		/*
 		 * LZ4 can fail when dst_cap is below LZ4 worst-case bound
 		 * (which the caller should size correctly), or when the
 		 * compressed size hits the threshold and we'd rather store
 		 * raw. Either way, fall back to raw.
 		 */
-		memcpy(dst, src, region_bytes);
-		return region_bytes;
+		memcpy(dst, src, block_bytes);
+		return block_bytes;
 	}
 
 	return ret;
 }
 
-int decompress_region(const char *src, int compressed_size,
-		      unsigned int n_pages, char *dst)
+int decompress_block(const char *src, int compressed_size,
+		     unsigned int n_pages, char *dst)
 {
-	size_t region_bytes;
+	size_t block_bytes;
 
-	if (n_pages == 0 || n_pages > MAX_REGION_PAGES) {
-		pr_err("decompress_region: invalid n_pages %u\n", n_pages);
+	if (n_pages == 0 || n_pages > MAX_BLOCK_PAGES) {
+		pr_err("decompress_block: invalid n_pages %u\n", n_pages);
 		return -1;
 	}
 	if (compressed_size < 0) {
-		pr_err("decompress_region: negative compressed_size %d\n",
+		pr_err("decompress_block: negative compressed_size %d\n",
 		       compressed_size);
 		return -1;
 	}
 	if (!dst || (compressed_size && !src)) {
-		pr_err("decompress_region: invalid buffer\n");
+		pr_err("decompress_block: invalid buffer\n");
 		return -1;
 	}
-	region_bytes = (size_t)n_pages * PAGE_SIZE;
+	block_bytes = (size_t)n_pages * PAGE_SIZE;
 
-	if ((size_t)compressed_size > region_bytes) {
-		pr_err("decompress_region: compressed_size %d > region %zu\n",
-		       compressed_size, region_bytes);
+	if ((size_t)compressed_size > block_bytes) {
+		pr_err("decompress_block: compressed_size %d > block %zu\n",
+		       compressed_size, block_bytes);
 		return -1;
 	}
 
 	if (compressed_size == 0) {
-		memset(dst, 0, region_bytes);
+		memset(dst, 0, block_bytes);
 		return 0;
 	}
 
-	if ((size_t)compressed_size == region_bytes) {
-		memcpy(dst, src, region_bytes);
+	if ((size_t)compressed_size == block_bytes) {
+		memcpy(dst, src, block_bytes);
 		return 0;
 	}
 
-	if (decompress_data_nolog(src, compressed_size, region_bytes, dst)) {
-		pr_err("Region decompression failed (compressed_size=%d, n_pages=%u)\n",
+	if (decompress_data_nolog(src, compressed_size, block_bytes, dst)) {
+		pr_err("Block decompression failed (compressed_size=%d, n_pages=%u)\n",
 		       compressed_size, n_pages);
 		return -1;
 	}
@@ -371,7 +371,7 @@ static int decompress_job_run(const struct decompress_job *job)
 {
 	size_t block_bytes;
 
-	if (!job->pages || job->pages > MAX_REGION_PAGES)
+	if (!job->pages || job->pages > MAX_BLOCK_PAGES)
 		return -1;
 
 	block_bytes = (size_t)job->pages * PAGE_SIZE;

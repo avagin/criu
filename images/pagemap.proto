@@ -19,34 +19,34 @@ message pagemap_entry {
 	 */
 	optional uint32	flags		= 4 [(criu).flags = "pmap.flags" ];
 	optional uint64 nr_pages	= 5;
-	optional pagemap_regions regions = 6;
+	optional pagemap_blocks blocks = 6;
 }
 
-message pagemap_regions {
+message pagemap_blocks {
 	/*
 	 * Size in bytes of each stored block in the pages image.
-	 * One element per region block (of pages_per_region pages).
+	 * One element per compressed block (of pages_per_block pages).
 	 * Special values:
 	 *   0 = all-zero block, no payload is stored in the image.
 	 *   N = stored raw (incompressible), where N is uncompressed block size:
-	 *       pages_per_region * PAGE_SIZE (the last region of an entry may
-	 *       hold fewer than pages_per_region pages).
+	 *       pages_per_block * PAGE_SIZE (the last block of an entry may
+	 *       hold fewer than pages_per_block pages).
 	 * Any other value is the length of the compressed payload.
 	 *
 	 * Packed encoding avoids one protobuf tag per memory page.
 	 */
-	repeated uint32 region_sizes	= 1 [packed = true];
+	repeated uint32 block_sizes	= 1 [packed = true];
 	/*
 	 * Total payload bytes this entry occupies in the pages image
-	 * (sum of all region_sizes[]). On restore it is an O(1) shortcut to
+	 * (sum of all block_sizes[]). On restore it is an O(1) shortcut to
 	 * advance the read offset past a whole entry (see skip_pagemap_pages())
-	 * instead of summing region_sizes[] block by block. Offsets into the
-	 * interior of an entry are still derived by walking region_sizes[], since
+	 * instead of summing block_sizes[] block by block. Offsets into the
+	 * interior of an entry are still derived by walking block_sizes[], since
 	 * a single total cannot locate an individual page.
 	 */
 	required uint64	total_payload_size = 2;
 	/*
-	 * Number of memory pages in each region block (block granularity).
+	 * Number of memory pages in each compressed block (block granularity).
 	 */
-	required uint32 pages_per_region = 3;
+	required uint32 pages_per_block = 3;
 }

@@ -762,7 +762,7 @@ int parse_options(int argc, char **argv, bool *usage_error, bool *has_exec_cmd, 
 		BOOL_OPT(OPT_ALLOW_UPROBES, &opts.allow_uprobes),
 		{ "compress",                no_argument,       0, 'c'  },
 		{ "compress-acceleration",   required_argument, 0, 1102 },
-		{ "compress-region",         required_argument, 0, 1103 },
+		{ "compress-block",          required_argument, 0, 1103 },
 		{ "decompress-threads",      required_argument, 0, 1104 },
 		{},
 	};
@@ -874,7 +874,7 @@ int parse_options(int argc, char **argv, bool *usage_error, bool *has_exec_cmd, 
 				opts.log_level++;
 			break;
 		case 'c':
-			opts.compress_mode = COMPRESS_REGION;
+			opts.compress_mode = COMPRESS_BLOCK;
 			break;
 		case 1102: {
 			char *endptr;
@@ -892,14 +892,14 @@ int parse_options(int argc, char **argv, bool *usage_error, bool *has_exec_cmd, 
 			size_t sz;
 
 			if (parse_size_strict(optarg, &sz) || sz == 0 ||
-			    sz % PAGE_SIZE != 0 || sz > MAX_REGION_SIZE) {
-				pr_err("Invalid --compress-region '%s' (must be a multiple of %lu, max %lu)\n",
+			    sz % PAGE_SIZE != 0 || sz > MAX_BLOCK_SIZE) {
+				pr_err("Invalid --compress-block '%s' (must be a multiple of %lu, max %lu)\n",
 				       optarg, (unsigned long)PAGE_SIZE,
-				       MAX_REGION_SIZE);
+				       MAX_BLOCK_SIZE);
 				return 1;
 			}
-			opts.compress_region_size = sz;
-			opts.compress_mode = COMPRESS_REGION;
+			opts.compress_block_size = sz;
+			opts.compress_mode = COMPRESS_BLOCK;
 			break;
 		}
 		case 1104: {
@@ -1185,13 +1185,13 @@ int check_options(void)
 {
 	/*
 	 * --compress-acceleration (CLI) or compress_acceleration (RPC) on
-	 * their own imply per-page compression. Resolve that here rather
+	 * their own imply block compression. Resolve that here rather
 	 * than while parsing each option, so that passing acceleration
-	 * before --compress-region is not mistaken for a conflict with an
+	 * before --compress-block is not mistaken for a conflict with an
 	 * implicit --compress.
 	 */
 	if (opts.compress_acceleration && opts.compress_mode == COMPRESS_OFF)
-		opts.compress_mode = COMPRESS_REGION;
+		opts.compress_mode = COMPRESS_BLOCK;
 
 	/*
 	 * Compression is selected by the dump client and encoded in each page
@@ -1208,33 +1208,33 @@ int check_options(void)
 		pr_err("Memory page compression requires CRIU built with LZ4 support (CONFIG_LZ4)\n");
 		return 1;
 #else
-		if (opts.compress_region_size == 0)
-			opts.compress_region_size = DEFAULT_REGION_SIZE;
-		if (opts.compress_region_size % PAGE_SIZE != 0 ||
-		    opts.compress_region_size > MAX_REGION_SIZE) {
-			pr_err("Invalid compress region size %u\n",
-			       opts.compress_region_size);
+		if (opts.compress_block_size == 0)
+			opts.compress_block_size = DEFAULT_BLOCK_SIZE;
+		if (opts.compress_block_size % PAGE_SIZE != 0 ||
+		    opts.compress_block_size > MAX_BLOCK_SIZE) {
+			pr_err("Invalid compress block size %u\n",
+			       opts.compress_block_size);
 			return 1;
 		}
-		pr_debug("Region compression of memory pages is enabled (region=%u bytes)\n",
-			 opts.compress_region_size);
+		pr_debug("Block compression of memory pages is enabled (block=%u bytes)\n",
+			 opts.compress_block_size);
 #endif
 	}
 
 	/*
-	 * Region compression with region size > PAGE_SIZE is currently only implemented
+	 * Block compression with block size > PAGE_SIZE is currently only implemented
 	 * for the local dump and restore paths. The page-server
 	 * and image-streamer wire formats require page-sized blocks; combining them with
-	 * multi-page regions would produce an image the receiver cannot read.
+	 * multi-page blocks would produce an image the receiver cannot read.
 	 * Reject the combination early.
 	 */
-	if (opts.compress_mode == COMPRESS_REGION && opts.compress_region_size > PAGE_SIZE) {
+	if (opts.compress_mode == COMPRESS_BLOCK && opts.compress_block_size > PAGE_SIZE) {
 		if (opts.use_page_server || opts.addr) {
-			pr_err("Multi-page --compress-region is not supported with --page-server (use region size 4096)\n");
+			pr_err("Multi-page --compress-block is not supported with --page-server (use block size 4096)\n");
 			return 1;
 		}
 		if (opts.stream) {
-			pr_err("Multi-page --compress-region is not supported with --stream (use region size 4096)\n");
+			pr_err("Multi-page --compress-block is not supported with --stream (use block size 4096)\n");
 			return 1;
 		}
 	}

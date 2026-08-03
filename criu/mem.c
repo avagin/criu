@@ -35,7 +35,7 @@
 #include "prctl.h"
 #include "compel/infect-util.h"
 #include "pidfd-store.h"
-#include "pagemap-region.h"
+#include "pagemap-block.h"
 #include "compression.h"
 
 #include "protobuf.h"
@@ -240,15 +240,15 @@ static int generate_iovs(struct pstree_item *item, struct vma_area *vma, struct 
 	force_raw = opts.compress_mode && self_contained;
 
 	/*
-	 * In region-compression mode, force the first page of this VMA to
+	 * In block-compression mode, force the first page of this VMA to
 	 * start a new iov so a pagemap entry -- and therefore an LZ4
-	 * region -- never spans a VMA boundary by coalescing with a
+	 * compressed block -- never spans a VMA boundary by coalescing with a
 	 * contiguous neighbour. The per-VMA restore reader clamps reads at
-	 * the VMA boundary and cannot split a region there. Only at the
+	 * the VMA boundary and cannot split a block there. Only at the
 	 * true VMA start (*pvaddr == vma start), not on a mid-VMA re-entry
 	 * after the page pipe filled up.
 	 */
-	if (opts.compress_mode == COMPRESS_REGION && *pvaddr == vma->e->start)
+	if (opts.compress_mode == COMPRESS_BLOCK && *pvaddr == vma->e->start)
 		pp->break_iov = true;
 
 	nr_scanned = 0;
@@ -1345,10 +1345,10 @@ static int restore_priv_vma_content(struct pstree_item *t, struct page_read *pr)
 				nr = min_t(unsigned long, nr_pages - i,
 					   (vma->e->end - va) / PAGE_SIZE);
 				nr = min(nr, COW_READ_BATCH_PAGES);
-				if (pr->pe->regions && pr->pe->regions->pages_per_region > 1 &&
+				if (pr->pe->blocks && pr->pe->blocks->pages_per_block > 1 &&
 				    nr < nr_pages - i) {
 					unsigned long aligned =
-						region_align_down(nr, pr->pe->regions->pages_per_region);
+						block_align_down(nr, pr->pe->blocks->pages_per_block);
 
 					if (aligned)
 						nr = aligned;

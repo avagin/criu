@@ -18,14 +18,14 @@
  */
 enum compress_mode {
 	COMPRESS_OFF		= 0,
-	COMPRESS_REGION		= 2,
+	COMPRESS_BLOCK		= 2,
 };
 
-/* Keep region memory and CLI limits stable across host page sizes. */
-#define MAX_REGION_SIZE		(4UL * 1024 * 1024)
-#define DEFAULT_REGION_SIZE	(256UL * 1024)
-#define MAX_REGION_PAGES	(MAX_REGION_SIZE / PAGE_SIZE)
-#define DEFAULT_REGION_PAGES	(DEFAULT_REGION_SIZE / PAGE_SIZE)
+/* Keep block memory and CLI limits stable across host page sizes. */
+#define MAX_BLOCK_SIZE		(4UL * 1024 * 1024)
+#define DEFAULT_BLOCK_SIZE	(256UL * 1024)
+#define MAX_BLOCK_PAGES		(MAX_BLOCK_SIZE / PAGE_SIZE)
+#define DEFAULT_BLOCK_PAGES	(DEFAULT_BLOCK_SIZE / PAGE_SIZE)
 
 /* Minimum useful batch before starting compressed-page restore workers. */
 #define PARALLEL_RESTORE_MIN_BATCH_BYTES (1UL << 20)
@@ -34,11 +34,11 @@ enum compress_mode {
 #define PAGE_COMPRESSED_SIZE_BOUND (PAGE_SIZE + (PAGE_SIZE / 255) + 16)
 
 /*
- * LZ4 worst-case compressed size for a region of n_pages pages.
+ * LZ4 worst-case compressed size for a block of n_pages pages.
  * Same formula as PAGE_COMPRESSED_SIZE_BOUND but with n_pages*PAGE_SIZE
  * as the input size.
  */
-#define REGION_COMPRESSED_SIZE_BOUND(n_pages) \
+#define BLOCK_COMPRESSED_SIZE_BOUND(n_pages) \
 	((size_t)(n_pages) * PAGE_SIZE + ((size_t)(n_pages) * PAGE_SIZE / 255) + 16)
 
 /*
@@ -47,7 +47,7 @@ enum compress_mode {
  * decompression cost on restore.
  */
 #define PAGE_COMPRESSION_THRESHOLD (PAGE_SIZE * 7 / 8)
-#define REGION_COMPRESSION_THRESHOLD(region_bytes) ((region_bytes) * 7 / 8)
+#define BLOCK_COMPRESSION_THRESHOLD(block_bytes) ((block_bytes) * 7 / 8)
 
 /*
  * Default LZ4 acceleration level for LZ4_compress_fast().
@@ -152,25 +152,25 @@ struct encoded_read_ctx {
 #ifdef CONFIG_LZ4
 
 /*
- * Compress @n_pages pages from @src into one LZ4 region block.
+ * Compress @n_pages pages from @src into one LZ4 compressed block.
  *
  * Returns the size to store in compressed_size[]:
- * - 0: all-zero region, no payload
+ * - 0: all-zero block, no payload
  * - n_pages * PAGE_SIZE: raw payload in @dst
  * - otherwise: LZ4 payload in @dst
  *
  * Returns -1 on error.
  */
-int compress_region(const char *src, unsigned int n_pages, char *dst,
-		    size_t dst_cap, int acceleration);
+int compress_block(const char *src, unsigned int n_pages, char *dst,
+		   size_t dst_cap, int acceleration);
 
 /*
- * Inverse of compress_region(). @compressed_size is the value the
+ * Inverse of compress_block(). @compressed_size is the value the
  * caller stored at compression time. Always writes n_pages*PAGE_SIZE
  * bytes into @dst.
  */
-int decompress_region(const char *src, int compressed_size,
-		      unsigned int n_pages, char *dst);
+int decompress_block(const char *src, int compressed_size,
+		     unsigned int n_pages, char *dst);
 
 /*
  * Reuse worker threads through @pool across related batches. A later wider
@@ -230,14 +230,14 @@ int encoded_prefetch_take(struct encoded_read_ctx *ctx,
 
 #else /* !CONFIG_LZ4 */
 
-static inline int compress_region(const char *src, unsigned int n_pages,
-				  char *dst, size_t dst_cap, int accel)
+static inline int compress_block(const char *src, unsigned int n_pages,
+				 char *dst, size_t dst_cap, int accel)
 {
 	return -1;
 }
 
-static inline int decompress_region(const char *src, int comp_sz,
-				    unsigned int n_pages, char *dst)
+static inline int decompress_block(const char *src, int comp_sz,
+				   unsigned int n_pages, char *dst)
 {
 	return -1;
 }
