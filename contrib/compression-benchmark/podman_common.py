@@ -974,6 +974,9 @@ def build_container_cmd(benchmark, name, args):
         cmd.append(item)
     for item in args.ulimit:
         cmd += ["--ulimit", item]
+    extra_podman_args = getattr(benchmark.adapter, "extra_podman_args", None)
+    if extra_podman_args is not None:
+        cmd += extra_podman_args(args)
 
     cmd += benchmark.adapter.server_argv(args)
 
@@ -1119,6 +1122,12 @@ def restore_container(benchmark, name, archive, args):
     r = run_cmd(cmd, env=podman_env(benchmark, args))
     command_complete_ns = time.monotonic_ns()
     restore_us = (command_complete_ns - started_ns) // 1000
+    # A memory-released serving process may deliberately report unhealthy
+    # until its accelerator allocations and worker loops are resumed. Resume
+    # immediately after the runtime restore, before polling application health.
+    after_restore = getattr(benchmark.adapter, "after_restore", None)
+    if after_restore is not None:
+        after_restore(args)
     print(f"  waiting for restored {name} health on {args.base_url}", flush=True)
     wait_health(args.base_url, args.health_path, args.wait_seconds, name,
                 benchmark.adapter.display_name)
@@ -1156,6 +1165,9 @@ def run_trial(benchmark, cfg, workdir, args, trial_id, keep_running=False):
     )
     pre_us = pre_timing["request_us"]
     pre_content = pre_timing["content"]
+    before_checkpoint = getattr(benchmark.adapter, "before_checkpoint", None)
+    if before_checkpoint is not None:
+        before_checkpoint(args)
     checkpoint_us, checkpoint_stats = benchmark.checkpoint_container(
         name, archive, cfg, args
     )
