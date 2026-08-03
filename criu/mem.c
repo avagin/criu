@@ -35,7 +35,6 @@
 #include "prctl.h"
 #include "compel/infect-util.h"
 #include "pidfd-store.h"
-#include "pagemap-block.h"
 #include "compression.h"
 
 #include "protobuf.h"
@@ -1345,14 +1344,8 @@ static int restore_priv_vma_content(struct pstree_item *t, struct page_read *pr)
 				nr = min_t(unsigned long, nr_pages - i,
 					   (vma->e->end - va) / PAGE_SIZE);
 				nr = min(nr, COW_READ_BATCH_PAGES);
-				if (pr->pe->blocks && pr->pe->blocks->pages_per_block > 1 &&
-				    nr < nr_pages - i) {
-					unsigned long aligned =
-						block_align_down(nr, pr->pe->blocks->pages_per_block);
-
-					if (aligned)
-						nr = aligned;
-				}
+				if (nr < nr_pages - i)
+					nr = pagemap_align_down(pr->pe, nr);
 				if (!buf) {
 					memerr = posix_memalign(&buf, PAGE_SIZE,
 						COW_READ_BATCH_PAGES * PAGE_SIZE);

@@ -215,13 +215,6 @@ static int advance(struct page_read *pr)
 	return 1;
 }
 
-static unsigned int pagemap_block_pages(const PagemapEntry *pe)
-{
-	if (pe && pe->blocks && pe->blocks->pages_per_block > 0)
-		return pe->blocks->pages_per_block;
-	return 1;
-}
-
 /*
  * Return the page count of the current compressed block.
  * The last block of an entry may be shorter than pages_per_block when the

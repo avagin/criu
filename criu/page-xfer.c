@@ -2083,9 +2083,9 @@ static int decode_page_pipe(struct page_read *pr, struct page_pipe *pp)
 				entry_pages = pr->pe->nr_pages - ((page_vaddr - pr->pe->vaddr) / PAGE_SIZE);
 				read_pages = entry_pages;
 				read_pages = min(read_pages, nr_pages - pages_done);
-				block_pages = (pr->pe->blocks && pr->pe->blocks->pages_per_block > 1) ? pr->pe->blocks->pages_per_block : 0;
+				block_pages = pagemap_block_pages(pr->pe);
 				if (read_pages > buffer_pages ||
-				    (block_pages && read_pages == buffer_pages &&
+				    (block_pages > 1 && read_pages == buffer_pages &&
 				     entry_pages > read_pages)) {
 					unsigned long batch_pages = buffer_pages;
 
@@ -2095,8 +2095,8 @@ static int decode_page_pipe(struct page_read *pr, struct page_pipe *pp)
 					 * bounded chunk on a block boundary; otherwise the next
 					 * chunk falls back to synchronous partial decompression.
 					 */
-					if (block_pages)
-						batch_pages = block_align_down(batch_pages, block_pages);
+					if (block_pages > 1)
+						batch_pages = pagemap_align_down(pr->pe, batch_pages);
 					if (!batch_pages) {
 						pr_err("Compression block %u exceeds page-server decode buffer\n",
 						       block_pages);
