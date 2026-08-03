@@ -178,6 +178,18 @@ static void test_compression(void)
 	}
 }
 
+static void test_encoded_stream_zero_batch(void)
+{
+	uint32_t block_sizes[] = { 0, 0 };
+	char pages[2 * PAGE_SIZE];
+	size_t i;
+
+	memset(pages, 0xa5, sizeof(pages));
+	assert(encoded_stream_read_batch(-1, pages, block_sizes, 2, 0, 0, NULL, 0) == 0);
+	for (i = 0; i < sizeof(pages); i++)
+		assert(pages[i] == 0);
+}
+
 static unsigned int count_task_threads(void)
 {
 	struct dirent *entry;
@@ -574,6 +586,7 @@ int main(int argc, char *argv[], char *envp[])
 
 #ifdef CONFIG_LZ4
 	test_compression();
+	test_encoded_stream_zero_batch();
 	test_parallel_decompression();
 	test_block_compression();
 #endif
