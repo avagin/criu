@@ -778,6 +778,67 @@ log-file /tmp/criu.log"""
                 self.assertNotIn("CUDA_VISIBLE_DEVICES", joined)
                 self.assertIn("HF_TOKEN", command)
 
+    def test_sglang_gpu_enables_memory_saver_by_default(self):
+        args = SimpleNamespace(
+            accelerator="gpu", image="sglang-image", model="tiny-model",
+            sglang_model_arg="model-path", port=30000,
+            max_total_tokens=128, context_length=128,
+            tensor_parallel_size=1, mem_fraction_static=0.35,
+            memory_saver=True, sglang_arg=[],
+        )
+        command = self.sglang.SglangAdapter.server_argv(args)
+        self.assertIn("--enable-memory-saver", command)
+
+        args.memory_saver = False
+        command = self.sglang.SglangAdapter.server_argv(args)
+        self.assertNotIn("--enable-memory-saver", command)
+
+    def test_sglang_cuda_checkpoint_launch_job_wraps_server(self):
+        args = SimpleNamespace(
+            accelerator="gpu", image="sglang-image", model="tiny-model",
+            sglang_model_arg="model-path", port=30000,
+            max_total_tokens=128, context_length=128,
+            tensor_parallel_size=1, mem_fraction_static=0.35,
+            memory_saver=True, sglang_arg=[],
+            cuda_checkpoint_launch_job=True,
+            cuda_checkpoint_binary="/host/cuda-checkpoint",
+        )
+        command = self.sglang.SglangAdapter.server_argv(args)
+        self.assertEqual(
+            command[:5],
+            ["sglang-image", "cuda-checkpoint", "--launch-job", "python3", "-m"],
+        )
+        self.assertEqual(
+            self.sglang.SglangAdapter.extra_podman_args(args),
+            ["--volume", "/host/cuda-checkpoint:/usr/local/bin/cuda-checkpoint:ro"],
+        )
+
+    def test_sglang_memory_saver_wraps_checkpoint_restore(self):
+        args = SimpleNamespace(
+            accelerator="gpu", memory_saver=True,
+            base_url="http://127.0.0.1:30000", request_timeout=10,
+        )
+        calls = []
+
+        def http_json(method, url, payload, timeout):
+            calls.append((method, url, payload, timeout))
+            return {}
+
+        with mock.patch.object(self.sglang.common, "http_json",
+                               side_effect=http_json):
+            self.sglang.SglangAdapter.before_checkpoint(args)
+            self.sglang.SglangAdapter.after_restore(args)
+
+        self.assertEqual(
+            [(call[1].rsplit("/", 1)[-1], call[2]) for call in calls],
+            [
+                ("pause_generation", {"mode": "abort"}),
+                ("release_memory_occupation", {}),
+                ("resume_memory_occupation", {}),
+                ("continue_generation", {}),
+            ],
+        )
+
     def test_health_wait_fails_immediately_for_exited_container(self):
         for module in (self.vllm, self.sglang):
             with (
