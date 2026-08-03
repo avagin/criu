@@ -283,4 +283,25 @@ static inline off_t pagemap_page_align_offset(off_t offset)
 	return (offset + (off_t)PAGE_SIZE - 1) & mask;
 }
 
+static inline unsigned int pagemap_block_pages(const PagemapEntry *pe)
+{
+	if (pe && pe->blocks && pe->blocks->pages_per_block > 0)
+		return pe->blocks->pages_per_block;
+	return 1;
+}
+
+static inline unsigned long pagemap_align_down(const PagemapEntry *pe, unsigned long nr_pages)
+{
+	unsigned int bp = pagemap_block_pages(pe);
+
+	if (bp > 1) {
+		unsigned long aligned = nr_pages - (nr_pages % bp);
+
+		if (aligned)
+			return aligned;
+	}
+
+	return nr_pages;
+}
+
 #endif /* __CR_PAGE_READ_H__ */
