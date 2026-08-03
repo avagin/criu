@@ -122,6 +122,14 @@ class ServingBenchmark:
             extra_body, self.adapter.display_name
         )
 
+    def chat_stream_once(self, base_url, model, prompt, max_tokens,
+                         temperature, seed, timeout, operation_started_ns,
+                         extra_body=None):
+        return chat_stream_once(
+            base_url, model, prompt, max_tokens, temperature, seed, timeout,
+            operation_started_ns, extra_body, self.adapter.display_name
+        )
+
     def run_trial(self, cfg, workdir, args, trial_id, keep_running=False):
         return run_trial(self, cfg, workdir, args, trial_id, keep_running)
 
@@ -351,7 +359,7 @@ def wait_health(base_url, health_path, timeout, container_name=None,
                         f"before becoming healthy\n\n"
                         f"{container_diagnostics(container_name)}"
                     ) from e
-            time.sleep(1)
+            time.sleep(0.1)
     detail = ""
     if container_name:
         detail = "\n\n" + container_diagnostics(container_name)
@@ -379,6 +387,104 @@ def chat_once(base_url, model, prompt, max_tokens, temperature, seed, timeout,
     if not content.strip():
         raise RuntimeError(f"{framework_name} validation returned an empty response")
     return latency_us, content
+
+
+def chat_stream_once(base_url, model, prompt, max_tokens, temperature, seed,
+                     timeout, operation_started_ns, extra_body=None,
+                     framework_name="serving"):
+    """Issue one streaming chat request and timestamp its readiness events.
+
+    Absolute offsets are measured from ``operation_started_ns`` so cold start
+    and restore use the same boundary. Request latency is also returned to
+    distinguish serving time from startup/restore time.
+    """
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "seed": seed,
+        "stream": True,
+    }
+    if extra_body:
+        payload.update(extra_body)
+    data = json.dumps(payload).encode()
+    request = urllib.request.Request(
+        f"{base_url.rstrip('/')}/v1/chat/completions",
+        data=data,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": "Bearer EMPTY",
+        },
+        method="POST",
+    )
+    request_started_ns = time.monotonic_ns()
+    first_event_ns = None
+    first_token_ns = None
+    chunks = []
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        response_headers_ns = time.monotonic_ns()
+        for raw_line in response:
+            line = raw_line.decode(errors="replace").strip()
+            if not line.startswith("data:"):
+                continue
+            now_ns = time.monotonic_ns()
+            if first_event_ns is None:
+                first_event_ns = now_ns
+            event = line[5:].strip()
+            if event == "[DONE]":
+                break
+            try:
+                document = json.loads(event)
+            except json.JSONDecodeError as error:
+                raise RuntimeError(
+                    f"{framework_name} returned malformed streaming JSON: "
+                    f"{event[:200]}"
+                ) from error
+            delta = document.get("choices", [{}])[0].get("delta", {})
+            text = delta.get("content") or delta.get("reasoning_content") or ""
+            if text:
+                if first_token_ns is None:
+                    first_token_ns = now_ns
+                chunks.append(text)
+    completed_ns = time.monotonic_ns()
+    content = "".join(chunks)
+    if first_token_ns is None or not content.strip():
+        raise RuntimeError(
+            f"{framework_name} streaming validation returned no output token"
+        )
+
+    def elapsed_us(end_ns, start_ns):
+        return (end_ns - start_ns) // 1000
+
+    return {
+        "request_us": elapsed_us(completed_ns, request_started_ns),
+        "request_to_headers_us": elapsed_us(
+            response_headers_ns, request_started_ns
+        ),
+        "request_to_first_event_us": elapsed_us(
+            first_event_ns, request_started_ns
+        ),
+        "request_to_first_token_us": elapsed_us(
+            first_token_ns, request_started_ns
+        ),
+        "operation_to_request_us": elapsed_us(
+            request_started_ns, operation_started_ns
+        ),
+        "operation_to_headers_us": elapsed_us(
+            response_headers_ns, operation_started_ns
+        ),
+        "operation_to_first_event_us": elapsed_us(
+            first_event_ns, operation_started_ns
+        ),
+        "operation_to_first_token_us": elapsed_us(
+            first_token_ns, operation_started_ns
+        ),
+        "operation_to_response_complete_us": elapsed_us(
+            completed_ns, operation_started_ns
+        ),
+        "content": content,
+    }
 
 
 def format_cmd(cmd):
@@ -880,10 +986,15 @@ def start_container(benchmark, name, args):
 
     run_cmd([PODMAN, "rm", "-f", name], check=False)
     benchmark.state.started_containers.add(name)
+    started_ns = time.monotonic_ns()
     run_cmd(cmd, env=podman_env(benchmark, args))
     print(f"  waiting for {name} health on {args.base_url}", flush=True)
     wait_health(args.base_url, args.health_path, args.wait_seconds, name,
                 benchmark.adapter.display_name)
+    return {
+        "started_ns": started_ns,
+        "to_health_us": (time.monotonic_ns() - started_ns) // 1000,
+    }
 
 
 def checkpoint_container(benchmark, name, archive, cfg, args):
@@ -1001,14 +1112,20 @@ def restore_container(benchmark, name, archive, args):
     if args.print_stats:
         cmd.append("--print-stats")
 
-    t0 = time.monotonic()
+    started_ns = time.monotonic_ns()
     benchmark.state.started_containers.add(name)
     r = run_cmd(cmd, env=podman_env(benchmark, args))
-    restore_us = int((time.monotonic() - t0) * 1e6)
+    command_complete_ns = time.monotonic_ns()
+    restore_us = (command_complete_ns - started_ns) // 1000
     print(f"  waiting for restored {name} health on {args.base_url}", flush=True)
     wait_health(args.base_url, args.health_path, args.wait_seconds, name,
                 benchmark.adapter.display_name)
-    return restore_us, r.stdout.strip()
+    return {
+        "started_ns": started_ns,
+        "command_us": restore_us,
+        "to_health_us": (time.monotonic_ns() - started_ns) // 1000,
+        "stats": r.stdout.strip(),
+    }
 
 
 def run_trial(benchmark, cfg, workdir, args, trial_id, keep_running=False):
@@ -1019,29 +1136,38 @@ def run_trial(benchmark, cfg, workdir, args, trial_id, keep_running=False):
     elif args.archive_compression == "zstd":
         archive += ".zst"
 
-    benchmark.start_container(name, args)
+    cold_start = benchmark.start_container(name, args)
     request_model = args.served_model_name or args.model
+    cold_timing = benchmark.chat_stream_once(
+        args.base_url, request_model, args.prompt, args.max_tokens,
+        args.temperature, args.seed, args.request_timeout,
+        cold_start["started_ns"], args.chat_extra_json,
+    )
     for _ in range(args.warmup_requests):
         benchmark.chat_once(args.base_url, request_model, args.prompt,
                             args.max_tokens, args.temperature, args.seed,
                             args.request_timeout, args.chat_extra_json)
-    pre_us, pre_content = benchmark.chat_once(
+    pre_timing = benchmark.chat_stream_once(
         args.base_url, request_model, args.prompt, args.max_tokens,
         args.temperature, args.seed, args.request_timeout,
-        args.chat_extra_json,
+        cold_start["started_ns"], args.chat_extra_json,
     )
+    pre_us = pre_timing["request_us"]
+    pre_content = pre_timing["content"]
     checkpoint_us, checkpoint_stats = benchmark.checkpoint_container(
         name, archive, cfg, args
     )
     inventory_compress_mode = verify_archive_compression(archive, cfg)
     run_cmd([PODMAN, "rm", "-f", name])
     benchmark.state.started_containers.discard(name)
-    restore_us, restore_stats = benchmark.restore_container(name, archive, args)
-    post_us, post_content = benchmark.chat_once(
+    restore_timing = benchmark.restore_container(name, archive, args)
+    post_timing = benchmark.chat_stream_once(
         args.base_url, request_model, args.prompt, args.max_tokens,
         args.temperature, args.seed, args.request_timeout,
-        args.chat_extra_json,
+        restore_timing["started_ns"], args.chat_extra_json,
     )
+    post_us = post_timing["request_us"]
+    post_content = post_timing["content"]
     pre_digest = hashlib.sha256(pre_content.encode()).hexdigest()
     post_digest = hashlib.sha256(post_content.encode()).hexdigest()
     valid = pre_digest == post_digest
@@ -1062,12 +1188,33 @@ def run_trial(benchmark, cfg, workdir, args, trial_id, keep_running=False):
         "archive_size": os.path.getsize(archive),
         "inventory_compress_mode": inventory_compress_mode,
         "checkpoint_wall_us": checkpoint_us,
-        "restore_wall_us": restore_us,
+        "restore_wall_us": restore_timing["command_us"],
+        "server_start_to_health_us": cold_start["to_health_us"],
+        "cold_start_to_first_token_us": cold_timing[
+            "operation_to_first_token_us"
+        ],
+        "cold_start_to_response_complete_us": cold_timing[
+            "operation_to_response_complete_us"
+        ],
+        "cold_start_request_ttft_us": cold_timing[
+            "request_to_first_token_us"
+        ],
+        "restore_to_health_us": restore_timing["to_health_us"],
+        "restore_to_first_token_us": post_timing[
+            "operation_to_first_token_us"
+        ],
+        "restore_to_response_complete_us": post_timing[
+            "operation_to_response_complete_us"
+        ],
+        "restore_request_ttft_us": post_timing[
+            "request_to_first_token_us"
+        ],
         "pre_request_us": pre_us,
         "post_request_us": post_us,
         "checkpoint_stats": checkpoint_stats,
-        "restore_stats": restore_stats,
+        "restore_stats": restore_timing["stats"],
         "validation_response_sha256": post_digest,
+        "cache_policy": "warm",
         "valid": valid,
         "framework": benchmark.adapter.key,
         "container_name": name if keep_running else None,

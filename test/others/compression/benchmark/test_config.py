@@ -789,6 +789,38 @@ log-file /tmp/criu.log"""
                     "failed-container", module._benchmark.adapter.display_name,
                 )
 
+    def test_streaming_chat_records_first_token_and_complete_response(self):
+        response = io.BytesIO(
+            b'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n'
+            b'data: {"choices":[{"delta":{"content":"he"}}]}\n\n'
+            b'data: {"choices":[{"delta":{"content":"llo"}}]}\n\n'
+            b'data: [DONE]\n\n'
+        )
+        started_ns = self.common.time.monotonic_ns()
+        with mock.patch.object(
+            self.common.urllib.request, "urlopen", return_value=response
+        ):
+            timing = self.common.chat_stream_once(
+                "http://127.0.0.1:30000", "model", "prompt", 4, 0, 42,
+                10, started_ns,
+            )
+        self.assertEqual(timing["content"], "hello")
+        self.assertLessEqual(
+            timing["operation_to_first_event_us"],
+            timing["operation_to_first_token_us"],
+        )
+        self.assertLessEqual(
+            timing["operation_to_first_token_us"],
+            timing["operation_to_response_complete_us"],
+        )
+        self.assertLessEqual(
+            timing["request_to_headers_us"],
+            timing["request_to_first_token_us"],
+        )
+        self.assertLessEqual(
+            timing["request_to_first_token_us"], timing["request_us"]
+        )
+
     @staticmethod
     def trial_args():
         return SimpleNamespace(
@@ -810,12 +842,15 @@ log-file /tmp/criu.log"""
     def run_mocked_trial(self, module, workdir, responses, keep_running=False):
         events = []
 
-        def start(*_args):
-            events.append("start")
-
-        def chat(*_args):
-            events.append("chat")
-            return 10, responses.pop(0)
+        def stream_chat(*_args):
+            events.append("stream_chat")
+            return {
+                "request_us": 10,
+                "operation_to_first_token_us": 40,
+                "operation_to_response_complete_us": 50,
+                "request_to_first_token_us": 5,
+                "content": responses.pop(0),
+            }
 
         def checkpoint(*_args):
             events.append("checkpoint")
@@ -831,12 +866,24 @@ log-file /tmp/criu.log"""
 
         def restore(*_args):
             events.append("restore")
-            return 30, "restore stats"
+            return {
+                "started_ns": 2000,
+                "command_us": 30,
+                "to_health_us": 35,
+                "stats": "restore stats",
+            }
 
         benchmark = module._benchmark
         with (
-            mock.patch.object(benchmark, "start_container", side_effect=start),
-            mock.patch.object(benchmark, "chat_once", side_effect=chat),
+            mock.patch.object(
+                benchmark, "start_container",
+                side_effect=lambda *_args: {
+                    "started_ns": 1000,
+                    "to_health_us": 25,
+                },
+            ),
+            mock.patch.object(benchmark, "chat_stream_once",
+                              side_effect=stream_chat),
             mock.patch.object(benchmark, "checkpoint_container",
                               side_effect=checkpoint),
             mock.patch.object(module.common, "verify_archive_compression",
@@ -860,15 +907,23 @@ log-file /tmp/criu.log"""
         for module in (self.vllm, self.sglang):
             with self.subTest(module=module.__name__), tempfile.TemporaryDirectory() as d:
                 result, events = self.run_mocked_trial(
-                    module, d, ["same response", "same response"]
+                    module, d,
+                    ["cold response", "same response", "same response"],
                 )
                 self.assertTrue(result["valid"])
                 self.assertEqual(result["archive_size"], 1234)
                 self.assertEqual(
                     events,
-                    ["start", "chat", "checkpoint", "verify", "remove",
-                     "restore", "chat", "remove"],
+                    ["stream_chat", "stream_chat", "checkpoint", "verify",
+                     "remove", "restore", "stream_chat", "remove"],
                 )
+                self.assertEqual(result["server_start_to_health_us"], 25)
+                self.assertEqual(result["cold_start_to_first_token_us"], 40)
+                self.assertEqual(result["restore_to_health_us"], 35)
+                self.assertEqual(result["restore_to_first_token_us"], 40)
+                self.assertEqual(result["cold_start_request_ttft_us"], 5)
+                self.assertEqual(result["restore_request_ttft_us"], 5)
+                self.assertEqual(result["cache_policy"], "warm")
 
     def test_mocked_framework_restore_rejects_changed_response(self):
         import tempfile
@@ -879,7 +934,8 @@ log-file /tmp/criu.log"""
                     RuntimeError, "validation response changed"
                 ):
                     self.run_mocked_trial(
-                        module, d, ["before restore", "after restore"]
+                        module, d,
+                        ["cold response", "before restore", "after restore"],
                     )
 
     def test_keep_running_retains_only_requested_trial(self):
@@ -888,13 +944,14 @@ log-file /tmp/criu.log"""
         for module in (self.vllm, self.sglang):
             with self.subTest(module=module.__name__), tempfile.TemporaryDirectory() as d:
                 result, events = self.run_mocked_trial(
-                    module, d, ["same response", "same response"], True
+                    module, d,
+                    ["cold response", "same response", "same response"], True
                 )
                 self.assertIsNotNone(result["container_name"])
                 self.assertEqual(
                     events,
-                    ["start", "chat", "checkpoint", "verify", "remove",
-                     "restore", "chat"],
+                    ["stream_chat", "stream_chat", "checkpoint", "verify",
+                     "remove", "restore", "stream_chat"],
                 )
 
     def test_signal_handlers_defer_cleanup_and_are_not_reentrant(self):
