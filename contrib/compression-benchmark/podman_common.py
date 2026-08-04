@@ -1006,6 +1006,7 @@ def checkpoint_container(benchmark, name, archive, cfg, args):
         "--export", archive,
         "--compress", args.archive_compression,
         "--ignore-volumes",
+        "--file-locks",
         "--tcp-established",
     ]
     if args.print_stats:
@@ -1107,6 +1108,7 @@ def restore_container(benchmark, name, archive, args):
         PODMAN, "container", "restore",
         "--import", archive,
         "--ignore-volumes",
+        "--file-locks",
         "--tcp-established",
     ]
     if args.print_stats:

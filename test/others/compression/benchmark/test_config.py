@@ -235,14 +235,17 @@ class PodmanConfigTests(unittest.TestCase):
                     module.inventory_bytes_from_archive(archive), payload
                 )
 
-    def test_checkpoint_preserves_file_locks(self):
+    def test_checkpoint_and_restore_preserve_file_locks(self):
         args = SimpleNamespace(
             archive_compression="none",
+            base_url="http://127.0.0.1:30000",
             compress_acceleration=1,
             decompress_threads=None,
+            health_path="/health",
             keep_checkpoint_files=False,
             print_stats=False,
             runc_conf="/etc/criu/runc.conf",
+            wait_seconds=1,
         )
         completed = self.common.subprocess.CompletedProcess(
             [], 0, stdout="", stderr=""
@@ -255,10 +258,15 @@ class PodmanConfigTests(unittest.TestCase):
                 mock.patch.object(
                     module.common, "run_cmd", return_value=completed
                 ) as run,
+                mock.patch.object(module.common, "wait_health"),
             ):
                 module._benchmark.checkpoint_container(
                     "container", "/tmp/checkpoint.tar",
                     {"mode": "uncompressed", "block_size": 0}, args,
+                )
+                self.assertIn("--file-locks", run.call_args.args[0])
+                module._benchmark.restore_container(
+                    "container", "/tmp/checkpoint.tar", args,
                 )
                 self.assertIn("--file-locks", run.call_args.args[0])
 
