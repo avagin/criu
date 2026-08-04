@@ -95,7 +95,8 @@ test_stream() {
 		-x compress_pages_block00
 		-x compress_pages_block01
 		-x compress_pages_block02
-		-x compress_pages_block03)
+		-x compress_pages_block03
+		-x compress_pages_block04)
 	./test/zdtm.py run --stream -p 2 --keep-going -a "${STREAM_TEST_EXCLUDE[@]}" "${ZDTM_OPTS[@]}"
 	if criu/criu check --feature compress; then
 		./test/zdtm.py run --stream --compress -t zdtm/static/maps00 -t zdtm/static/env00
@@ -369,11 +370,12 @@ run_non_shardable_tests() {
 		echo "Skipping hugetlb compression tests"
 	fi
 
-	# Incremental compression parent chains.
+	# Compression pre-dump and incremental parent-chain coverage.
 	if criu/criu check --feature compress && criu/criu check --feature mem_dirty_track; then
+		make -C test/others/compression/vma-boundary run
 		make -C test/others/compression/incremental run
 	else
-		echo "Skipping compression/incremental test"
+		echo "Skipping compression pre-dump tests"
 	fi
 
 	# Raw compression fallback image format.

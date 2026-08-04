@@ -334,6 +334,7 @@ TST_FILE	=				\
 			compress_pages02		\
 			compress_pages_block00		\
 			compress_pages_block02		\
+			compress_pages_block04		\
 		maps06				\
 		write_read00			\
 		write_read01			\
