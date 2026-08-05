@@ -557,6 +557,29 @@ def run_cmd(cmd, env=None, check=True):
     return r
 
 
+def remove_container(name, attempts=3, retry_delay=1):
+    """Remove a container, tolerating a runtime's delayed PID-1 exit.
+
+    Restored SGLang containers can finish their graceful shutdown just after
+    Podman's force-removal timeout. A subsequent removal succeeds once the
+    runtime has reaped PID 1, so do not turn that transient race into a failed
+    benchmark trial. Persistent failures still raise with Podman's final
+    diagnostic.
+    """
+    last = None
+    for attempt in range(attempts):
+        last = run_cmd([PODMAN, "rm", "-f", name], check=False)
+        if last.returncode == 0:
+            return
+        if attempt + 1 < attempts:
+            time.sleep(retry_delay)
+    detail = (last.stderr or last.stdout).strip()
+    raise RuntimeError(
+        f"{format_cmd([PODMAN, 'rm', '-f', name])} failed after "
+        f"{attempts} attempts: {detail[-6000:]}"
+    )
+
+
 def podman_env(benchmark, args):
     env = os.environ.copy()
     # Start CRIU without global, user, or inherited configuration. runc still
@@ -1172,7 +1195,7 @@ def run_trial(benchmark, cfg, workdir, args, trial_id, keep_running=False):
         name, archive, cfg, args
     )
     inventory_compress_mode = verify_archive_compression(archive, cfg)
-    run_cmd([PODMAN, "rm", "-f", name])
+    remove_container(name)
     benchmark.state.started_containers.discard(name)
     restore_timing = benchmark.restore_container(name, archive, args)
     post_timing = benchmark.chat_stream_once(
@@ -1195,7 +1218,7 @@ def run_trial(benchmark, cfg, workdir, args, trial_id, keep_running=False):
         # cleanup. Earlier trials must release the shared host-network port.
         benchmark.state.started_containers.discard(name)
     else:
-        run_cmd([PODMAN, "rm", "-f", name])
+        remove_container(name)
         benchmark.state.started_containers.discard(name)
 
     return {

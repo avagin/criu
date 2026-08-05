@@ -47,6 +47,32 @@ class PodmanConfigTests(unittest.TestCase):
         self.assertEqual(self.common.format_bytes(1048576), "1.0 MB")
         self.assertEqual(self.common.format_duration(1000), "1.0 ms")
 
+    def test_container_removal_retries_transient_runtime_failure(self):
+        failed = self.common.subprocess.CompletedProcess(
+            [], 1, "", "given PID did not die within timeout"
+        )
+        removed = self.common.subprocess.CompletedProcess([], 0, "", "")
+        with (
+            mock.patch.object(
+                self.common, "run_cmd", side_effect=[failed, removed]
+            ) as run,
+            mock.patch.object(self.common.time, "sleep") as sleep,
+        ):
+            self.common.remove_container("restored-sglang")
+        self.assertEqual(run.call_count, 2)
+        sleep.assert_called_once_with(1)
+
+    def test_container_removal_reports_persistent_failure(self):
+        failed = self.common.subprocess.CompletedProcess(
+            [], 1, "", "container remains stuck"
+        )
+        with (
+            mock.patch.object(self.common, "run_cmd", return_value=failed),
+            mock.patch.object(self.common.time, "sleep"),
+            self.assertRaisesRegex(RuntimeError, "failed after 3 attempts"),
+        ):
+            self.common.remove_container("restored-sglang")
+
     def test_decompression_thread_labels_distinguish_default_and_auto(self):
         for module in (self.main, self.common):
             with self.subTest(module=module.__name__):
