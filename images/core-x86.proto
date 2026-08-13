@@ -68,6 +68,9 @@ message user_x86_xsave_entry {
 	/* CET */
 	optional user_x86_cet_entry	cet		=  9;
 
+	/* AMX */
+	repeated uint64			xtilecfg	= 10;
+
 	/*
 	 * Processor trace (PT) and hardware duty cycling (HDC)
 	 * are supervisor state components and only managed by

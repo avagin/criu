@@ -335,7 +335,7 @@ static void validate_random_xstate(struct xsave_struct *xsave)
 
 	for (i = 0; i < XFEATURE_MAX; i++) {
 		if (!compel_fpu_has_feature(i))
-			hdr->xstate_bv &= ~(1 << i);
+			hdr->xstate_bv &= ~(1ULL << i);
 	}
 
 	/* Userspace must use the uncompacted format */

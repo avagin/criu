@@ -30,23 +30,49 @@ static void fetch_rt_cpuinfo(void)
  */
 
 static const char *const xfeature_names[] = {
-	"x87 floating point registers",
-	"SSE registers",
-	"AVX registers",
-	"MPX bounds registers",
-	"MPX CSR",
-	"AVX-512 opmask",
-	"AVX-512 Hi256",
-	"AVX-512 ZMM_Hi256",
-	"Processor Trace",
-	"Protection Keys User registers",
-	"Hardware Duty Cycling",
+	[XFEATURE_FP] = "x87 floating point registers",
+	[XFEATURE_SSE] = "SSE registers",
+	[XFEATURE_YMM] = "AVX registers",
+	[XFEATURE_BNDREGS] = "MPX bounds registers",
+	[XFEATURE_BNDCSR] = "MPX CSR",
+	[XFEATURE_OPMASK] = "AVX-512 opmask",
+	[XFEATURE_ZMM_Hi256] = "AVX-512 Hi256",
+	[XFEATURE_Hi16_ZMM] = "AVX-512 ZMM_Hi256",
+	[XFEATURE_PT] = "Processor Trace",
+	[XFEATURE_PKRU] = "Protection Keys User registers",
+	[XFEATURE_PASID] = "PASID state",
+	[XFEATURE_CET_USER] = "Control-flow User registers",
+	[XFEATURE_CET_KERNEL] = "Control-flow Kernel registers",
+	[XFEATURE_RSRVD_COMP_13] = "unknown xstate feature",
+	[XFEATURE_RSRVD_COMP_14] = "unknown xstate feature",
+	[XFEATURE_LBR] = "Architectural LBR",
+	[XFEATURE_RSRVD_COMP_16] = "unknown xstate feature",
+	[XFEATURE_XTILE_CFG] = "AMX Tile config",
+	[XFEATURE_XTILE_DATA] = "AMX Tile data",
+	[XFEATURE_APX] = "APX registers",
 };
 
 static short xsave_cpuid_features[] = {
-	X86_FEATURE_FPU,      X86_FEATURE_XMM,	   X86_FEATURE_AVX,	X86_FEATURE_MPX,
-	X86_FEATURE_MPX,      X86_FEATURE_AVX512F, X86_FEATURE_AVX512F, X86_FEATURE_AVX512F,
-	X86_FEATURE_INTEL_PT, X86_FEATURE_PKU,	   X86_FEATURE_HDC,
+	[XFEATURE_FP] = X86_FEATURE_FPU,
+	[XFEATURE_SSE] = X86_FEATURE_XMM,
+	[XFEATURE_YMM] = X86_FEATURE_AVX,
+	[XFEATURE_BNDREGS] = X86_FEATURE_MPX,
+	[XFEATURE_BNDCSR] = X86_FEATURE_MPX,
+	[XFEATURE_OPMASK] = X86_FEATURE_AVX512F,
+	[XFEATURE_ZMM_Hi256] = X86_FEATURE_AVX512F,
+	[XFEATURE_Hi16_ZMM] = X86_FEATURE_AVX512F,
+	[XFEATURE_PT] = X86_FEATURE_INTEL_PT,
+	[XFEATURE_PKRU] = X86_FEATURE_PKU,
+	[XFEATURE_PASID] = 0,
+	[XFEATURE_CET_USER] = X86_FEATURE_SHSTK,
+	[XFEATURE_CET_KERNEL] = X86_FEATURE_SHSTK,
+	[XFEATURE_RSRVD_COMP_13] = 0,
+	[XFEATURE_RSRVD_COMP_14] = 0,
+	[XFEATURE_LBR] = 0,
+	[XFEATURE_RSRVD_COMP_16] = 0,
+	[XFEATURE_XTILE_CFG] = X86_FEATURE_AMX_TILE,
+	[XFEATURE_XTILE_DATA] = X86_FEATURE_AMX_TILE,
+	[XFEATURE_APX] = 0,
 };
 
 void compel_set_cpu_cap(compel_cpuinfo_t *c, unsigned int feature)
@@ -71,7 +97,7 @@ int compel_test_cpu_cap(compel_cpuinfo_t *c, unsigned int feature)
 int compel_test_fpu_cap(compel_cpuinfo_t *c, unsigned int feature)
 {
 	if (likely(feature < XFEATURE_MAX))
-		return (c->xfeatures_mask & (1UL << feature));
+		return (c->xfeatures_mask & (1ULL << feature)) != 0;
 	return 0;
 }
 
@@ -82,6 +108,7 @@ static int compel_fpuid(compel_cpuinfo_t *c)
 	size_t i;
 
 	BUILD_BUG_ON(ARRAY_SIZE(xsave_cpuid_features) != ARRAY_SIZE(xfeature_names));
+	BUILD_BUG_ON(ARRAY_SIZE(xsave_cpuid_features) != XFEATURE_MAX);
 
 	if (!compel_test_cpu_cap(c, X86_FEATURE_FPU)) {
 		pr_err("fpu: No FPU detected\n");
@@ -110,8 +137,9 @@ static int compel_fpuid(compel_cpuinfo_t *c)
 	 * Clear XSAVE features that are disabled in the normal CPUID.
 	 */
 	for (i = 0; i < ARRAY_SIZE(xsave_cpuid_features); i++) {
-		if (!compel_test_cpu_cap(c, xsave_cpuid_features[i]))
-			c->xfeatures_mask &= ~(1 << i);
+		if ((i == XFEATURE_FP || xsave_cpuid_features[i]) &&
+		    !compel_test_cpu_cap(c, xsave_cpuid_features[i]))
+			c->xfeatures_mask &= ~(1ULL << i);
 	}
 
 	c->xfeatures_mask &= XFEATURE_MASK_USER;
@@ -154,7 +182,7 @@ static int compel_fpuid(compel_cpuinfo_t *c)
 	c->xstate_sizes[1] = FIELD_SIZEOF(struct i387_fxsave_struct, xmm_space);
 
 	for (i = FIRST_EXTENDED_XFEATURE; i < XFEATURE_MAX; i++) {
-		if (!(c->xfeatures_mask & (1UL << i)))
+		if (!(c->xfeatures_mask & (1ULL << i)))
 			continue;
 
 		/*
@@ -192,7 +220,7 @@ static int compel_fpuid(compel_cpuinfo_t *c)
 
 	if (!compel_test_cpu_cap(c, X86_FEATURE_XSAVES)) {
 		for (i = FIRST_EXTENDED_XFEATURE; i < XFEATURE_MAX; i++) {
-			if ((c->xfeatures_mask & (1UL << i))) {
+			if ((c->xfeatures_mask & (1ULL << i))) {
 				c->xstate_comp_offsets[i] = c->xstate_offsets[i];
 				c->xstate_comp_sizes[i] = c->xstate_sizes[i];
 			}
@@ -201,7 +229,7 @@ static int compel_fpuid(compel_cpuinfo_t *c)
 		c->xstate_comp_offsets[FIRST_EXTENDED_XFEATURE] = FXSAVE_SIZE + XSAVE_HDR_SIZE;
 
 		for (i = FIRST_EXTENDED_XFEATURE; i < XFEATURE_MAX; i++) {
-			if ((c->xfeatures_mask & (1UL << i)))
+			if ((c->xfeatures_mask & (1ULL << i)))
 				c->xstate_comp_sizes[i] = c->xstate_sizes[i];
 			else
 				c->xstate_comp_sizes[i] = 0;
@@ -223,7 +251,7 @@ static int compel_fpuid(compel_cpuinfo_t *c)
 
 	if (!pr_quelled(COMPEL_LOG_DEBUG)) {
 		for (i = 0; i < ARRAY_SIZE(c->xstate_offsets); i++) {
-			if (!(c->xfeatures_mask & (1UL << i)))
+			if (!(c->xfeatures_mask & (1ULL << i)))
 				continue;
 			pr_debug("fpu: %-32s xstate_offsets %6d / %-6d xstate_sizes %6d / %-6d\n", xfeature_names[i],
 				 c->xstate_offsets[i], c->xstate_comp_offsets[i], c->xstate_sizes[i],

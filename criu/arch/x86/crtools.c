@@ -127,6 +127,7 @@ int save_task_regs(pid_t pid, void *x, user_regs_struct_t *regs, user_fpregs_str
 		assign_xsave(XFEATURE_ZMM_Hi256, xsave, zmm_upper, extended_state_area);
 		assign_xsave(XFEATURE_Hi16_ZMM, xsave, hi16_zmm, extended_state_area);
 		assign_xsave(XFEATURE_PKRU, xsave, pkru, extended_state_area);
+		assign_xsave(XFEATURE_XTILE_CFG, xsave, xtilecfg, extended_state_area);
 	}
 
 #undef assign_reg
@@ -204,6 +205,13 @@ static int alloc_xsave_extends(UserX86XsaveEntry *xsave)
 		xsave->n_pkru = XSAVE_PB_NELEMS(struct pkru_state, xsave, pkru);
 		xsave->pkru = xzalloc(pb_repeated_size(xsave, pkru));
 		if (!xsave->pkru)
+			goto err;
+	}
+
+	if (compel_fpu_has_feature(XFEATURE_XTILE_CFG)) {
+		xsave->n_xtilecfg = XSAVE_PB_NELEMS(struct xtile_cfg, xsave, xtilecfg);
+		xsave->xtilecfg = xzalloc(pb_repeated_size(xsave, xtilecfg));
+		if (!xsave->xtilecfg)
 			goto err;
 	}
 
@@ -294,6 +302,7 @@ void arch_free_thread_info(CoreEntry *core)
 		xfree(core->thread_info->fpregs->xsave->opmask_reg);
 		xfree(core->thread_info->fpregs->xsave->bndcsr_state);
 		xfree(core->thread_info->fpregs->xsave->bndreg_state);
+		xfree(core->thread_info->fpregs->xsave->xtilecfg);
 	}
 
 	xfree(core->thread_info->fpregs->st_space);
@@ -370,6 +379,12 @@ static bool valid_xsave_frame(CoreEntry *core)
 					.expected = XSAVE_PB_NELEMS(struct pkru_state, xsave, pkru),
 					.obtained = xsave->n_pkru,
 					.ptr = xsave->pkru,
+				},
+				{
+					.name = __stringify_1(XFEATURE_XTILE_CFG),
+					.expected = XSAVE_PB_NELEMS(struct xtile_cfg, xsave, xtilecfg),
+					.obtained = xsave->n_xtilecfg,
+					.ptr = xsave->xtilecfg,
 				},
 			};
 
@@ -450,7 +465,7 @@ int restore_fpu(struct rt_sigframe *sigframe, CoreEntry *core)
 #define assign_array(dst, src, e) memcpy(dst.e, (src)->e, sizeof(dst.e))
 #define assign_xsave(feature, xsave, member, area)                                                                \
 	do {                                                                                                      \
-		if (compel_fpu_has_feature(feature) && (xsave->xstate_bv & (1UL << feature))) {                   \
+		if (compel_fpu_has_feature(feature) && (xsave->xstate_bv & (1ULL << feature))) {                  \
 			uint32_t off = compel_fpu_feature_offset(feature);                                        \
 			void *to = &area[off];                                                                    \
 			void *from = xsave->member;                                                               \
@@ -465,7 +480,7 @@ int restore_fpu(struct rt_sigframe *sigframe, CoreEntry *core)
 					pr_debug("%s is not present in image, ignore\n", #feature);               \
 				}                                                                                 \
 			}                                                                                         \
-			xstate_bv |= (1UL << feature);                                                            \
+			xstate_bv |= (1ULL << feature);                                                           \
 			BUG_ON(xstate_size > xstate_size_next);                                                   \
 			xstate_size = xstate_size_next;                                                           \
 			memcpy(to, from, size);                                                                   \
@@ -491,7 +506,7 @@ int restore_fpu(struct rt_sigframe *sigframe, CoreEntry *core)
 	if (compel_cpu_has_feature(X86_FEATURE_OSXSAVE)) {
 		struct fpx_sw_bytes *fpx_sw = (void *)&x->i387.sw_reserved;
 		size_t xstate_size = XSAVE_YMM_OFFSET;
-		uint32_t xstate_bv = 0;
+		uint64_t xstate_bv = 0;
 		void *magic2;
 
 		xstate_bv = XFEATURE_MASK_FP | XFEATURE_MASK_SSE;
@@ -516,6 +531,7 @@ int restore_fpu(struct rt_sigframe *sigframe, CoreEntry *core)
 			assign_xsave(XFEATURE_ZMM_Hi256, xsave, zmm_upper, extended_state_area);
 			assign_xsave(XFEATURE_Hi16_ZMM, xsave, hi16_zmm, extended_state_area);
 			assign_xsave(XFEATURE_PKRU, xsave, pkru, extended_state_area);
+			assign_xsave(XFEATURE_XTILE_CFG, xsave, xtilecfg, extended_state_area);
 		}
 
 		x->xsave_hdr.xstate_bv = xstate_bv;

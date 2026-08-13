@@ -201,7 +201,8 @@ static uint32_t x86_ins_capability_mask[NCAPINTS] = {
 
 	[CPUID_7_0_EDX] =
 	__ins_bit(CPUID_7_0_EDX, X86_FEATURE_AVX512_4VNNIW) |
-	__ins_bit(CPUID_7_0_EDX, X86_FEATURE_AVX512_4FMAPS),
+	__ins_bit(CPUID_7_0_EDX, X86_FEATURE_AVX512_4FMAPS) |
+	__ins_bit(CPUID_7_0_EDX, X86_FEATURE_AMX_TILE),
 };
 // clang-format on
 

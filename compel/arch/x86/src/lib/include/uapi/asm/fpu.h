@@ -68,7 +68,16 @@ enum xfeature {
 	XFEATURE_Hi16_ZMM,
 	XFEATURE_PT,
 	XFEATURE_PKRU,
-	XFEATURE_HDC,
+	XFEATURE_PASID,
+	XFEATURE_CET_USER,
+	XFEATURE_CET_KERNEL,
+	XFEATURE_RSRVD_COMP_13,
+	XFEATURE_RSRVD_COMP_14,
+	XFEATURE_LBR,
+	XFEATURE_RSRVD_COMP_16,
+	XFEATURE_XTILE_CFG,
+	XFEATURE_XTILE_DATA,
+	XFEATURE_APX,
 
 	XFEATURE_MAX,
 };
@@ -85,7 +94,13 @@ enum xfeature {
 #define XFEATURE_MASK_Hi16_ZMM	(1 << XFEATURE_Hi16_ZMM)
 #define XFEATURE_MASK_PT	(1 << XFEATURE_PT)
 #define XFEATURE_MASK_PKRU	(1 << XFEATURE_PKRU)
-#define XFEATURE_MASK_HDC	(1 << XFEATURE_HDC)
+#define XFEATURE_MASK_PASID	(1 << XFEATURE_PASID)
+#define XFEATURE_MASK_CET_USER	(1 << XFEATURE_CET_USER)
+#define XFEATURE_MASK_CET_KERNEL (1 << XFEATURE_CET_KERNEL)
+#define XFEATURE_MASK_LBR	(1 << XFEATURE_LBR)
+#define XFEATURE_MASK_XTILE_CFG	(1 << XFEATURE_XTILE_CFG)
+#define XFEATURE_MASK_XTILE_DATA (1 << XFEATURE_XTILE_DATA)
+#define XFEATURE_MASK_APX	(1 << XFEATURE_APX)
 #define XFEATURE_MASK_MAX	(1 << XFEATURE_MAX)
 
 #define XFEATURE_MASK_FPSSE  (XFEATURE_MASK_FP | XFEATURE_MASK_SSE)
@@ -94,12 +109,14 @@ enum xfeature {
 #define FIRST_EXTENDED_XFEATURE XFEATURE_YMM
 
 /* Supervisor features */
-#define XFEATURE_MASK_SUPERVISOR (XFEATURE_MASK_PT | XFEATURE_HDC)
+#define XFEATURE_MASK_SUPERVISOR \
+	(XFEATURE_MASK_PT | XFEATURE_MASK_PASID | XFEATURE_MASK_CET_USER | XFEATURE_MASK_CET_KERNEL | XFEATURE_MASK_LBR)
 
 /* All currently supported features */
 #define XFEATURE_MASK_USER                                                                                           \
 	(XFEATURE_MASK_FP | XFEATURE_MASK_SSE | XFEATURE_MASK_YMM | XFEATURE_MASK_OPMASK | XFEATURE_MASK_ZMM_Hi256 | \
-	 XFEATURE_MASK_Hi16_ZMM | XFEATURE_MASK_PKRU | XFEATURE_MASK_BNDREGS | XFEATURE_MASK_BNDCSR)
+	 XFEATURE_MASK_Hi16_ZMM | XFEATURE_MASK_PKRU | XFEATURE_MASK_BNDREGS | XFEATURE_MASK_BNDCSR |               \
+	 XFEATURE_MASK_XTILE_CFG)
 
 /* xsave structure features which is safe to fill with garbage (see validate_random_xstate()) */
 #define XFEATURE_MASK_FAULTINJ                                                                                       \
@@ -252,6 +269,13 @@ struct cet_user_state {
 	uint64_t cet;			/* user control-flow settings */
 	uint64_t ssp;			/* user shadow stack pointer */
 };
+
+/*
+ * State component 17: 64-byte tile configuration register.
+ */
+struct xtile_cfg {
+	uint64_t xtilecfg[8];
+} __packed;
 
 /*
  * This is our most modern FPU state format, as saved by the XSAVE
