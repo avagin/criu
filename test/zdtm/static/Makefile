@@ -366,6 +366,7 @@ TST_FILE	=				\
 		fifo				\
 		fifo-ghost			\
 		fifo_ro				\
+		fifo_ro_nonblock		\
 		fifo_wronly			\
 		console				\
 		vt				\
