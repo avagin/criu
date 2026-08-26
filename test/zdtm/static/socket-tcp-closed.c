@@ -33,15 +33,68 @@ union sockaddr_inet {
 	struct sockaddr_in6 v6;
 };
 
+#ifdef ZDTM_TCP_LAST_ACK
+#define SOCCR_MARK 0xC114
+
+static int has_nft = -1;
+
+static int block_incoming_port(int port)
+{
+	char cmd[512];
+
+	if (has_nft == -1)
+		has_nft = (system("which nft > /dev/null 2>&1") == 0);
+
+	if (has_nft) {
+		snprintf(cmd, sizeof(cmd),
+			 "nft add table inet zdtm_last_ack && "
+			 "nft 'add chain inet zdtm_last_ack input { type filter hook input priority -10; }' && "
+			 "nft add rule inet zdtm_last_ack input meta mark 0x%x accept && "
+			 "nft add rule inet zdtm_last_ack input tcp dport %d drop",
+			 SOCCR_MARK, port);
+		return system(cmd);
+	}
+
+	if (ZDTM_FAMILY == AF_INET)
+		snprintf(cmd, sizeof(cmd),
+			 "iptables -w -t filter -A INPUT -m mark ! --mark 0x%x --protocol tcp --dport %d -j DROP",
+			 SOCCR_MARK, port);
+	else
+		snprintf(cmd, sizeof(cmd),
+			 "ip6tables -w -t filter -A INPUT -m mark ! --mark 0x%x --protocol tcp --dport %d -j DROP",
+			 SOCCR_MARK, port);
+
+	return system(cmd);
+}
+
+static int unblock_incoming_port(int port)
+{
+	char cmd[512];
+
+	if (has_nft) {
+		snprintf(cmd, sizeof(cmd), "nft delete table inet zdtm_last_ack");
+		return system(cmd);
+	}
+
+	if (ZDTM_FAMILY == AF_INET)
+		snprintf(cmd, sizeof(cmd),
+			 "iptables -w -t filter -D INPUT -m mark ! --mark 0x%x --protocol tcp --dport %d -j DROP",
+			 SOCCR_MARK, port);
+	else
+		snprintf(cmd, sizeof(cmd),
+			 "ip6tables -w -t filter -D INPUT -m mark ! --mark 0x%x --protocol tcp --dport %d -j DROP",
+			 SOCCR_MARK, port);
+
+	return system(cmd);
+}
+#endif
+
 int main(int argc, char **argv)
 {
 	int fd, fd_s, clt, sk;
 	union sockaddr_inet src_addr, dst_addr, addr;
 	socklen_t aux;
 	char c = 5;
-#ifdef ZDTM_TCP_LAST_ACK
-	char cmd[4096];
-#endif
 
 	test_init(argc, argv);
 	signal(SIGPIPE, SIG_IGN);
@@ -74,8 +127,7 @@ int main(int argc, char **argv)
 	shutdown(clt, SHUT_WR);
 
 #ifdef ZDTM_TCP_LAST_ACK
-	snprintf(cmd, sizeof(cmd), "iptables -w -t filter --protocol tcp -A INPUT --dport %d -j DROP", port);
-	if (system(cmd))
+	if (block_incoming_port(port))
 		return -1;
 #endif
 
@@ -101,8 +153,7 @@ int main(int argc, char **argv)
 	test_waitsig();
 
 #ifdef ZDTM_TCP_LAST_ACK
-	snprintf(cmd, sizeof(cmd), "iptables -w -t filter --protocol tcp -D INPUT --dport %d -j DROP", port);
-	if (system(cmd))
+	if (unblock_incoming_port(port))
 		return -1;
 #endif
 
