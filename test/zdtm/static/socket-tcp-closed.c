@@ -78,25 +78,26 @@ static int block_incoming_port(int port)
 	return system(cmd);
 }
 
-static int unblock_incoming_port(int port)
+static void unblock_incoming_port(int port)
 {
 	char cmd[512];
 
 	if (has_nft) {
-		snprintf(cmd, sizeof(cmd), "nft delete table inet zdtm_last_ack");
-		return system(cmd);
+		snprintf(cmd, sizeof(cmd), "nft delete table inet zdtm_last_ack 2>/dev/null || true");
+		system(cmd);
+		return;
 	}
 
 	if (ZDTM_FAMILY == AF_INET)
 		snprintf(cmd, sizeof(cmd),
-			 "iptables -w -t filter -D INPUT -m mark ! --mark 0x%x --protocol tcp --dport %d -j DROP",
+			 "iptables -w -t filter -D INPUT -m mark ! --mark 0x%x --protocol tcp --dport %d -j DROP 2>/dev/null || true",
 			 SOCCR_MARK, port);
 	else
 		snprintf(cmd, sizeof(cmd),
-			 "ip6tables -w -t filter -D INPUT -m mark ! --mark 0x%x --protocol tcp --dport %d -j DROP",
+			 "ip6tables -w -t filter -D INPUT -m mark ! --mark 0x%x --protocol tcp --dport %d -j DROP 2>/dev/null || true",
 			 SOCCR_MARK, port);
 
-	return system(cmd);
+	system(cmd);
 }
 #endif
 
@@ -164,8 +165,7 @@ int main(int argc, char **argv)
 	test_waitsig();
 
 #ifdef ZDTM_TCP_LAST_ACK
-	if (unblock_incoming_port(port))
-		return -1;
+	unblock_incoming_port(port);
 #endif
 
 	if (read(fd, &c, 1) != 0) {
