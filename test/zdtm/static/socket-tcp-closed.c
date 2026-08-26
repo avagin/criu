@@ -38,12 +38,23 @@ union sockaddr_inet {
 
 static int has_nft = -1;
 
+static int check_nft(void)
+{
+	if (access("/usr/sbin/nft", X_OK) == 0 ||
+	    access("/sbin/nft", X_OK) == 0 ||
+	    access("/usr/bin/nft", X_OK) == 0 ||
+	    access("/bin/nft", X_OK) == 0)
+		return 1;
+
+	return (system("command -v nft > /dev/null 2>&1") == 0);
+}
+
 static int block_incoming_port(int port)
 {
 	char cmd[512];
 
 	if (has_nft == -1)
-		has_nft = (system("which nft > /dev/null 2>&1") == 0);
+		has_nft = check_nft();
 
 	if (has_nft) {
 		snprintf(cmd, sizeof(cmd),
