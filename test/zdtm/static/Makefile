@@ -99,6 +99,7 @@ TST_NOFILE	:=				\
 		socket_queues_seqpacket		\
 		socket-raw			\
 		socket-tcp			\
+		socket-mptcp			\
 		socket-tcp-listen		\
 		socket-tcp-reseted		\
 		socket-tcp6			\
