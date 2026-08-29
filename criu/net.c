@@ -3590,6 +3590,8 @@ void network_unlock(void)
 
 	cpt_unlock_tcp_connections();
 	rst_unlock_tcp_connections();
+	cpt_unlock_mptcp_connections();
+	rst_unlock_mptcp_connections();
 
 	if (root_ns_mask & CLONE_NEWNET) {
 		/* coverity[check_return] */

@@ -68,6 +68,14 @@ struct inet_sk_info {
 extern int inet_bind(int sk, struct inet_sk_info *);
 extern int inet_connect(int sk, struct inet_sk_info *);
 
+#ifndef SOL_MPTCP
+#define SOL_MPTCP 284
+#endif
+
+#ifndef MPTCP_REPAIR
+#define MPTCP_REPAIR 10
+#endif
+
 #ifdef CR_NOGLIBC
 #define setsockopt sys_setsockopt
 #define pr_perror(fmt, ...) pr_err(fmt ": errno %d\n", ##__VA_ARGS__, -ret)
@@ -81,12 +89,28 @@ static inline void tcp_repair_off(int fd)
 		pr_perror("Failed to turn off repair mode on socket %d", fd);
 }
 
+static inline void mptcp_repair_off(int fd)
+{
+	int aux = 0, ret;
+
+	ret = setsockopt(fd, SOL_MPTCP, MPTCP_REPAIR, &aux, sizeof(aux));
+	if (ret < 0)
+		pr_perror("Failed to turn off repair mode on MPTCP socket %d", fd);
+}
+
 extern void tcp_locked_conn_add(struct inet_sk_info *);
 extern void rst_unlock_tcp_connections(void);
 extern void cpt_unlock_tcp_connections(void);
 
+extern void mptcp_locked_conn_add(struct inet_sk_info *);
+extern void rst_unlock_mptcp_connections(void);
+extern void cpt_unlock_mptcp_connections(void);
+
 extern int dump_one_tcp(int sk, struct inet_sk_desc *sd, SkOptsEntry *soe);
 extern int restore_one_tcp(int sk, struct inet_sk_info *si);
+
+extern int dump_one_mptcp(int sk, struct inet_sk_desc *sd, SkOptsEntry *soe);
+extern int restore_one_mptcp(int sk, struct inet_sk_info *si);
 
 extern int dump_tcp_opts(int sk, TcpOptsEntry *toe);
 extern int restore_tcp_opts(int sk, TcpOptsEntry *toe);
@@ -97,6 +121,7 @@ extern int restore_tcp_opts(int sk, TcpOptsEntry *toe);
 
 struct task_restore_args;
 int prepare_tcp_socks(struct task_restore_args *);
+int prepare_mptcp_socks(struct task_restore_args *);
 
 struct rst_tcp_sock {
 	int sk;

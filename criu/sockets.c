@@ -66,6 +66,7 @@ const char *socket_proto_name(unsigned int proto, char *nm, size_t size)
 		[IPPROTO_GRE] = __stringify_1(IPPROTO_GRE),   [IPPROTO_ESP] = __stringify_1(IPPROTO_ESP),
 		[IPPROTO_AH] = __stringify_1(IPPROTO_AH),     [IPPROTO_UDPLITE] = __stringify_1(IPPROTO_UDPLITE),
 		[IPPROTO_RAW] = __stringify_1(IPPROTO_RAW),   [IPPROTO_ICMPV6] = __stringify_1(IPPROTO_ICMPV6),
+		[IPPROTO_MPTCP] = __stringify_1(IPPROTO_MPTCP),
 	};
 	return __socket_const_name(nm, size, protos, ARRAY_SIZE(protos), proto);
 }
@@ -128,11 +129,13 @@ struct sock_diag_req {
 enum socket_cl_bits {
 	NETLINK_CL_BIT,
 	INET_TCP_CL_BIT,
+	INET_MPTCP_CL_BIT,
 	INET_UDP_CL_BIT,
 	INET_UDPLITE_CL_BIT,
 	INET_RAW_CL_BIT,
 	INET_ICMP_CL_BIT,
 	INET6_TCP_CL_BIT,
+	INET6_MPTCP_CL_BIT,
 	INET6_UDP_CL_BIT,
 	INET6_UDPLITE_CL_BIT,
 	INET6_RAW_CL_BIT,
@@ -157,6 +160,8 @@ static inline enum socket_cl_bits get_collect_bit_nr(unsigned int family, unsign
 	if (family == AF_INET) {
 		if (proto == IPPROTO_TCP)
 			return INET_TCP_CL_BIT;
+		if (proto == IPPROTO_MPTCP)
+			return INET_MPTCP_CL_BIT;
 		if (proto == IPPROTO_UDP)
 			return INET_UDP_CL_BIT;
 		if (proto == IPPROTO_UDPLITE)
@@ -169,6 +174,8 @@ static inline enum socket_cl_bits get_collect_bit_nr(unsigned int family, unsign
 	if (family == AF_INET6) {
 		if (proto == IPPROTO_TCP)
 			return INET6_TCP_CL_BIT;
+		if (proto == IPPROTO_MPTCP)
+			return INET6_MPTCP_CL_BIT;
 		if (proto == IPPROTO_UDP)
 			return INET6_UDP_CL_BIT;
 		if (proto == IPPROTO_UDPLITE)
@@ -840,7 +847,8 @@ static int collect_err(int err, struct ns_id *ns, void *arg)
 		 * from the kernel starting with v7.1.
 		 */
 		if (gr->protocol == IPPROTO_RAW ||
-		    gr->protocol == IPPROTO_UDPLITE)
+		    gr->protocol == IPPROTO_UDPLITE ||
+		    gr->protocol == IPPROTO_MPTCP)
 			return 0;
 		return -ENOENT;
 	}
@@ -866,6 +874,52 @@ static int collect_err(int err, struct ns_id *ns, void *arg)
 		pr_err("%s: %d: %s\n", msg, err, strerror(-err));
 
 	return err;
+}
+
+#ifndef INET_DIAG_REQ_PROTOCOL
+#define INET_DIAG_REQ_PROTOCOL 1
+#endif
+
+struct sock_diag_mptcp_req {
+	struct nlmsghdr hdr;
+	struct inet_diag_req_v2 r;
+	struct rtattr rta;
+	__u32 proto;
+};
+
+static int mptcp_receive_one(struct nlmsghdr *h, struct ns_id *ns, void *arg)
+{
+	struct sock_diag_greq *gr = arg;
+	return inet_collect_one(h, gr->family, SOCK_STREAM, ns);
+}
+
+static int collect_mptcp_sockets(int nl, int family, struct ns_id *ns)
+{
+	struct sock_diag_mptcp_req req;
+	struct sock_diag_greq gr = {
+		.family = family,
+		.protocol = IPPROTO_TCP,
+	};
+	int tmp;
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.nlmsg_len = sizeof(req);
+	req.hdr.nlmsg_type = SOCK_DIAG_BY_FAMILY;
+	req.hdr.nlmsg_flags = NLM_F_DUMP | NLM_F_REQUEST;
+	req.hdr.nlmsg_seq = CR_NLMSG_SEQ;
+	req.r.sdiag_family = family;
+	req.r.sdiag_protocol = IPPROTO_TCP;
+	req.r.idiag_states = (1 << TCP_LISTEN) | (1 << TCP_ESTABLISHED) | (1 << TCP_FIN_WAIT1) |
+			     (1 << TCP_FIN_WAIT2) | (1 << TCP_CLOSE_WAIT) | (1 << TCP_LAST_ACK) |
+			     (1 << TCP_CLOSING) | (1 << TCP_SYN_SENT);
+	req.rta.rta_type = INET_DIAG_REQ_PROTOCOL;
+	req.rta.rta_len = RTA_LENGTH(sizeof(__u32));
+	req.proto = IPPROTO_MPTCP;
+
+	tmp = do_rtnl_req(nl, &req, sizeof(req), mptcp_receive_one, collect_err, ns, &gr);
+	if (tmp == 0)
+		set_collect_bit(family, IPPROTO_MPTCP);
+	return tmp;
 }
 
 int collect_sockets(struct ns_id *ns)
@@ -897,6 +951,11 @@ int collect_sockets(struct ns_id *ns)
 			       (1 << TCP_FIN_WAIT2) | (1 << TCP_CLOSE_WAIT) | (1 << TCP_LAST_ACK) | (1 << TCP_CLOSING) |
 			       (1 << TCP_SYN_SENT);
 	tmp = do_collect_req(nl, &req, sizeof(req), inet_receive_one, collect_err, ns, &req.r.i);
+	if (tmp)
+		err = tmp;
+
+	/* Collect IPv4 MPTCP sockets */
+	tmp = collect_mptcp_sockets(nl, AF_INET, ns);
 	if (tmp)
 		err = tmp;
 
@@ -943,6 +1002,11 @@ int collect_sockets(struct ns_id *ns)
 			       (1 << TCP_FIN_WAIT2) | (1 << TCP_CLOSE_WAIT) | (1 << TCP_LAST_ACK) | (1 << TCP_CLOSING) |
 			       (1 << TCP_SYN_SENT);
 	tmp = do_collect_req(nl, &req, sizeof(req), inet_receive_one, collect_err, ns, &req.r.i);
+	if (tmp)
+		err = tmp;
+
+	/* Collect IPv6 MPTCP sockets */
+	tmp = collect_mptcp_sockets(nl, AF_INET6, ns);
 	if (tmp)
 		err = tmp;
 

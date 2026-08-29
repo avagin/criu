@@ -129,6 +129,7 @@ static int can_dump_ipproto(unsigned int ino, int proto, int type)
 	switch (proto) {
 	case IPPROTO_IP:
 	case IPPROTO_TCP:
+	case IPPROTO_MPTCP:
 	case IPPROTO_UDP:
 	case IPPROTO_UDPLITE:
 	case IPPROTO_ICMP:
@@ -136,8 +137,6 @@ static int can_dump_ipproto(unsigned int ino, int proto, int type)
 		break;
 	default:
 		pr_err("Unsupported proto %d for socket %x\n", proto, ino);
-		if (proto == IPPROTO_MPTCP)
-			pr_err("For Go programs, consider using \"GODEBUG=multipathtcp=0\" to disable MPTCP\n");
 		return 0;
 	}
 
@@ -611,6 +610,14 @@ static int do_dump_one_inet_fd(int lfd, u32 id, const struct fd_parms *p, int fa
 				goto err;
 		}
 		break;
+	case IPPROTO_MPTCP:
+		if (sk->shutdown)
+			sk_encode_shutdown(&ie, sk->shutdown);
+
+		err = dump_one_mptcp(lfd, sk, &skopts);
+		if (err < 0)
+			goto err;
+		break;
 	case IPPROTO_UDP:
 	case IPPROTO_UDPLITE:
 		sk_encode_shutdown(&ie, sk->shutdown);
@@ -709,6 +716,11 @@ static inline int tcp_connection(InetSkEntry *ie)
 	return (ie->proto == IPPROTO_TCP && ie->dst_port);
 }
 
+static inline int mptcp_connection(InetSkEntry *ie)
+{
+	return (ie->proto == IPPROTO_MPTCP && ie->dst_port);
+}
+
 static int collect_one_inetsk(void *o, ProtobufCMessage *base, struct cr_img *i)
 {
 	struct inet_sk_info *ii = o;
@@ -722,6 +734,8 @@ static int collect_one_inetsk(void *o, ProtobufCMessage *base, struct cr_img *i)
 
 	if (tcp_connection(ii->ie))
 		tcp_locked_conn_add(ii);
+	else if (mptcp_connection(ii->ie))
+		mptcp_locked_conn_add(ii);
 
 	/*
 	 * A socket can reuse addr only if all previous sockets allow that,
@@ -939,6 +953,20 @@ static int open_inet_sk(struct file_desc *d, int *new_fd)
 		mutex_unlock(&ii->port->reuseaddr_lock);
 
 		goto done;
+	} else if (mptcp_connection(ie)) {
+		if (!opts.tcp_established_ok && !opts.tcp_close) {
+			pr_err("Connected MPTCP socket in image\n");
+			goto err;
+		}
+
+		mutex_lock(&ii->port->reuseaddr_lock);
+		if (restore_one_mptcp(sk, ii)) {
+			mutex_unlock(&ii->port->reuseaddr_lock);
+			goto err;
+		}
+		mutex_unlock(&ii->port->reuseaddr_lock);
+
+		goto done;
 	}
 
 	if (ie->src_port) {
@@ -952,7 +980,7 @@ static int open_inet_sk(struct file_desc *d, int *new_fd)
 	 * bind() and listen(), and that's all.
 	 */
 	if (ie->state == TCP_LISTEN) {
-		if (ie->proto != IPPROTO_TCP) {
+		if (ie->proto != IPPROTO_TCP && ie->proto != IPPROTO_MPTCP) {
 			pr_err("Wrong socket in listen state %d\n", ie->proto);
 			goto err;
 		}
