@@ -877,7 +877,7 @@ static int collect_err(int err, struct ns_id *ns, void *arg)
 }
 
 #ifndef INET_DIAG_REQ_PROTOCOL
-#define INET_DIAG_REQ_PROTOCOL 1
+#define INET_DIAG_REQ_PROTOCOL 3
 #endif
 
 struct sock_diag_mptcp_req {
