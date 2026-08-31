@@ -72,6 +72,7 @@
 #define REMAP_FPATH_MAGIC    0x59133954 /* Vologda */
 #define GHOST_FILE_MAGIC     0x52583605 /* Oryol */
 #define TCP_STREAM_MAGIC     0x51465506 /* Orenburg */
+#define MPTCP_STREAM_MAGIC   0x51465507 /* Orenburg MPTCP */
 #define EVENTFD_FILE_MAGIC   0x44523722 /* Anapa */
 #define EVENTPOLL_FILE_MAGIC 0x45023858 /* Krasnodar */
 #define EVENTPOLL_TFD_MAGIC  0x44433746 /* Novorossiysk */
