@@ -693,10 +693,12 @@ static int restore_one_alive_task(int pid, CoreEntry *core)
 		return -1;
 
 	/*
-	 * Get all the tcp sockets fds into rst memory -- restorer
+	 * Get all the tcp/mptcp sockets fds into rst memory -- restorer
 	 * will turn repair off before going sigreturn
 	 */
 	if (prepare_tcp_socks(ta))
+		return -1;
+	if (prepare_mptcp_socks(ta))
 		return -1;
 
 	/*
