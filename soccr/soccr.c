@@ -947,3 +947,363 @@ int libsoccr_set_addr(struct libsoccr_sk *sk, int self, union libsoccr_addr *add
 
 	return 0;
 }
+
+static int mptcp_repair_on(int fd)
+{
+	int ret, aux = MPTCP_REPAIR_ON;
+
+	ret = setsockopt(fd, SOL_MPTCP, MPTCP_REPAIR, &aux, sizeof(aux));
+	if (ret < 0)
+		logerr("Can't turn MPTCP repair mode ON");
+
+	return ret;
+}
+
+static int mptcp_repair_off(int fd)
+{
+	int ret, aux = MPTCP_REPAIR_OFF;
+
+	ret = setsockopt(fd, SOL_MPTCP, MPTCP_REPAIR, &aux, sizeof(aux));
+	if (ret < 0)
+		logerr("Failed to turn off repair mode on MPTCP socket");
+
+	return ret;
+}
+
+struct libsoccr_sk *libsoccr_mptcp_pause(int fd)
+{
+	struct libsoccr_sk *ret;
+
+	ret = malloc(sizeof(*ret));
+	if (!ret) {
+		loge("Unable to allocate memory\n");
+		return NULL;
+	}
+
+	if (mptcp_repair_on(fd) < 0) {
+		free(ret);
+		return NULL;
+	}
+
+	ret->flags = 0;
+	ret->recv_queue = NULL;
+	ret->send_queue = NULL;
+	ret->src_addr = NULL;
+	ret->dst_addr = NULL;
+	ret->fd = fd;
+	return ret;
+}
+
+void libsoccr_mptcp_resume(struct libsoccr_sk *sk)
+{
+	mptcp_repair_off(sk->fd);
+	libsoccr_release(sk);
+}
+
+int libsoccr_mptcp_save(struct libsoccr_sk *sk, struct libsoccr_mptcp_sk_data *data, unsigned data_size)
+{
+	struct mptcp_repair_keys keys = {};
+	struct mptcp_repair_seq seq = {};
+	struct mptcp_repair_subflow sf = {};
+	socklen_t optlen;
+	int size;
+
+	if (data_size < sizeof(*data)) {
+		loge("Buffer too small for MPTCP save\n");
+		return -1;
+	}
+
+	memset(data, 0, data_size);
+
+	/* 1. Get Keys */
+	optlen = sizeof(keys);
+	if (getsockopt(sk->fd, SOL_MPTCP, MPTCP_REPAIR_KEYS, &keys, &optlen) < 0) {
+		logerr("Failed to getsockopt MPTCP_REPAIR_KEYS");
+		return -1;
+	}
+	data->local_key = keys.local_key;
+	data->remote_key = keys.remote_key;
+	data->token = keys.token;
+	data->key_flags = keys.flags;
+
+	/* 2. Get Sequences & State */
+	optlen = sizeof(seq);
+	if (getsockopt(sk->fd, SOL_MPTCP, MPTCP_REPAIR_SEQ, &seq, &optlen) < 0) {
+		logerr("Failed to getsockopt MPTCP_REPAIR_SEQ");
+		return -1;
+	}
+	data->write_seq = seq.write_seq;
+	data->snd_nxt = seq.snd_nxt;
+	data->snd_una = seq.snd_una;
+	data->rcv_nxt = seq.rcv_nxt;
+	data->rcv_wnd_sent = seq.rcv_wnd_sent;
+	data->rcv_data_fin_seq = seq.rcv_data_fin_seq;
+	data->mptcp_state = seq.mptcp_state;
+	data->rcv_data_fin = !!(seq.flags & MPTCP_SEQ_FLAG_RCV_DATA_FIN);
+	data->snd_data_fin_enable = !!(seq.flags & MPTCP_SEQ_FLAG_SND_DATA_FIN_ENABLE);
+	data->allow_infinite_fallback = !!(seq.flags & MPTCP_SEQ_FLAG_ALLOW_INFINITE_FALLBACK);
+
+	/* 3. Get Master Subflow */
+	optlen = sizeof(sf);
+	if (getsockopt(sk->fd, SOL_MPTCP, MPTCP_REPAIR_SUBFLOW, &sf, &optlen) < 0) {
+		logerr("Failed to getsockopt MPTCP_REPAIR_SUBFLOW");
+		return -1;
+	}
+	data->sf_snd_una = sf.snd_una;
+	data->sf_snd_nxt = sf.snd_nxt;
+	data->sf_rcv_nxt = sf.rcv_nxt;
+	data->sf_snd_wnd = sf.snd_wnd;
+	data->sf_rcv_wnd = sf.rcv_wnd;
+	data->sf_mss_clamp = sf.mss_clamp;
+	data->sf_ts_recent = sf.ts_recent;
+	data->sf_ts_recent_stamp = sf.ts_recent_stamp;
+	data->sf_tsoffset = sf.tsoffset;
+	data->sf_snd_wscale = sf.snd_wscale;
+	data->sf_rcv_wscale = sf.rcv_wscale;
+	data->sf_sack_ok = !!(sf.flags & MPTCP_SUBFLOW_REPAIR_FLAG_SACK_OK);
+	data->sf_timestamps = !!(sf.flags & MPTCP_SUBFLOW_REPAIR_FLAG_TIMESTAMPS);
+	data->sf_idsn = sf.idsn;
+	data->sf_map_seq = sf.map_seq;
+	data->sf_map_subflow_seq = sf.map_subflow_seq;
+	data->sf_ssn_offset = sf.ssn_offset;
+	data->sf_rel_write_seq = sf.rel_write_seq;
+
+	/* 4. Queue sizes */
+	if (ioctl(sk->fd, SIOCOUTQ, &size) == -1) {
+		logerr("Unable to get size of MPTCP snd queue");
+		return -1;
+	}
+	data->outq_len = size;
+
+	if (ioctl(sk->fd, SIOCOUTQNSD, &size) == -1) {
+		data->unsq_len = data->outq_len;
+	} else {
+		data->unsq_len = size;
+	}
+
+	if (ioctl(sk->fd, SIOCINQ, &size) == -1) {
+		logerr("Unable to get size of MPTCP recv queue");
+		return -1;
+	}
+	data->inq_len = size;
+
+	if (data->inq_len) {
+		int aux = MPTCP_RECV_QUEUE;
+		int ret;
+
+		setsockopt(sk->fd, SOL_MPTCP, MPTCP_REPAIR_QUEUE, &aux, sizeof(aux));
+		sk->recv_queue = malloc(data->inq_len);
+		if (!sk->recv_queue)
+			return -1;
+		sk->flags |= SK_FLAG_FREE_RQ;
+		ret = recv(sk->fd, sk->recv_queue, data->inq_len, MSG_PEEK);
+		if (ret < 0) {
+			logerr("Failed to peek MPTCP recv queue");
+			return -1;
+		}
+		if (ret == 0) {
+			free(sk->recv_queue);
+			sk->recv_queue = NULL;
+			sk->flags &= ~SK_FLAG_FREE_RQ;
+			data->inq_len = 0;
+		} else if (ret != data->inq_len) {
+			data->inq_len = ret;
+		}
+	}
+
+	if (data->outq_len) {
+		int aux = MPTCP_SEND_QUEUE;
+		int ret;
+
+		setsockopt(sk->fd, SOL_MPTCP, MPTCP_REPAIR_QUEUE, &aux, sizeof(aux));
+		sk->send_queue = malloc(data->outq_len);
+		if (!sk->send_queue)
+			return -1;
+		sk->flags |= SK_FLAG_FREE_SQ;
+		ret = recv(sk->fd, sk->send_queue, data->outq_len, MSG_PEEK);
+		if (ret < 0) {
+			logerr("Failed to peek MPTCP send queue");
+			return -1;
+		}
+		if (ret != data->outq_len) {
+			data->outq_len = ret;
+			if (ret == 0) {
+				free(sk->send_queue);
+				sk->send_queue = NULL;
+				sk->flags &= ~SK_FLAG_FREE_SQ;
+			}
+		}
+	}
+
+	return sizeof(*data);
+}
+
+static int mptcp_send_queue(struct libsoccr_sk *sk, int queue, char *buf, __u32 len)
+{
+	int ret, max_chunk = len, off = 0;
+
+	if (!len || !buf)
+		return 0;
+
+	if (setsockopt(sk->fd, SOL_MPTCP, MPTCP_REPAIR_QUEUE, &queue, sizeof(queue)) < 0) {
+		logerr("Can't set MPTCP repair queue");
+		return -1;
+	}
+
+	while (len > 0) {
+		int chunk = len;
+
+		if (chunk > max_chunk)
+			chunk = max_chunk;
+
+		ret = send(sk->fd, buf + off, chunk, 0);
+		if (ret <= 0) {
+			if (max_chunk > 1024) {
+				max_chunk >>= 1;
+				continue;
+			}
+			logerr("Can't restore MPTCP %s queue data (%d), want %u",
+			       queue == MPTCP_RECV_QUEUE ? "recv" : "send", ret, len);
+			return -1;
+		}
+		off += ret;
+		len -= ret;
+	}
+
+	return 0;
+}
+
+int libsoccr_mptcp_restore(struct libsoccr_sk *sk, struct libsoccr_mptcp_sk_data *data, unsigned data_size)
+{
+	struct mptcp_repair_keys keys = {};
+	struct mptcp_repair_seq seq = {};
+	struct mptcp_repair_subflow sf = {};
+	__u64 target_snd_nxt;
+
+	if (data_size < sizeof(*data))
+		return -1;
+
+	/* 1. Restore Keys */
+	keys.local_key = data->local_key;
+	keys.remote_key = data->remote_key;
+	keys.flags = data->key_flags;
+	if (setsockopt(sk->fd, SOL_MPTCP, MPTCP_REPAIR_KEYS, &keys, sizeof(keys)) < 0) {
+		logerr("Failed to setsockopt MPTCP_REPAIR_KEYS");
+		return -1;
+	}
+
+	/*
+	 * If we have unacknowledged data in the output queue, msk->snd_nxt must
+	 * be aligned with where the subflow TCP layer will actually resume wire
+	 * transmission (sf_snd_nxt / sf_rel_write_seq).
+	 *
+	 * At dump time, msk->snd_nxt might have advanced further because MPTCP
+	 * pushed skbs into ssk->sk_write_queue that had not yet been transmitted
+	 * on the wire. On restore, ssk->sk_write_queue is empty and the entire
+	 * MPTCP write queue is repushed from msk->rtx_queue starting at
+	 * sf_rel_write_seq.
+	 *
+	 * If outq_len == 0 (no data payload, e.g. already sent or FIN_WAIT1/LAST_ACK),
+	 * data->snd_nxt is preserved directly to ensure mptcp_data_fin_enabled()
+	 * remains valid.
+	 */
+	target_snd_nxt = (data->outq_len && data->sf_idsn) ? (data->sf_idsn + data->sf_rel_write_seq) : data->snd_nxt;
+
+	/*
+	 * 2. Restore 64-bit Sequences
+	 *
+	 * When outq_len > 0, write_seq is temporarily initialized to snd_una before
+	 * calling mptcp_send_queue(MPTCP_SEND_QUEUE), so that the reinjected send
+	 * queue fragments are allocated starting from snd_una. After queue restore,
+	 * write_seq is re-synced to data->write_seq.
+	 *
+	 * Similarly, rcv_nxt is temporarily rewound by inq_len during receive queue
+	 * injection, then re-synced to data->rcv_nxt.
+	 */
+	seq.write_seq = data->outq_len ? data->snd_una : data->write_seq;
+	seq.snd_nxt = target_snd_nxt;
+	seq.snd_una = data->snd_una;
+	seq.rcv_nxt = data->inq_len ? (data->rcv_nxt - data->inq_len) : data->rcv_nxt;
+	seq.rcv_wnd_sent = data->rcv_wnd_sent;
+	seq.rcv_data_fin_seq = data->rcv_data_fin_seq;
+	seq.mptcp_state = data->mptcp_state;
+	if (data->rcv_data_fin)
+		seq.flags |= MPTCP_SEQ_FLAG_RCV_DATA_FIN;
+	if (data->snd_data_fin_enable)
+		seq.flags |= MPTCP_SEQ_FLAG_SND_DATA_FIN_ENABLE;
+	if (data->allow_infinite_fallback)
+		seq.flags |= MPTCP_SEQ_FLAG_ALLOW_INFINITE_FALLBACK;
+	if (setsockopt(sk->fd, SOL_MPTCP, MPTCP_REPAIR_SEQ, &seq, sizeof(seq)) < 0) {
+		logerr("Failed to setsockopt MPTCP_REPAIR_SEQ");
+		return -1;
+	}
+
+	/* 3. Restore Master Subflow */
+	if (sk->src_addr) {
+		if (sk->src_addr->sa.sa_family == AF_INET)
+			memcpy(&sf.addrs.sin_local, &sk->src_addr->v4, sizeof(sk->src_addr->v4));
+		else if (sk->src_addr->sa.sa_family == AF_INET6)
+			memcpy(&sf.addrs.sin6_local, &sk->src_addr->v6, sizeof(sk->src_addr->v6));
+	}
+	if (sk->dst_addr) {
+		if (sk->dst_addr->sa.sa_family == AF_INET)
+			memcpy(&sf.addrs.sin_remote, &sk->dst_addr->v4, sizeof(sk->dst_addr->v4));
+		else if (sk->dst_addr->sa.sa_family == AF_INET6)
+			memcpy(&sf.addrs.sin6_remote, &sk->dst_addr->v6, sizeof(sk->dst_addr->v6));
+	}
+	sf.snd_una = data->sf_snd_una;
+	sf.snd_nxt = data->sf_snd_nxt;
+	sf.rcv_nxt = data->sf_rcv_nxt;
+	sf.snd_wnd = data->sf_snd_wnd;
+	sf.rcv_wnd = data->sf_rcv_wnd;
+	sf.mss_clamp = data->sf_mss_clamp;
+	sf.ts_recent = data->sf_ts_recent;
+	sf.ts_recent_stamp = data->sf_ts_recent_stamp;
+	sf.tsoffset = data->sf_tsoffset;
+	sf.snd_wscale = data->sf_snd_wscale;
+	sf.rcv_wscale = data->sf_rcv_wscale;
+	if (data->sf_sack_ok)
+		sf.flags |= MPTCP_SUBFLOW_REPAIR_FLAG_SACK_OK;
+	if (data->sf_timestamps)
+		sf.flags |= MPTCP_SUBFLOW_REPAIR_FLAG_TIMESTAMPS;
+	sf.idsn = data->sf_idsn;
+	sf.map_seq = data->sf_map_seq;
+	sf.map_subflow_seq = data->sf_map_subflow_seq;
+	sf.ssn_offset = data->sf_ssn_offset;
+	sf.rel_write_seq = data->sf_rel_write_seq;
+
+	if (setsockopt(sk->fd, SOL_MPTCP, MPTCP_REPAIR_SUBFLOW, &sf, sizeof(sf)) < 0) {
+		logerr("Failed to setsockopt MPTCP_REPAIR_SUBFLOW");
+		return -1;
+	}
+
+	/* 4. Restore Queues */
+	if (data->inq_len && sk->recv_queue) {
+		if (mptcp_send_queue(sk, MPTCP_RECV_QUEUE, sk->recv_queue, data->inq_len) < 0) {
+			logerr("Failed to restore MPTCP recv queue");
+			return -1;
+		}
+	}
+
+	if (data->outq_len && sk->send_queue) {
+		if (mptcp_send_queue(sk, MPTCP_SEND_QUEUE, sk->send_queue, data->outq_len) < 0) {
+			logerr("Failed to restore MPTCP send queue");
+			return -1;
+		}
+	}
+
+	if (data->inq_len || data->outq_len) {
+		/* Re-sync final sequences after queue restoration */
+		seq.write_seq = data->write_seq;
+		seq.snd_nxt = target_snd_nxt;
+		seq.rcv_nxt = data->rcv_nxt;
+		if (setsockopt(sk->fd, SOL_MPTCP, MPTCP_REPAIR_SEQ, &seq, sizeof(seq)) < 0) {
+			logerr("Failed to re-sync MPTCP_REPAIR_SEQ");
+			return -1;
+		}
+	}
+
+	return 0;
+}
+
+
