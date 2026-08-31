@@ -135,3 +135,73 @@ int tcp_init_client_with_fd(int sock, int family, char *servIP, unsigned short s
 	}
 	return sock;
 }
+
+#ifndef IPPROTO_MPTCP
+#define IPPROTO_MPTCP 262
+#endif
+
+int mptcp_init_server(int family, int *port)
+{
+	union sockaddr_inet addr;
+	int sock;
+	int yes = 1, ret;
+
+	memset(&addr, 0, sizeof(addr));
+	if (family == AF_INET) {
+		addr.v4.sin_family = family;
+		inet_pton(family, "0.0.0.0", &(addr.v4.sin_addr));
+	} else if (family == AF_INET6) {
+		addr.v6.sin6_family = family;
+		inet_pton(family, "::0", &(addr.v6.sin6_addr));
+	} else
+		return -1;
+
+	sock = socket(family, SOCK_STREAM, IPPROTO_MPTCP);
+	if (sock == -1) {
+		pr_perror("socket() failed");
+		return -1;
+	}
+
+	if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) == -1) {
+		pr_perror("setsockopt(SO_REUSEADDR) failed");
+		return -1;
+	}
+
+	while (1) {
+		if (family == AF_INET)
+			addr.v4.sin_port = htons(*port);
+		else if (family == AF_INET6)
+			addr.v6.sin6_port = htons(*port);
+
+		ret = bind(sock, (struct sockaddr *)&addr, sizeof(addr));
+		if (ret == -1 && errno == EADDRINUSE) {
+			test_msg("The port %d is already in use.\n", *port);
+			(*port)++;
+			continue;
+		}
+		break;
+	}
+
+	if (ret == -1) {
+		pr_perror("bind() failed");
+		return -1;
+	}
+
+	if (listen(sock, 1) == -1) {
+		pr_perror("listen() failed");
+		return -1;
+	}
+	return sock;
+}
+
+int mptcp_init_client(int family, char *servIP, unsigned short servPort)
+{
+	int sock;
+
+	if ((sock = socket(family, SOCK_STREAM, IPPROTO_MPTCP)) < 0) {
+		pr_perror("can't create socket");
+		return -1;
+	}
+
+	return tcp_init_client_with_fd(sock, family, servIP, servPort);
+}
