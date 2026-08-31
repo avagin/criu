@@ -1178,6 +1178,7 @@ int libsoccr_mptcp_restore(struct libsoccr_sk *sk, struct libsoccr_mptcp_sk_data
 	struct mptcp_repair_keys keys = {};
 	struct mptcp_repair_seq seq = {};
 	struct mptcp_repair_subflow sf = {};
+	__u64 target_snd_nxt;
 
 	if (data_size < sizeof(*data))
 		return -1;
@@ -1191,9 +1192,12 @@ int libsoccr_mptcp_restore(struct libsoccr_sk *sk, struct libsoccr_mptcp_sk_data
 		return -1;
 	}
 
+	/* Compute resumed snd_nxt aligned with subflow TCP progress */
+	target_snd_nxt = (data->outq_len && data->sf_idsn) ? (data->sf_idsn + data->sf_rel_write_seq) : data->snd_nxt;
+
 	/* 2. Restore 64-bit Sequences */
 	seq.write_seq = data->outq_len ? data->snd_una : data->write_seq;
-	seq.snd_nxt = data->snd_nxt;
+	seq.snd_nxt = target_snd_nxt;
 	seq.snd_una = data->snd_una;
 	seq.rcv_nxt = data->inq_len ? (data->rcv_nxt - data->inq_len) : data->rcv_nxt;
 	seq.rcv_wnd_sent = data->rcv_wnd_sent;
@@ -1242,7 +1246,7 @@ int libsoccr_mptcp_restore(struct libsoccr_sk *sk, struct libsoccr_mptcp_sk_data
 	sf.map_seq = data->sf_map_seq;
 	sf.map_subflow_seq = data->sf_map_subflow_seq;
 	sf.ssn_offset = data->sf_ssn_offset;
-	sf.rel_write_seq = data->snd_nxt - data->sf_idsn;
+	sf.rel_write_seq = data->sf_rel_write_seq;
 
 	if (setsockopt(sk->fd, SOL_MPTCP, MPTCP_REPAIR_SUBFLOW, &sf, sizeof(sf)) < 0) {
 		logerr("Failed to setsockopt MPTCP_REPAIR_SUBFLOW");
@@ -1267,7 +1271,7 @@ int libsoccr_mptcp_restore(struct libsoccr_sk *sk, struct libsoccr_mptcp_sk_data
 	if (data->inq_len || data->outq_len) {
 		/* Re-sync final sequences after queue restoration */
 		seq.write_seq = data->write_seq;
-		seq.snd_nxt = data->snd_nxt;
+		seq.snd_nxt = target_snd_nxt;
 		seq.rcv_nxt = data->rcv_nxt;
 		if (setsockopt(sk->fd, SOL_MPTCP, MPTCP_REPAIR_SEQ, &seq, sizeof(seq)) < 0) {
 			logerr("Failed to re-sync MPTCP_REPAIR_SEQ");
