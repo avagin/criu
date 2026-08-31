@@ -99,6 +99,17 @@ TST_NOFILE	:=				\
 		socket_queues_seqpacket		\
 		socket-raw			\
 		socket-tcp			\
+		socket-mptcp			\
+		socket-mptcp6			\
+		socket-mptcp4v6			\
+		socket-mptcp-fin-wait1		\
+		socket-mptcp6-fin-wait1		\
+		socket-mptcp-fin-wait2		\
+		socket-mptcp6-fin-wait2		\
+		socket-mptcp-close-wait		\
+		socket-mptcp6-close-wait	\
+		socket-mptcp-last-ack		\
+		socket-mptcp6-last-ack		\
 		socket-tcp-listen		\
 		socket-tcp-reseted		\
 		socket-tcp6			\
@@ -654,6 +665,8 @@ remap_dead_pid_root:	CFLAGS += -DREMAP_PID_ROOT
 sock_filter01:		CFLAGS += -DSOCK_FILTER01
 socket-tcp6:		CFLAGS += -D ZDTM_IPV6
 socket-tcp4v6:		CFLAGS += -D ZDTM_IPV4V6
+socket-mptcp6:		CFLAGS += -D ZDTM_IPV6
+socket-mptcp4v6:	CFLAGS += -D ZDTM_IPV4V6
 socket-tcpbuf6:		CFLAGS += -D ZDTM_IPV6
 socket-tcpbuf-local:	CFLAGS += -D ZDTM_TCP_LOCAL
 socket-tcpbuf6-local:	CFLAGS += -D ZDTM_TCP_LOCAL -D ZDTM_IPV6
@@ -725,6 +738,14 @@ socket-tcp6-closing:	CFLAGS += -D ZDTM_IPV6
 socket-tcp6-unconn:	CFLAGS += -D ZDTM_IPV6
 socket-tcp4v6-last-ack:	CFLAGS += -D ZDTM_TCP_LAST_ACK -D ZDTM_IPV4V6
 socket-tcp4v6-closing:	CFLAGS += -D ZDTM_IPV4V6
+socket-mptcp-fin-wait1:	CFLAGS += -D ZDTM_TCP_FIN_WAIT1
+socket-mptcp-fin-wait2:	CFLAGS += -D ZDTM_TCP_FIN_WAIT2
+socket-mptcp6-fin-wait1:	CFLAGS += -D ZDTM_TCP_FIN_WAIT1 -D ZDTM_IPV6
+socket-mptcp6-fin-wait2:	CFLAGS += -D ZDTM_TCP_FIN_WAIT2 -D ZDTM_IPV6
+socket-mptcp-close-wait:	CFLAGS += -D ZDTM_TCP_CLOSE_WAIT
+socket-mptcp6-close-wait:	CFLAGS += -D ZDTM_TCP_CLOSE_WAIT -D ZDTM_IPV6
+socket-mptcp-last-ack:	CFLAGS += -D ZDTM_TCP_LAST_ACK
+socket-mptcp6-last-ack:	CFLAGS += -D ZDTM_TCP_LAST_ACK -D ZDTM_IPV6
 memfd02-hugetlb:	CFLAGS += -D ZDTM_HUGETLB
 memfd05:		CFLAGS += -D ZDTM_MEMFD05
 memfd06:		LDLIBS += -pthread
