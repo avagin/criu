@@ -49,6 +49,7 @@
 #include "images/mnt.pb-c.h"
 #include "images/netdev.pb-c.h"
 #include "images/tcp-stream.pb-c.h"
+#include "images/mptcp-stream.pb-c.h"
 #include "images/tty.pb-c.h"
 #include "images/file-lock.pb-c.h"
 #include "images/rlimit.pb-c.h"

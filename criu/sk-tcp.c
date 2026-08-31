@@ -427,7 +427,8 @@ int prepare_tcp_socks(struct task_restore_args *ta)
 			return -1;
 
 		rs->sk = ii->sk_fd;
-		rs->reuseaddr = ii->ie->opts->reuseaddr;
+		rs->reuseaddr = ii->ie->opts ? ii->ie->opts->reuseaddr : false;
+		rs->is_mptcp = false;
 		ta->tcp_socks_n++;
 	}
 

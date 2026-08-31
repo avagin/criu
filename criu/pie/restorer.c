@@ -1092,8 +1092,11 @@ static void rst_tcp_repair_off(struct rst_tcp_sock *rts)
 	int aux, ret;
 
 	aux = rts->reuseaddr;
-	pr_debug("pie: Turning repair off for %d (reuse %d)\n", rts->sk, aux);
-	tcp_repair_off(rts->sk);
+	pr_debug("pie: Turning repair off for %d (reuse %d, mptcp %d)\n", rts->sk, aux, rts->is_mptcp);
+	if (rts->is_mptcp)
+		mptcp_repair_off(rts->sk);
+	else
+		tcp_repair_off(rts->sk);
 
 	ret = sys_setsockopt(rts->sk, SOL_SOCKET, SO_REUSEADDR, &aux, sizeof(aux));
 	if (ret < 0)
