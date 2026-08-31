@@ -26,6 +26,7 @@ proto-obj-y	+= fs.o
 proto-obj-y	+= pstree.o
 proto-obj-y	+= pipe.o
 proto-obj-y	+= tcp-stream.o
+proto-obj-y	+= mptcp-stream.o
 proto-obj-y	+= sk-packet.o
 proto-obj-y	+= mnt.o
 proto-obj-y	+= pipe-data.o

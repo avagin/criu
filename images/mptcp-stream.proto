@@ -1,0 +1,48 @@
+// SPDX-License-Identifier: MIT
+
+syntax = "proto2";
+
+message mptcp_stream_entry {
+	/* Keys and Token */
+	required uint64		local_key	= 1;
+	required uint64		remote_key	= 2;
+	required uint32		token		= 3;
+	required uint32		key_flags	= 4;
+
+	/* MPTCP Data Sequence Numbers (64-bit) */
+	required uint64		write_seq	= 5;
+	required uint64		snd_nxt		= 6;
+	required uint64		snd_una		= 7;
+	required uint64		rcv_nxt		= 8;
+	required uint64		rcv_wnd_sent	= 9;
+	optional uint64		rcv_data_fin_seq = 10;
+	required uint32		mptcp_state	= 11;
+	required uint32		seq_flags	= 12;
+
+	/* Queues */
+	required uint32		inq_len		= 13;
+	required uint32		outq_len	= 14;
+	optional uint32		unsq_len	= 15;
+
+	/* Master subflow TCP parameters */
+	required uint32		sf_snd_una	= 16;
+	required uint32		sf_snd_nxt	= 17;
+	required uint32		sf_rcv_nxt	= 18;
+	required uint32		sf_snd_wnd	= 19;
+	required uint32		sf_rcv_wnd	= 20;
+	required uint32		sf_mss_clamp	= 21;
+	optional uint32		sf_ts_recent	= 22;
+	optional uint32		sf_ts_recent_stamp = 23;
+	optional uint32		sf_tsoffset	= 24;
+	optional uint32		sf_snd_wscale	= 25;
+	optional uint32		sf_rcv_wscale	= 26;
+	optional bool		sf_sack_ok	= 27;
+	optional bool		sf_timestamps	= 28;
+
+	/* Master subflow MPTCP mapping */
+	optional uint64		sf_idsn		= 29;
+	optional uint64		sf_map_seq	= 30;
+	optional uint32		sf_map_subflow_seq = 31;
+	optional uint32		sf_ssn_offset	= 32;
+	optional uint32		sf_rel_write_seq = 33;
+}
