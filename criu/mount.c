@@ -2153,8 +2153,49 @@ int apply_sb_flags(void *args, int fd, pid_t pid)
 	return userns_mount(NULL, args, fd, pid);
 }
 
+/*
+ * In a user namespace, mounts copied during clone/copy_mnt_ns have their
+ * mount flags locked (MNT_LOCK_*). If we resolve opts.root inside the
+ * target mount namespace, any bind mount created from it will inherit
+ * those locked flags, preventing subsequent remounts (e.g. applying
+ * container root mount flags) from succeeding.
+ *
+ * To avoid this, clone opts.root in the host mount namespace using
+ * open_tree(OPEN_TREE_CLONE) and move it into the target mount namespace
+ * using move_mount(). If this is not supported, fall back to userns_mount().
+ */
 int mount_root(void *args, int fd, pid_t pid)
 {
+	unsigned long flags = *(unsigned long *)args;
+	unsigned int ot_flags = OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC;
+	int tree_fd;
+
+	if (flags & MS_REC)
+		ot_flags |= AT_RECURSIVE;
+
+	tree_fd = sys_open_tree(AT_FDCWD, opts.root, ot_flags);
+	if (tree_fd >= 0) {
+		int rst = -1, err;
+
+		if (pid != getpid() && switch_ns(pid, &mnt_ns_desc, &rst)) {
+			close(tree_fd);
+			return -1;
+		}
+
+		err = sys_move_mount(tree_fd, "", fd, "",
+				     MOVE_MOUNT_F_EMPTY_PATH | MOVE_MOUNT_T_EMPTY_PATH);
+		if (err)
+			pr_perror("Unable to move mount root to target");
+
+		close(tree_fd);
+
+		if (rst >= 0 && restore_ns(rst, &mnt_ns_desc))
+			return -1;
+
+		if (!err)
+			return 0;
+	}
+
 	return userns_mount(opts.root, args, fd, pid);
 }
 
