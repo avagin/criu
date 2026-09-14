@@ -71,6 +71,18 @@ The direct backend does not require CUDA toolkit headers at build time. The
 CUDA 13.0 restore ABI on older drivers merely because checkpoint symbols are
 present.
 
+During checkpoint and restore, the Driver API backend runs the blocking
+`libcuda` call in a worker thread while CRIU's tracing thread waits for the
+resumed CUDA restore thread in `waitpid`. When the worker thread finishes the
+Driver API call, it sends `SIGSTOP` (`tgkill`) to the restore thread to return
+it to `ptrace` stop, and CRIU restores its signal mask and `ptrace` options.
+
+If the CUDA restore thread stops unexpectedly on a signal or exits before the
+worker thread completes, CRIU terminates the target process with `SIGKILL`. This
+closes the target's IPC sockets in the kernel so the blocked `libcuda` call in
+the worker thread unblocks cleanly and the worker thread can be joined without
+`siglongjmp()` or abandoned libc locks.
+
 The CLI backend executes `cuda-checkpoint` for each request and monitors the
 CUDA restore thread while waiting. Unexpected stops or exits fail the operation
 regardless of the configured timeout. By default, helpers have no deadline, so
@@ -125,9 +137,11 @@ plugin will re-wake when needed.
 
 # Testing
 
-The CPU-only regression tests exercise the CLI backend with the mock
-`cuda-checkpoint` and real ptrace stops, including unlimited and finite helper
-waits, faults, helper exits, bounded stop and reap waits, and rollback:
+The CPU-only regression tests exercise both backends with mock CUDA APIs and
+real ptrace stops, including separate restore threads in multithreaded targets,
+aborted Driver API calls, completion races, SIGCHLD delivery to other tracer
+threads, unrelated child events, unlimited and finite CLI waits, helper exits,
+bounded post-call stop waits, and rollback:
 
 ```
 make cuda_plugin
