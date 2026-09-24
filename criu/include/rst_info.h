@@ -7,6 +7,7 @@
 #include "vma.h"
 #include "kerndat.h"
 #include "compression.h"
+#include "work-queue.h"
 #include "images/mm.pb-c.h"
 #include "images/core.pb-c.h"
 
@@ -19,6 +20,7 @@ struct task_entries {
 	mutex_t cgroupd_sync_lock;
 	mutex_t last_pid_mutex;
 	struct decompression_shared_budget decompression_budget;
+	struct cr_work_budget work_budget;
 	int asyncd_sk_id;
 };
 
