@@ -19,7 +19,6 @@ struct task_entries {
 	mutex_t userns_sync_lock;
 	mutex_t cgroupd_sync_lock;
 	mutex_t last_pid_mutex;
-	struct decompression_shared_budget decompression_budget;
 	struct cr_work_budget work_budget;
 	int asyncd_sk_id;
 };

@@ -324,7 +324,7 @@ static void record_decompression_overlap(void *arg)
 
 static void test_parallel_decompression(void)
 {
-	struct decompression_shared_budget budget;
+	struct cr_work_budget budget;
 	const unsigned int pages_per_job = (512UL << 10) / PAGE_SIZE;
 	const size_t nr_jobs = 8;
 	const size_t job_bytes = (size_t)pages_per_job * PAGE_SIZE;
@@ -334,21 +334,21 @@ static void test_parallel_decompression(void)
 	char *compressed;
 	char *decompressed;
 	char *src;
-	struct decompression_pool *pool = NULL;
+	struct cr_work_queue wq;
 	unsigned int available_threads;
 	unsigned int baseline_threads;
 	unsigned int expected_threads;
 	unsigned int overlap_calls = 0;
 	size_t job;
 
-	assert(decompression_thread_limit(0, 64) == 64);
-	assert(decompression_thread_limit(1, 64) == 1);
-	assert(decompression_thread_limit(8, 64) == 8);
-	assert(decompression_thread_limit(100, 64) == 64);
-	assert(decompression_thread_limit(0, 0) == 1);
+	assert(cr_work_thread_limit(0, 64) == 64);
+	assert(cr_work_thread_limit(1, 64) == 1);
+	assert(cr_work_thread_limit(8, 64) == 8);
+	assert(cr_work_thread_limit(100, 64) == 64);
+	assert(cr_work_thread_limit(0, 0) == 1);
 
-	decompression_shared_budget_init(&budget, 1);
-	available_threads = futex_get(&budget.threads);
+	cr_work_budget_init(&budget, 0);
+	available_threads = budget.thread_capacity;
 	assert(available_threads >= 1);
 	{
 		cpu_set_t affinity;
@@ -357,20 +357,21 @@ static void test_parallel_decompression(void)
 		if (sched_getaffinity(0, sizeof(affinity), &affinity) == 0)
 			assert(available_threads == (unsigned int)CPU_COUNT(&affinity));
 	}
-	decompression_shared_budget_init(&budget, 4);
-	assert(futex_get(&budget.threads) == min(available_threads, 4U));
+	cr_work_budget_init(&budget, 4);
+	assert(budget.thread_capacity == min(available_threads, 4U));
+	assert(budget.max_workers == min(available_threads, 4U) - 1);
 	assert(futex_get(&budget.batches) == 2);
 	/* Automatic and serial calls both leave CPUs available to sibling calls. */
-	decompression_shared_budget_init(&budget, 0);
-	assert(futex_get(&budget.threads) == available_threads);
-	decompression_use_shared_budget(&budget);
-	assert(decompression_batch_try_acquire());
-	assert(decompression_batch_try_acquire());
-	assert(!decompression_batch_try_acquire());
-	decompression_batch_release();
-	assert(decompression_batch_try_acquire());
-	decompression_batch_release();
-	decompression_batch_release();
+	cr_work_budget_init(&budget, 0);
+	assert(budget.thread_capacity == available_threads);
+	cr_work_set_shared_budget(&budget);
+	assert(cr_work_batch_try_acquire());
+	assert(cr_work_batch_try_acquire());
+	assert(!cr_work_batch_try_acquire());
+	cr_work_batch_release();
+	assert(cr_work_batch_try_acquire());
+	cr_work_batch_release();
+	cr_work_batch_release();
 	assert(futex_get(&budget.batches) == 2);
 	budget.thread_capacity = 1;
 	assert(!compressed_restore_has_parallel_capacity(0));
@@ -402,36 +403,32 @@ static void test_parallel_decompression(void)
 		jobs[job].block_index = job;
 	}
 
+	assert(cr_work_queue_init(&wq, &budget) == 0);
 	baseline_threads = count_task_threads();
-	assert(decompress_jobs_parallel_pool_with_caller_work(
-		       &pool, jobs, 1, job_bytes, 1,
+	assert(decompress_jobs_parallel(
+		       &wq, jobs, 1, job_bytes, 1,
 		       record_decompression_overlap, &overlap_calls) == 0);
 	assert(memcmp(src, decompressed, job_bytes) == 0);
 	assert(overlap_calls == 0);
-	assert(pool == NULL);
+	assert(wq.nr_workers == 0);
 	assert(count_task_threads() == baseline_threads);
-	assert(futex_get(&budget.threads) == available_threads);
+	assert(futex_get(&budget.active_workers) == 0);
 
-	/* A 1 MiB batch creates one worker when at least two CPUs are available. */
+	/* A 1 MiB batch creates workers when at least two CPUs are available. */
 	memset(decompressed, 0, src_size);
-	assert(decompress_jobs_parallel_pool_with_caller_work(
-		       &pool, jobs, 2, 2 * job_bytes, 0,
+	assert(decompress_jobs_parallel(
+		       &wq, jobs, 2, 2 * job_bytes, 0,
 		       record_decompression_overlap, &overlap_calls) == 0);
 	assert(memcmp(src, decompressed, 2 * job_bytes) == 0);
 	expected_threads = min(available_threads, 2U);
 	assert(overlap_calls == (expected_threads > 1));
-	wait_for_task_threads(baseline_threads + expected_threads - 1);
-	assert((pool != NULL) == (expected_threads > 1));
-	assert(futex_get(&budget.threads) == available_threads);
+	assert((wq.nr_workers > 0) == (expected_threads > 1));
+	assert(futex_get(&budget.active_workers) == 0);
 
-	/* More work replaces the small pool with one sized to the useful width. */
 	memset(decompressed, 0, src_size);
-	assert(decompress_jobs_parallel_pool(&pool, jobs, nr_jobs, src_size, 0) == 0);
+	assert(decompress_jobs_parallel(&wq, jobs, nr_jobs, src_size, 0, NULL, NULL) == 0);
 	assert(memcmp(src, decompressed, src_size) == 0);
-	expected_threads = min(available_threads, (unsigned int)nr_jobs);
-	wait_for_task_threads(baseline_threads + expected_threads - 1);
-	assert((pool != NULL) == (expected_threads > 1));
-	assert(futex_get(&budget.threads) == available_threads);
+	assert(futex_get(&budget.active_workers) == 0);
 
 	/* Zero jobs use the same serial fallback and persistent worker pool. */
 	memset(decompressed, 0xa5, src_size);
@@ -439,17 +436,17 @@ static void test_parallel_decompression(void)
 		jobs[job].src = NULL;
 		jobs[job].compressed_size = 0;
 	}
-	assert(decompress_jobs_parallel_pool(&pool, jobs, 1, job_bytes, 1) == 0);
+	assert(decompress_jobs_parallel(&wq, jobs, 1, job_bytes, 1, NULL, NULL) == 0);
 	for (job = 0; job < job_bytes; job++)
 		assert(decompressed[job] == 0);
 
 	memset(decompressed, 0xa5, src_size);
-	assert(decompress_jobs_parallel_pool(&pool, jobs, nr_jobs, src_size, 0) == 0);
+	assert(decompress_jobs_parallel(&wq, jobs, nr_jobs, src_size, 0, NULL, NULL) == 0);
 	for (job = 0; job < src_size; job++)
 		assert(decompressed[job] == 0);
 
-	decompression_pool_destroy(pool);
-	decompression_use_shared_budget(NULL);
+	cr_work_queue_destroy(&wq);
+	cr_work_set_shared_budget(NULL);
 	wait_for_task_threads(baseline_threads);
 
 	free(jobs);
