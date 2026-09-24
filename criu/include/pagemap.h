@@ -71,6 +71,7 @@ struct page_read_iov {
 	struct list_head l;
 };
 
+struct cr_work_queue;
 struct encoded_read_ctx;
 struct page_read;
 
@@ -104,6 +105,7 @@ struct page_read_block_state {
 	 * initiated by a parent cannot acquire a second batch lease and deadlock
 	 * against its child. Only the owner releases the context at close.
 	 */
+	struct cr_work_queue *wq;
 	struct encoded_read_ctx *encoded_ctx;
 	struct page_read *encoded_owner;
 };
