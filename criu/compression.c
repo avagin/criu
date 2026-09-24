@@ -1,9 +1,6 @@
 #include <errno.h>
-#include <limits.h>
-#include <pthread.h>
-#include <sched.h>
-#include <signal.h>
 #include <inttypes.h>
+#include <limits.h>
 #include <stdint.h>
 #include <string.h>
 #include <unistd.h>
@@ -18,210 +15,10 @@
 #include "common/bug.h"
 #include "compression.h"
 #include "common/xmalloc.h"
+#include "work-queue.h"
 
 #undef LOG_PREFIX
 #define LOG_PREFIX "compression: "
-
-#define PARALLEL_DECOMPRESS_MIN_BYTES_PER_THREAD (512UL << 10)
-#define PARALLEL_DECOMPRESS_STACK_SIZE (256UL << 10)
-#define PARALLEL_DECOMPRESS_MAX_JOB_CHUNK 8
-#define PARALLEL_DECOMPRESS_MAX_BATCHES 2
-
-/*
- * asyncd can restore several shmem or memfd objects concurrently. Each of
- * those requests may enter decompress_jobs_parallel_pool(), so limiting one
- * invocation to the available CPUs is not sufficient: independent calls can
- * otherwise multiply the worker count. Account for the calling thread as
- * well as workers using a shared budget in restore memory.
- */
-static struct decompression_shared_budget *decompress_shared_budget;
-
-static unsigned int decompression_available_cpus(void)
-{
-	cpu_set_t *affinity;
-	size_t affinity_size;
-	size_t nr_cpus = CPU_SETSIZE;
-	long available_cpus;
-	int affinity_errno;
-
-	available_cpus = sysconf(_SC_NPROCESSORS_CONF);
-	if (available_cpus > (long)nr_cpus)
-		nr_cpus = (size_t)available_cpus;
-
-	for (;;) {
-		affinity = CPU_ALLOC(nr_cpus);
-		if (!affinity) {
-			pr_warn("Unable to allocate a CPU affinity mask, using serial decompression\n");
-			return 1;
-		}
-		affinity_size = CPU_ALLOC_SIZE(nr_cpus);
-		CPU_ZERO_S(affinity_size, affinity);
-		if (sched_getaffinity(0, affinity_size, affinity) == 0) {
-			available_cpus = CPU_COUNT_S(affinity_size, affinity);
-			CPU_FREE(affinity);
-			goto found;
-		}
-		affinity_errno = errno;
-		CPU_FREE(affinity);
-		if (affinity_errno != EINVAL) {
-			pr_warn("Unable to read the CPU affinity mask: %s; using serial decompression\n",
-				strerror(affinity_errno));
-			return 1;
-		}
-		if (nr_cpus > UINT_MAX / 2) {
-			pr_warn("CPU affinity mask is too large, using serial decompression\n");
-			return 1;
-		}
-		nr_cpus *= 2;
-	}
-found:
-	if (available_cpus < 1)
-		return 1;
-	return (unsigned int)available_cpus;
-}
-
-unsigned int decompression_thread_limit(unsigned int requested, unsigned int available_cpus)
-{
-	if (!available_cpus)
-		available_cpus = 1;
-	if (!requested)
-		return available_cpus;
-	return min(requested, available_cpus);
-}
-
-static unsigned int decompression_cpu_limit(unsigned int requested)
-{
-	return decompression_thread_limit(requested, decompression_available_cpus());
-}
-
-/*
- * Automatic (0) and serial (1) settings must not serialize independent asyncd
- * jobs: both leave the restore-wide budget at the available-CPU capacity, and a
- * serial setting still limits each worker-pool call to its caller. Explicit
- * parallel settings cap all callers to the requested number of CPUs.
- */
-static unsigned int decompression_budget_capacity(unsigned int configured_threads)
-{
-	if (configured_threads < 2)
-		return decompression_cpu_limit(0);
-
-	return decompression_cpu_limit(configured_threads);
-}
-
-void decompression_shared_budget_init(struct decompression_shared_budget *budget, unsigned int requested_threads)
-{
-	unsigned int threads = decompression_budget_capacity(requested_threads);
-
-	/* Reduce an explicit request that exceeds the CPUs available to CRIU. */
-	if (requested_threads > threads)
-		pr_warn("Reducing compressed-page worker concurrency from %u to %u (available CPUs)\n",
-			requested_threads, threads);
-
-	futex_set(&budget->threads, threads);
-	budget->thread_capacity = threads;
-	/*
-	 * Batch leases bound active encoded working sets independently of the CPU
-	 * budget. Keep at most two 32 MiB input buffers so one local reader can
-	 * overlap its next read with decoding without retaining unbounded memory.
-	 */
-	futex_set(&budget->batches, PARALLEL_DECOMPRESS_MAX_BATCHES);
-}
-
-void decompression_use_shared_budget(struct decompression_shared_budget *budget)
-{
-	/* Borrowed from shared restore memory and valid for the restore lifetime. */
-	decompress_shared_budget = budget;
-}
-
-bool compressed_restore_has_parallel_capacity(unsigned int requested_threads)
-{
-	if (requested_threads == 1 || !decompress_shared_budget)
-		return false;
-
-	return decompression_thread_limit(requested_threads, decompress_shared_budget->thread_capacity) > 1;
-}
-
-static unsigned int shared_budget_acquire(futex_t *available, unsigned int requested)
-{
-	for (;;) {
-		unsigned int current = futex_get(available);
-		unsigned int granted;
-		unsigned int previous;
-
-		if (!current) {
-			futex_wait_while_eq(available, 0);
-			continue;
-		}
-		granted = min(requested, current);
-		previous = atomic_cmpxchg(&available->raw, current, current - granted);
-		if (previous == current)
-			return granted;
-	}
-}
-
-static bool shared_budget_try_acquire(futex_t *available)
-{
-	unsigned int current = futex_get(available);
-
-	while (current) {
-		unsigned int previous;
-
-		previous = atomic_cmpxchg(&available->raw, current, current - 1);
-		if (previous == current)
-			return true;
-		current = previous;
-	}
-
-	return false;
-}
-
-static void shared_budget_release(futex_t *available, unsigned int amount)
-{
-	atomic_add(amount, &available->raw);
-	futex_wake(available);
-}
-
-static unsigned int decompress_budget_acquire(unsigned int requested)
-{
-	if (!decompress_shared_budget)
-		return 0;
-	return shared_budget_acquire(&decompress_shared_budget->threads, requested);
-}
-
-static void decompress_budget_release(unsigned int nr_threads)
-{
-	if (!nr_threads || !decompress_shared_budget)
-		return;
-	shared_budget_release(&decompress_shared_budget->threads, nr_threads);
-}
-
-static void decompress_budget_trim_reservation(unsigned int *threads_held, unsigned int threads_to_keep)
-{
-	BUG_ON(threads_to_keep > *threads_held);
-	decompress_budget_release(*threads_held - threads_to_keep);
-	*threads_held = threads_to_keep;
-}
-
-void decompression_batch_acquire(void)
-{
-	if (!decompress_shared_budget)
-		return;
-	shared_budget_acquire(&decompress_shared_budget->batches, 1);
-}
-
-bool decompression_batch_try_acquire(void)
-{
-	if (!decompress_shared_budget)
-		return true;
-	return shared_budget_try_acquire(&decompress_shared_budget->batches);
-}
-
-void decompression_batch_release(void)
-{
-	if (!decompress_shared_budget)
-		return;
-	shared_budget_release(&decompress_shared_budget->batches, 1);
-}
 
 static int decompress_data_nolog(const char *compressed_data,
 				 int compressed_size, int original_size,
@@ -328,86 +125,6 @@ int decompress_block(const char *src, int compressed_size,
 	return 0;
 }
 
-/*
- * A decompression batch starts when a pagemap reader hands the pool a list of
- * independent jobs. The pool borrows that list and its buffers; the API caller
- * keeps them valid until every participant has finished.
- *
- * For a parallel batch, N CPU-budget slots cover these participants:
- *
- *             N slots = 1 caller + (N - 1) selected pool workers
- *
- * Pool pthreads live longer than a batch, but the budget reservation ends
- * with each call. Between calls, workers sleep without holding budget slots,
- * so a later batch can reuse them without another pthread_create().
- *
- * One batch tells the following story:
- *
- *              caller                               pool workers
- *              ------                               ------------
- * start:       publish jobs and broadcast --------> test generation/index
- * overlap:     optional work                        claim/decode chunks
- *              (for example, prefetch next payload)
- * help:        claim/decode available chunks        claim/decode chunks
- * finish:      wait for selected workers <--------- report completion
- * return:      reuse jobs and buffers               sleep
- *
- * decompression_pool_start_batch() publishes immutable job metadata under
- * pool->lock and wakes the pool. The lock protects publication, worker
- * selection, completion, and shutdown; it is not held while jobs run. The
- * caller and selected workers then atomically claim chunks from the queue.
- * Jobs write to disjoint destinations, so the chunks need no further locking.
- * decompression_pool_finish_batch() waits until every selected worker has
- * dropped its reference before the caller may reuse the jobs or their buffers.
- *
- * batch_generation gives each dispatch an identity. After a wake-up, a worker
- * may leave the wait loop only if the generation is new and its stable index
- * is in the selected prefix.
- *
- * Failure is a request to stop claiming new chunks, not an immediate stop.
- * Already claimed jobs may finish. failed_block records the lowest observed
- * failure and is consumed only after all participants stop using the queue.
- */
-struct decompress_queue {
-	struct decompress_job *jobs;
-	size_t nr_jobs;
-	size_t job_chunk;
-	/*
-	 * Concurrent scheduling and failure reporting use compiler-provided
-	 * atomics. Keep one API for all three fields because next_job needs size_t,
-	 * while CRIU's atomic_t is int-sized.
-	 */
-	size_t next_job;
-	int failed;
-	int failed_block;
-};
-
-struct decompress_worker {
-	pthread_t tid;
-	struct decompression_pool *pool;
-	unsigned int index;
-};
-
-struct decompression_pool {
-	pthread_mutex_t lock;
-	pthread_cond_t work_ready;
-	pthread_cond_t work_done;
-	struct decompress_worker *workers;
-	struct decompress_queue queue;
-	/* Persistent pthreads owned by this pool. */
-	unsigned int nr_workers;
-	/* Selected workers for this batch; the caller is not counted. */
-	unsigned int batch_workers;
-	/* Selected workers which may still reference queue.jobs. */
-	unsigned int pending_batch_workers;
-	/* A new identity for every published batch. */
-	unsigned long batch_generation;
-	/* True while queue.jobs is borrowed from the caller. */
-	bool batch_active;
-	/* Ask sleeping workers to leave their loop during pool destruction. */
-	bool stop;
-};
-
 static int decompress_job_run(const struct decompress_job *job)
 {
 	size_t block_bytes;
@@ -427,493 +144,131 @@ static int decompress_job_run(const struct decompress_job *job)
 	return decompress_data_nolog(job->src, job->compressed_size, block_bytes, job->dst);
 }
 
-static void decompress_queue_init(struct decompress_queue *queue,
-				  struct decompress_job *jobs,
-				  size_t nr_jobs,
-				  unsigned int nr_threads)
+struct decompress_work_task {
+	const struct decompress_job *jobs;
+	size_t nr_jobs;
+	int failed_block;
+};
+
+static int decompress_work_task_fn(void *arg)
 {
-	queue->jobs = jobs;
-	queue->nr_jobs = nr_jobs;
-	/*
-	 * Leave several claims per participant to balance uneven jobs. The cap
-	 * limits the work already claimed when another participant fails.
-	 */
-	queue->job_chunk = nr_jobs / nr_threads / 4;
-	if (!queue->job_chunk)
-		queue->job_chunk = 1;
-	if (queue->job_chunk > PARALLEL_DECOMPRESS_MAX_JOB_CHUNK)
-		queue->job_chunk = PARALLEL_DECOMPRESS_MAX_JOB_CHUNK;
-	queue->next_job = 0;
-	queue->failed = 0;
-	queue->failed_block = INT_MAX;
-}
+	struct decompress_work_task *task = arg;
+	size_t i;
 
-static bool decompress_queue_failed(const struct decompress_queue *queue)
-{
-	/* Cancellation is only a hint; read the result after all work stops. */
-	return __atomic_load_n(&queue->failed, __ATOMIC_RELAXED);
-}
-
-static int decompress_queue_failed_block(const struct decompress_queue *queue)
-{
-	return __atomic_load_n(&queue->failed_block, __ATOMIC_RELAXED);
-}
-
-static bool decompress_queue_claim_chunk(struct decompress_queue *queue,
-					 size_t *first,
-					 size_t *end)
-{
-	if (decompress_queue_failed(queue))
-		return false;
-
-	/* This relaxed counter only assigns disjoint chunks; it publishes no data. */
-	*first = __atomic_fetch_add(&queue->next_job, queue->job_chunk, __ATOMIC_RELAXED);
-	if (*first >= queue->nr_jobs)
-		return false;
-
-	*end = *first + queue->job_chunk;
-	if (*end > queue->nr_jobs)
-		*end = queue->nr_jobs;
-	return true;
-}
-
-static void decompress_queue_record_failure(struct decompress_queue *queue, int block_index)
-{
-	int earliest_block = __atomic_load_n(&queue->failed_block, __ATOMIC_RELAXED);
-
-	/* Keep the lowest failing block index when several workers fail. */
-	while (block_index < earliest_block) {
-		if (__atomic_compare_exchange_n(&queue->failed_block, &earliest_block, block_index, false,
-						__ATOMIC_RELAXED, __ATOMIC_RELAXED))
-			break;
-	}
-
-	/* Stop useful scheduling; already claimed disjoint chunks may finish. */
-	__atomic_store_n(&queue->failed, 1, __ATOMIC_RELAXED);
-}
-
-static void decompress_queue_run(struct decompress_queue *queue)
-{
-	size_t first, end;
-
-	while (decompress_queue_claim_chunk(queue, &first, &end)) {
-		size_t i;
-
-		for (i = first; i < end; i++) {
-			struct decompress_job *job = &queue->jobs[i];
-
-			if (!decompress_job_run(job))
-				continue;
-
-			decompress_queue_record_failure(queue, job->block_index);
-			break;
+	task->failed_block = INT_MAX;
+	for (i = 0; i < task->nr_jobs; i++) {
+		if (decompress_job_run(&task->jobs[i])) {
+			task->failed_block = task->jobs[i].block_index;
+			return -1;
 		}
 	}
+	return 0;
 }
 
-static int decompress_jobs_serial(struct decompress_job *jobs, size_t nr_jobs)
+int decompress_jobs_parallel(struct cr_work_queue *wq,
+			     struct decompress_job *jobs,
+			     size_t nr_jobs,
+			     size_t total_uncompressed,
+			     unsigned int requested_threads,
+			     decompression_caller_work_fn caller_work,
+			     void *caller_work_arg)
 {
-	struct decompress_queue queue;
-
-	decompress_queue_init(&queue, jobs, nr_jobs, 1);
-	decompress_queue_run(&queue);
-	if (!decompress_queue_failed(&queue))
-		return 0;
-
-	pr_err("Decompression failed at block %d\n", decompress_queue_failed_block(&queue));
-	return -1;
-}
-
-static unsigned int decompress_batch_threads(size_t nr_jobs,
-					     size_t total_uncompressed,
-					     unsigned int requested_threads)
-{
-	size_t work_limit;
-	unsigned int nr_threads;
-
-	/*
-	 * Add participants only while each has a job and at least 512 KiB of
-	 * decoded work. Smaller batches stay with the caller.
-	 */
-	if (total_uncompressed < PARALLEL_RESTORE_MIN_BATCH_BYTES)
-		return 1;
-
-	nr_threads = decompression_cpu_limit(requested_threads);
-	work_limit = nr_jobs;
-	if (work_limit < nr_threads)
-		nr_threads = (unsigned int)work_limit;
-	work_limit = total_uncompressed / PARALLEL_DECOMPRESS_MIN_BYTES_PER_THREAD;
-	if (work_limit < nr_threads)
-		nr_threads = (unsigned int)work_limit;
-	if (nr_threads < 2)
-		return 1;
-
-	return nr_threads;
-}
-
-static void decompression_worker_signal_set(sigset_t *set)
-{
-	/*
-	 * CRIU's process-global signal handling belongs to the restore thread.
-	 * Worker threads keep asynchronous signals blocked for their lifetime.
-	 * Synchronous faults must remain deliverable.
-	 */
-	sigfillset(set);
-	sigdelset(set, SIGABRT);
-	sigdelset(set, SIGBUS);
-	sigdelset(set, SIGFPE);
-	sigdelset(set, SIGILL);
-	sigdelset(set, SIGSEGV);
-	sigdelset(set, SIGSYS);
-	sigdelset(set, SIGTRAP);
-}
-
-static void *decompression_pool_worker(void *arg)
-{
-	struct decompress_worker *worker = arg;
-	struct decompression_pool *pool = worker->pool;
-	unsigned long seen_generation = 0;
-	int err;
-
-	err = pthread_mutex_lock(&pool->lock);
-	if (err) {
-		pr_err("Unable to lock decompression worker pool: %s\n", strerror(err));
-		BUG();
-	}
-
-	for (;;) {
-		struct decompress_queue *queue;
-
-		/*
-		 * A wake-up alone is not work. The generation prevents a worker
-		 * from repeating a batch, while its index selects the useful prefix.
-		 */
-		while (!pool->stop) {
-			if (seen_generation != pool->batch_generation && worker->index < pool->batch_workers)
-				break;
-			err = pthread_cond_wait(&pool->work_ready, &pool->lock);
-			if (err) {
-				pr_err("Unable to wait for decompression work: %s\n", strerror(err));
-				BUG();
-			}
-		}
-		if (pool->stop)
-			break;
-
-		seen_generation = pool->batch_generation;
-		queue = &pool->queue;
-		pthread_mutex_unlock(&pool->lock);
-
-		decompress_queue_run(queue);
-
-		err = pthread_mutex_lock(&pool->lock);
-		if (err) {
-			pr_err("Unable to lock completed decompression work: %s\n", strerror(err));
-			BUG();
-		}
-		BUG_ON(!pool->pending_batch_workers);
-		pool->pending_batch_workers--;
-		if (!pool->pending_batch_workers)
-			pthread_cond_signal(&pool->work_done);
-	}
-
-	pthread_mutex_unlock(&pool->lock);
-	return NULL;
-}
-
-static void decompression_pool_spawn_workers(struct decompression_pool *pool,
-					     unsigned int nr_workers,
-					     pthread_attr_t *attrp)
-{
-	unsigned int attempt;
-
-	/* Successful workers are packed; a failed attempt does not consume a slot. */
-	for (attempt = 0; attempt < nr_workers; attempt++) {
-		struct decompress_worker *worker = &pool->workers[pool->nr_workers];
-		int err;
-
-		worker->pool = pool;
-		worker->index = pool->nr_workers;
-		err = pthread_create(&worker->tid, attrp, decompression_pool_worker, worker);
-		if (err) {
-			pr_warn("Unable to start decompression worker %u: %s\n", attempt, strerror(err));
-			break;
-		}
-		pool->nr_workers++;
-	}
-}
-
-static struct decompression_pool *decompression_pool_create(unsigned int nr_threads, bool *mask_restore_failed)
-{
-	struct decompression_pool *pool;
-	pthread_attr_t attr;
-	sigset_t set, old;
-	unsigned int nr_workers;
-	size_t stack_size = PARALLEL_DECOMPRESS_STACK_SIZE;
-	int err;
-
-	*mask_restore_failed = false;
-	if (nr_threads <= 1)
-		return NULL;
-	/* The caller uses one slot, so create only nr_threads - 1 workers. */
-	nr_workers = nr_threads - 1;
-
-	pool = xzalloc(sizeof(*pool));
-	if (!pool)
-		return NULL;
-	pool->workers = xzalloc((size_t)nr_workers * sizeof(*pool->workers));
-	if (!pool->workers)
-		goto free_pool;
-
-	/* Initialize every synchronization object before starting workers. */
-	err = pthread_mutex_init(&pool->lock, NULL);
-	if (err) {
-		pr_warn("Unable to initialize decompression pool lock: %s\n", strerror(err));
-		goto free_workers;
-	}
-	err = pthread_cond_init(&pool->work_ready, NULL);
-	if (err) {
-		pr_warn("Unable to initialize decompression work condition: %s\n", strerror(err));
-		goto destroy_lock;
-	}
-	err = pthread_cond_init(&pool->work_done, NULL);
-	if (err) {
-		pr_warn("Unable to initialize decompression completion condition: %s\n", strerror(err));
-		goto destroy_ready;
-	}
-
-	/* A bounded worker stack keeps large restore pools inexpensive. */
-	err = pthread_attr_init(&attr);
-	if (err) {
-		pr_warn("Unable to initialize decompression worker attributes: %s\n", strerror(err));
-		goto destroy_done;
-	}
-	if (stack_size < PTHREAD_STACK_MIN)
-		stack_size = PTHREAD_STACK_MIN;
-	err = pthread_attr_setstacksize(&attr, stack_size);
-	if (err) {
-		pr_warn("Unable to set decompression worker stack size: %s\n", strerror(err));
-		goto destroy_attr;
-	}
-
-	/* Workers inherit blocked asynchronous signals from their creator. */
-	decompression_worker_signal_set(&set);
-	err = pthread_sigmask(SIG_BLOCK, &set, &old);
-	if (err) {
-		pr_warn("Unable to block signals for decompression workers: %s\n", strerror(err));
-		goto destroy_attr;
-	}
-
-	decompression_pool_spawn_workers(pool, nr_workers, &attr);
-
-	/* Restore the calling thread's mask after all workers have started. */
-	err = pthread_sigmask(SIG_SETMASK, &old, NULL);
-	if (err) {
-		pr_err("Unable to restore signal mask after starting decompression workers: %s\n", strerror(err));
-		*mask_restore_failed = true;
-	}
-
-destroy_attr:
-	pthread_attr_destroy(&attr);
-
-	if (pool->nr_workers)
-		return pool;
-
-destroy_done:
-	pthread_cond_destroy(&pool->work_done);
-destroy_ready:
-	pthread_cond_destroy(&pool->work_ready);
-destroy_lock:
-	pthread_mutex_destroy(&pool->lock);
-free_workers:
-	xfree(pool->workers);
-free_pool:
-	xfree(pool);
-	return NULL;
-}
-
-void decompression_pool_destroy(struct decompression_pool *pool)
-{
-	unsigned int w;
-	int err;
-
-	if (!pool)
-		return;
-
-	err = pthread_mutex_lock(&pool->lock);
-	if (err) {
-		pr_err("Unable to lock decompression pool for shutdown: %s\n", strerror(err));
-		BUG();
-	}
-	BUG_ON(pool->batch_active || pool->pending_batch_workers);
-	pool->stop = true;
-	pthread_cond_broadcast(&pool->work_ready);
-	pthread_mutex_unlock(&pool->lock);
-
-	for (w = 0; w < pool->nr_workers; w++) {
-		err = pthread_join(pool->workers[w].tid, NULL);
-		if (err) {
-			pr_err("Unable to join decompression worker %u: %s\n", w, strerror(err));
-			BUG();
-		}
-	}
-
-	pthread_cond_destroy(&pool->work_done);
-	pthread_cond_destroy(&pool->work_ready);
-	pthread_mutex_destroy(&pool->lock);
-	xfree(pool->workers);
-	xfree(pool);
-}
-
-/* Publish one immutable job array to the selected subset of pool workers. */
-static void decompression_pool_start_batch(struct decompression_pool *pool,
-					   struct decompress_job *jobs,
-					   size_t nr_jobs,
-					   unsigned int active_threads)
-{
-	int err;
-
-	err = pthread_mutex_lock(&pool->lock);
-	if (err) {
-		pr_err("Unable to lock decompression pool for dispatch: %s\n", strerror(err));
-		BUG();
-	}
-	BUG_ON(pool->batch_active || pool->pending_batch_workers);
-	decompress_queue_init(&pool->queue, jobs, nr_jobs, active_threads);
-	pool->batch_active = true;
-	pool->batch_workers = active_threads - 1;
-	pool->pending_batch_workers = pool->batch_workers;
-	pool->batch_generation++;
-	pthread_cond_broadcast(&pool->work_ready);
-	pthread_mutex_unlock(&pool->lock);
-}
-
-/* Wait until workers have dropped every reference to the caller-owned jobs. */
-static bool decompression_pool_finish_batch(struct decompression_pool *pool, int *failed_block)
-{
-	bool failed;
-	int err;
-
-	err = pthread_mutex_lock(&pool->lock);
-	if (err) {
-		pr_err("Unable to lock decompression pool for completion: %s\n", strerror(err));
-		BUG();
-	}
-	while (pool->pending_batch_workers) {
-		err = pthread_cond_wait(&pool->work_done, &pool->lock);
-		if (err) {
-			pr_err("Unable to wait for decompression completion: %s\n", strerror(err));
-			BUG();
-		}
-	}
-
-	/*
-	 * Each worker records failure before taking this lock to drop its pending
-	 * count, and the caller finishes its queue run before entering here.
-	 * Waiting for all pending workers therefore publishes the minimum.
-	 */
-	failed = decompress_queue_failed(&pool->queue);
-	*failed_block = decompress_queue_failed_block(&pool->queue);
-	pool->queue.jobs = NULL;
-	pool->queue.nr_jobs = 0;
-	pool->batch_active = false;
-	pool->batch_workers = 0;
-	pthread_mutex_unlock(&pool->lock);
-
-	return failed;
-}
-
-int decompress_jobs_parallel_pool_with_caller_work(
-	struct decompression_pool **poolp, struct decompress_job *jobs,
-	size_t nr_jobs, size_t total_uncompressed,
-	unsigned int requested_threads,
-	decompression_caller_work_fn caller_work, void *caller_work_arg)
-{
-	struct decompression_pool *pool;
-	unsigned int active_threads, useful_threads, threads_held;
-	bool mask_restore_failed = false;
-	int failed_block = INT_MAX, ret = 0;
+	struct decompress_work_task single_task;
+	struct decompress_work_task *tasks = &single_task;
+	size_t max_tasks = 1, nr_tasks = 0, start = 0;
+	size_t i;
+	int ret;
 
 	if (!nr_jobs)
 		return 0;
-	if (!jobs || !poolp)
+	if (!jobs || !wq)
 		return -1;
 
-	/* Reserve restore-wide CPU slots after choosing this batch's useful width. */
-	useful_threads = decompress_batch_threads(nr_jobs, total_uncompressed, requested_threads);
-	threads_held = decompress_budget_acquire(useful_threads);
-	if (!threads_held)
-		return decompress_jobs_serial(jobs, nr_jobs);
-	if (threads_held == 1) {
-		ret = decompress_jobs_serial(jobs, nr_jobs);
-		goto out_release_budget;
+	if (nr_jobs >= 2 &&
+	    total_uncompressed >= PARALLEL_COMPRESSED_MIN_BATCH_BYTES &&
+	    compressed_restore_has_parallel_capacity(requested_threads)) {
+		max_tasks = min(nr_jobs,
+				DIV_ROUND_UP(total_uncompressed, PARALLEL_COMPRESSED_TASK_BYTES));
+		if (max_tasks < 2)
+			max_tasks = 2;
+		tasks = xmalloc(max_tasks * sizeof(*tasks));
+		if (!tasks) {
+			tasks = &single_task;
+			max_tasks = 1;
+		}
 	}
 
-	pool = *poolp;
-	/*
-	 * The pool survives a batch, but its CPU-budget reservation does not. Reuse a
-	 * large enough pool; replace it only when this batch needs more workers.
-	 */
-	if (pool && threads_held > pool->nr_workers + 1) {
-		decompression_pool_destroy(pool);
-		pool = NULL;
-		*poolp = NULL;
-	}
-	if (!pool) {
-		pool = decompression_pool_create(threads_held, &mask_restore_failed);
-		*poolp = pool;
-	}
-	if (mask_restore_failed) {
-		decompression_pool_destroy(pool);
-		*poolp = NULL;
-		ret = -1;
-		goto out_release_budget;
-	}
-	if (!pool) {
-		pr_warn("Unable to start decompression workers, using serial decompression\n");
-		decompress_budget_trim_reservation(&threads_held, 1);
-		ret = decompress_jobs_serial(jobs, nr_jobs);
-		goto out_release_budget;
+	while (start < nr_jobs) {
+		size_t chunk_bytes = 0;
+		size_t end = start;
+
+		if (nr_tasks + 1 == max_tasks) {
+			end = nr_jobs;
+		} else {
+			while (end < nr_jobs &&
+			       chunk_bytes < PARALLEL_COMPRESSED_TASK_BYTES &&
+			       (nr_jobs - end) > (max_tasks - nr_tasks - 1)) {
+				chunk_bytes += (size_t)jobs[end].pages * PAGE_SIZE;
+				end++;
+			}
+			if (end == start)
+				end++;
+		}
+
+		tasks[nr_tasks].jobs = &jobs[start];
+		tasks[nr_tasks].nr_jobs = end - start;
+		tasks[nr_tasks].failed_block = INT_MAX;
+		nr_tasks++;
+		start = end;
 	}
 
-	/* A partially created pool may need fewer slots than were reserved. */
-	active_threads = min(threads_held, pool->nr_workers + 1);
-	decompress_budget_trim_reservation(&threads_held, active_threads);
+	for (i = 0; i < nr_tasks; i++) {
+		if (cr_work_submit(wq, decompress_work_task_fn, &tasks[i])) {
+			cr_work_wait(wq);
+			if (tasks != &single_task)
+				xfree(tasks);
+			return -1;
+		}
+	}
 
-	/*
-	 * Publishing the batch lets workers decode while the caller performs
-	 * optional work. The caller then helps drain the queue and waits until no
-	 * worker can reference it.
-	 */
-	decompression_pool_start_batch(pool, jobs, nr_jobs, active_threads);
-	if (caller_work)
+	if (caller_work && nr_tasks > 1)
 		caller_work(caller_work_arg);
-	/* After optional caller work, consume any jobs the pool has not claimed. */
-	decompress_queue_run(&pool->queue);
 
-	if (decompression_pool_finish_batch(pool, &failed_block)) {
-		pr_err("Decompression failed at block %d\n", failed_block);
-		ret = -1;
+	ret = cr_work_wait(wq);
+	if (ret) {
+		int earliest = INT_MAX;
+
+		for (i = 0; i < nr_tasks; i++) {
+			if (tasks[i].failed_block < earliest)
+				earliest = tasks[i].failed_block;
+		}
+		pr_err("Decompression failed at block %d\n", earliest);
+		if (tasks != &single_task)
+			xfree(tasks);
+		return -1;
 	}
-out_release_budget:
-	decompress_budget_release(threads_held);
-	return ret;
+
+	if (tasks != &single_task)
+		xfree(tasks);
+	return 0;
 }
 
-int decompress_jobs_parallel_pool(struct decompression_pool **poolp,
-				  struct decompress_job *jobs, size_t nr_jobs,
-				  size_t total_uncompressed,
-				  unsigned int requested_threads)
+static struct cr_work_queue *encoded_read_ctx_get_wq(struct encoded_read_ctx *ctx)
 {
-	return decompress_jobs_parallel_pool_with_caller_work(
-		poolp, jobs, nr_jobs, total_uncompressed, requested_threads,
-		NULL, NULL);
+	if (!ctx)
+		return NULL;
+	if (!ctx->wq_initialized) {
+		if (cr_work_queue_init(&ctx->wq, NULL))
+			return NULL;
+		ctx->wq_initialized = true;
+	}
+	return &ctx->wq;
 }
 
 void encoded_read_ctx_begin_work(struct encoded_read_ctx *ctx)
 {
 	BUG_ON(ctx->batch_acquired);
-	decompression_batch_acquire();
+	cr_work_batch_acquire();
 	ctx->batch_acquired = true;
 }
 
@@ -938,10 +293,10 @@ void encoded_read_ctx_end_work(struct encoded_read_ctx *ctx)
 	ctx->jobs_cap = 0;
 	if (ctx->prefetch_batch_acquired) {
 		ctx->prefetch_batch_acquired = false;
-		decompression_batch_release();
+		cr_work_batch_release();
 	}
 	ctx->batch_acquired = false;
-	decompression_batch_release();
+	cr_work_batch_release();
 }
 
 void encoded_read_ctx_fini(struct encoded_read_ctx *ctx)
@@ -949,7 +304,10 @@ void encoded_read_ctx_fini(struct encoded_read_ctx *ctx)
 	if (!ctx)
 		return;
 	encoded_read_ctx_end_work(ctx);
-	decompression_pool_destroy(ctx->pool);
+	if (ctx->wq_initialized) {
+		cr_work_queue_destroy(&ctx->wq);
+		ctx->wq_initialized = false;
+	}
 }
 
 void encoded_prefetch_read(void *arg)
@@ -984,7 +342,7 @@ void encoded_prefetch_disable(struct encoded_read_ctx *ctx)
 	ctx->prefetch_cap = 0;
 	if (ctx->prefetch_batch_acquired) {
 		ctx->prefetch_batch_acquired = false;
-		decompression_batch_release();
+		cr_work_batch_release();
 	}
 }
 
@@ -995,7 +353,7 @@ bool encoded_prefetch_prepare(struct encoded_read_ctx *ctx, int fd,
 
 	BUG_ON(ctx->prefetched_token || ctx->prefetch.complete || !count);
 	if (!ctx->prefetch_batch_acquired) {
-		if (!decompression_batch_try_acquire())
+		if (!cr_work_batch_try_acquire())
 			return false;
 		ctx->prefetch_batch_acquired = true;
 	}
@@ -1399,13 +757,8 @@ static int process_encoded_async_read(int fd, struct page_read_iov *piov,
 		goto out;
 	}
 
-	/*
-	 * The pool call drains all workers before returning. Optional caller work
-	 * fills the separate prefetch buffer without shortening current payload,
-	 * job, or destination lifetimes.
-	 */
-	if (decompress_jobs_parallel_pool_with_caller_work(
-		    &ctx->pool, jobs, nr_jobs, jobs_uncompressed,
+	if (decompress_jobs_parallel(
+		    encoded_read_ctx_get_wq(ctx), jobs, nr_jobs, jobs_uncompressed,
 		    opts.decompress_threads,
 		    prefetch ? encoded_prefetch_read : NULL, prefetch))
 		goto out;
@@ -1425,8 +778,8 @@ static bool encoded_prefetch_eligible(const struct page_read *pr,
 		return false;
 	if (!compressed_restore_has_parallel_capacity(opts.decompress_threads))
 		return false;
-	if (current->n_pages < PARALLEL_RESTORE_MIN_BATCH_BYTES / PAGE_SIZE ||
-	    next->n_pages < PARALLEL_RESTORE_MIN_BATCH_BYTES / PAGE_SIZE)
+	if (current->n_pages < PARALLEL_COMPRESSED_MIN_BATCH_BYTES / PAGE_SIZE ||
+	    next->n_pages < PARALLEL_COMPRESSED_MIN_BATCH_BYTES / PAGE_SIZE)
 		return false;
 	if (!next_size || next_size > ASYNC_BATCH_MAX_BYTES ||
 	    (uint64_t)next_size != next->b_layout.total_bytes ||
@@ -1527,9 +880,9 @@ int encoded_stream_read_batch(int fd, void *buf, const uint32_t *block_sizes,
 		return -1;
 	}
 	if (nr_jobs &&
-	    decompress_jobs_parallel_pool(&ctx->pool, ctx->jobs, nr_jobs,
-					  jobs_uncompressed,
-					  opts.decompress_threads)) {
+	    decompress_jobs_parallel(encoded_read_ctx_get_wq(ctx), ctx->jobs,
+				     nr_jobs, jobs_uncompressed,
+				     opts.decompress_threads, NULL, NULL)) {
 		pr_err("Unable to decompress streaming batch at page %lu\n",
 		       first_page_idx);
 		return -1;

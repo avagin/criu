@@ -7,6 +7,7 @@
 
 #include "common/lock.h"
 #include "page.h"
+#include "work-queue.h"
 
 struct page_read;
 struct page_read_iov;
@@ -30,8 +31,17 @@ enum compress_mode {
 #define MAX_BLOCK_PAGES		(MAX_BLOCK_SIZE / PAGE_SIZE)
 #define DEFAULT_BLOCK_PAGES	(DEFAULT_BLOCK_SIZE / PAGE_SIZE)
 
-/* Minimum useful batch before starting compressed-page restore workers. */
-#define PARALLEL_RESTORE_MIN_BATCH_BYTES (1UL << 20)
+/*
+ * Per-task and minimum batch limits for parallel memory restore:
+ * - Compressed data (CPU-bound LZ4 decoding): 512 KiB per task, 1 MiB min batch.
+ * - Uncompressed data (I/O-bound pread/memset): 4 MiB per task, 8 MiB min batch.
+ */
+#define PARALLEL_COMPRESSED_TASK_BYTES      (512UL << 10)
+#define PARALLEL_COMPRESSED_MIN_BATCH_BYTES (1UL << 20)
+#define PARALLEL_RESTORE_MIN_BATCH_BYTES    PARALLEL_COMPRESSED_MIN_BATCH_BYTES
+
+#define PARALLEL_UNCOMPRESSED_TASK_BYTES      (4UL << 20)
+#define PARALLEL_UNCOMPRESSED_MIN_BATCH_BYTES (8UL << 20)
 
 /* LZ4 worst-case compressed size for one page: src + src/255 + 16 */
 #define PAGE_COMPRESSED_SIZE_BOUND (PAGE_SIZE + (PAGE_SIZE / 255) + 16)
@@ -107,20 +117,7 @@ struct decompress_job {
 	int block_index;
 };
 
-struct decompression_pool;
 typedef void (*decompression_caller_work_fn)(void *arg);
-
-/*
- * Restore-wide limits live in the shared restore mapping. All task restore
- * processes and asyncd workers inherit the same object, bounding active
- * compressed-page workers and large encoded working sets across siblings.
- */
-struct decompression_shared_budget {
-	futex_t threads;
-	futex_t batches;
-	/* Immutable capacity used for restore-path selection. */
-	unsigned int thread_capacity;
-};
 
 struct encoded_prefetch {
 	char *buffer;
@@ -135,7 +132,7 @@ struct encoded_prefetch {
 /*
  * Reusable storage for encoded reads. The top-level page reader owns one
  * context for its whole parent chain. Buffers are reused during one active
- * read and then released; decompression workers remain reusable across reads.
+ * read and then released; the work queue remains reusable across reads.
  */
 struct encoded_read_ctx {
 	struct decompress_job *jobs;
@@ -148,10 +145,17 @@ struct encoded_read_ctx {
 	struct encoded_prefetch prefetch;
 	char *scratch;
 	size_t scratch_cap;
-	struct decompression_pool *pool;
+	struct cr_work_queue wq;
+	bool wq_initialized;
 	bool batch_acquired;
 	bool prefetch_batch_acquired;
 };
+
+static inline bool compressed_restore_has_parallel_capacity(
+	unsigned int requested_threads)
+{
+	return cr_work_has_parallel_capacity(requested_threads);
+}
 
 #ifdef CONFIG_LZ4
 
@@ -176,52 +180,13 @@ int compress_block(const char *src, unsigned int n_pages, char *dst,
 int decompress_block(const char *src, int compressed_size,
 		     unsigned int n_pages, char *dst);
 
-/*
- * Reuse worker threads through @pool across related batches. A later wider
- * batch may replace the pool. @requested_threads includes the caller; zero
- * selects automatic concurrency and one keeps the call serial. The active
- * width is bounded by available CPUs, useful batch work, and the shared CPU
- * budget. Small batches run serially. Calls sharing a pool must be serialized.
- * The call is synchronous: the caller must keep @jobs and their source and
- * destination buffers valid until it returns.
- * @pool must initially be NULL and must be destroyed before the caller forks
- * or remaps its address space.
- */
-int decompress_jobs_parallel_pool(struct decompression_pool **pool,
-				  struct decompress_job *jobs,
-				  size_t nr_jobs,
-				  size_t total_uncompressed,
-				  unsigned int requested_threads);
-/*
- * After dispatching a parallel batch, run @caller_work once in the calling
- * thread while selected workers may use @jobs concurrently. Serial fallbacks
- * skip the callback. The callback must record its own result and must not
- * mutate @jobs, access their destination buffers, re-enter @pool, or acquire
- * another worker-budget reservation.
- */
-int decompress_jobs_parallel_pool_with_caller_work(
-	struct decompression_pool **pool, struct decompress_job *jobs,
-	size_t nr_jobs, size_t total_uncompressed,
-	unsigned int requested_threads,
-	decompression_caller_work_fn caller_work, void *caller_work_arg);
-void decompression_pool_destroy(struct decompression_pool *pool);
-/*
- * Initialize the restore-wide CPU and encoded-working-set budgets. Automatic
- * (0) and serial (1) per-call settings still permit independent restore
- * requests to run on separate CPUs; values above one cap their aggregate
- * worker width.
- */
-void decompression_shared_budget_init(struct decompression_shared_budget *budget,
-				      unsigned int requested_threads);
-void decompression_use_shared_budget(struct decompression_shared_budget *budget);
-void decompression_batch_acquire(void);
-bool decompression_batch_try_acquire(void);
-void decompression_batch_release(void);
-bool compressed_restore_has_parallel_capacity(unsigned int requested_threads);
-
-/* Apply the requested auto/explicit setting to the detected CPU capacity. */
-unsigned int decompression_thread_limit(unsigned int requested,
-					unsigned int available_cpus);
+int decompress_jobs_parallel(struct cr_work_queue *wq,
+			     struct decompress_job *jobs,
+			     size_t nr_jobs,
+			     size_t total_uncompressed,
+			     unsigned int requested_threads,
+			     decompression_caller_work_fn caller_work,
+			     void *caller_work_arg);
 
 void encoded_read_ctx_begin_work(struct encoded_read_ctx *ctx);
 void encoded_read_ctx_end_work(struct encoded_read_ctx *ctx);
@@ -261,54 +226,13 @@ static inline int decompress_block(const char *src, int comp_sz,
 	return -1;
 }
 
-static inline int decompress_jobs_parallel_pool(
-	struct decompression_pool **pool, struct decompress_job *jobs,
-	size_t nr_jobs, size_t total_uncompressed,
-	unsigned int requested_threads)
-{
-	return -1;
-}
-
-static inline int decompress_jobs_parallel_pool_with_caller_work(
-	struct decompression_pool **pool, struct decompress_job *jobs,
+static inline int decompress_jobs_parallel(
+	struct cr_work_queue *wq, struct decompress_job *jobs,
 	size_t nr_jobs, size_t total_uncompressed,
 	unsigned int requested_threads,
 	decompression_caller_work_fn caller_work, void *caller_work_arg)
 {
 	return -1;
-}
-
-static inline void decompression_pool_destroy(struct decompression_pool *pool)
-{
-}
-
-static inline void decompression_shared_budget_init(
-	struct decompression_shared_budget *budget, unsigned int requested_threads)
-{
-}
-
-static inline void decompression_use_shared_budget(
-	struct decompression_shared_budget *budget)
-{
-}
-
-static inline void decompression_batch_acquire(void)
-{
-}
-
-static inline bool decompression_batch_try_acquire(void)
-{
-	return false;
-}
-
-static inline void decompression_batch_release(void)
-{
-}
-
-static inline bool compressed_restore_has_parallel_capacity(
-	unsigned int requested_threads)
-{
-	return false;
 }
 
 static inline void encoded_read_ctx_begin_work(struct encoded_read_ctx *ctx)
