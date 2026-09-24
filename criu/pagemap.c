@@ -946,8 +946,7 @@ int pagemap_enqueue_iovec(struct page_read *pr, void *buf, unsigned long len, st
 	if (compressed_request_has_lz4(pr, nr_pages, &has_lz4,
 					&mixed_direct))
 		return -1;
-	if (to == &pr->async)
-		parallel_zero = compressed_restore_has_parallel_capacity(opts.decompress_threads);
+	(void)parallel_zero;
 
 	pi_off = pr->pi_off;
 	saved_block_idx = pr->blk.block_idx;
@@ -973,11 +972,6 @@ int pagemap_enqueue_iovec(struct page_read *pr, void *buf, unsigned long len, st
 			ret = -1;
 			break;
 		}
-
-		/* Premapped large zero runs can share the decompression worker pool. */
-		if (storage == VMA_IO_ZERO && parallel_zero && blocks > 1 &&
-		    chunk * PAGE_SIZE >= PARALLEL_RESTORE_MIN_BATCH_BYTES)
-			storage = VMA_IO_ENCODED;
 
 		/*
 		 * Keep short raw/zero islands in an in-process encoded batch when
@@ -1715,6 +1709,132 @@ static bool page_read_chain_has_encoded_async(struct page_read *pr)
 	return pr->parent && page_read_chain_has_encoded_async(pr->parent);
 }
 
+static struct cr_work_queue *page_read_get_wq(struct page_read *pr)
+{
+	struct page_read *owner = pr->blk.encoded_owner ? pr->blk.encoded_owner : pr;
+
+	if (owner->blk.encoded_ctx && owner->blk.encoded_ctx->wq_initialized)
+		return &owner->blk.encoded_ctx->wq;
+	if (!owner->blk.wq) {
+		owner->blk.wq = xzalloc(sizeof(*owner->blk.wq));
+		if (!owner->blk.wq)
+			return NULL;
+		if (cr_work_queue_init(owner->blk.wq, NULL)) {
+			xfree(owner->blk.wq);
+			owner->blk.wq = NULL;
+			return NULL;
+		}
+	}
+	return owner->blk.wq;
+}
+
+struct uncompressed_work_task {
+	const struct iovec *iovs;
+	unsigned int first_iov;
+	size_t first_iov_off;
+	size_t bytes;
+	off_t file_off;
+	int fd;
+	bool is_zero;
+};
+
+static int uncompressed_work_task_fn(void *arg)
+{
+	struct uncompressed_work_task *task = arg;
+	unsigned int idx = task->first_iov;
+	size_t iov_off = task->first_iov_off;
+	size_t left = task->bytes;
+	off_t cur_off = task->file_off;
+
+	while (left > 0) {
+		char *dst = (char *)task->iovs[idx].iov_base + iov_off;
+		size_t avail = task->iovs[idx].iov_len - iov_off;
+		size_t chunk = min(left, avail);
+
+		if (task->is_zero) {
+			memset(dst, 0, chunk);
+		} else {
+			if (pread_full(task->fd, dst, chunk, cur_off))
+				return -1;
+			cur_off += chunk;
+		}
+		left -= chunk;
+		iov_off = 0;
+		idx++;
+	}
+	return 0;
+}
+
+static int parallel_read_piov(struct page_read *pr, int fd,
+			      struct page_read_iov *piov)
+{
+	size_t total_bytes = (size_t)piov->n_pages * PAGE_SIZE;
+	struct uncompressed_work_task *tasks;
+	struct cr_work_queue *wq;
+	size_t nr_tasks, i;
+	unsigned int cur_iov = 0;
+	size_t cur_iov_off = 0;
+	off_t cur_file_off = piov->from;
+	size_t rem = total_bytes;
+	int ret;
+
+	if (fault_injected(FI_PARTIAL_PAGES) ||
+	    total_bytes < PARALLEL_UNCOMPRESSED_MIN_BATCH_BYTES ||
+	    !cr_work_has_parallel_capacity(opts.decompress_threads))
+		return 0;
+
+	wq = page_read_get_wq(pr);
+	if (!wq)
+		return 0;
+
+	nr_tasks = DIV_ROUND_UP(total_bytes, PARALLEL_UNCOMPRESSED_TASK_BYTES);
+	if (nr_tasks < 2)
+		return 0;
+
+	tasks = xmalloc(nr_tasks * sizeof(*tasks));
+	if (!tasks)
+		return 0;
+
+	for (i = 0; i < nr_tasks; i++) {
+		size_t chunk = min(rem, (size_t)PARALLEL_UNCOMPRESSED_TASK_BYTES);
+		size_t adv = chunk;
+
+		tasks[i].iovs = piov->to;
+		tasks[i].first_iov = cur_iov;
+		tasks[i].first_iov_off = cur_iov_off;
+		tasks[i].bytes = chunk;
+		tasks[i].file_off = cur_file_off;
+		tasks[i].fd = fd;
+		tasks[i].is_zero = (piov->storage == VMA_IO_ZERO);
+
+		while (adv > 0) {
+			size_t avail = piov->to[cur_iov].iov_len - cur_iov_off;
+			size_t step = min(adv, avail);
+
+			cur_iov_off += step;
+			if (cur_iov_off == piov->to[cur_iov].iov_len) {
+				cur_iov++;
+				cur_iov_off = 0;
+			}
+			adv -= step;
+		}
+		cur_file_off += chunk;
+		rem -= chunk;
+	}
+
+	for (i = 0; i < nr_tasks; i++) {
+		if (cr_work_submit(wq, uncompressed_work_task_fn, &tasks[i])) {
+			cr_work_wait(wq);
+			xfree(tasks);
+			return -1;
+		}
+	}
+
+	ret = cr_work_wait(wq);
+	xfree(tasks);
+	return ret ? -1 : 1;
+}
+
 /*
  * Drain one page-reader chain in image order. Each queue element has one of
  * four storage kinds: zero and packed raw bypass LZ4, ordinary entries use
@@ -1763,6 +1883,7 @@ static int process_async_reads_ctx(struct page_read *pr,
 	/* Consume and free each request only after its destination is complete. */
 	list_for_each_entry_safe(piov, n, &pr->async, l) {
 		ssize_t ret;
+		int par_ret;
 		struct iovec *iovs = piov->to;
 
 		pr_debug("Read piov iovs %d, from %ju, len %ju, first %p:%zu\n", piov->nr, piov->from,
@@ -1777,6 +1898,11 @@ static int process_async_reads_ctx(struct page_read *pr,
 				ret = -1;
 				goto err;
 			}
+			par_ret = parallel_read_piov(pr, fd, piov);
+			if (par_ret < 0)
+				goto err;
+			if (par_ret > 0)
+				goto next;
 			for (unsigned int i = 0; i < piov->nr; i++)
 				memset(piov->to[i].iov_base, 0, piov->to[i].iov_len);
 			goto next;
@@ -1787,6 +1913,11 @@ static int process_async_reads_ctx(struct page_read *pr,
 				ret = -1;
 				goto err;
 			}
+			par_ret = parallel_read_piov(pr, fd, piov);
+			if (par_ret < 0)
+				goto err;
+			if (par_ret > 0)
+				goto next;
 			goto more;
 		}
 
@@ -1804,6 +1935,16 @@ static int process_async_reads_ctx(struct page_read *pr,
 			       piov->storage);
 			ret = -1;
 			goto err;
+		}
+
+		par_ret = parallel_read_piov(pr, fd, piov);
+		if (par_ret < 0)
+			goto err;
+		if (par_ret > 0) {
+			if (opts.auto_dedup &&
+			    punch_hole(pr, piov->from, piov->end - piov->from, false))
+				goto err;
+			goto next;
 		}
 
 	more:
@@ -1922,6 +2063,11 @@ static void close_page_read(struct page_read *pr)
 	 * sync, so one pool also spans its bounded decode chunks.
 	 */
 	if (pr->blk.encoded_owner == pr) {
+		if (pr->blk.wq) {
+			cr_work_queue_destroy(pr->blk.wq);
+			xfree(pr->blk.wq);
+			pr->blk.wq = NULL;
+		}
 		encoded_read_ctx_destroy(pr->blk.encoded_ctx);
 		pr->blk.encoded_ctx = NULL;
 	}
@@ -2236,6 +2382,8 @@ static int page_read_range_needs_decode(struct page_read *pr,
 	enum restore_vma_io_storage previous_storage = VMA_IO_UNCOMPRESSED;
 	bool have_previous_storage = false;
 	bool parallel_zero = false;
+	bool parallel_uncompressed = false;
+	unsigned long uncompressed_bytes = 0;
 	int left = 0;
 	int right;
 	int i;
@@ -2244,8 +2392,10 @@ static int page_read_range_needs_decode(struct page_read *pr,
 		pr_err("Invalid compressed-page range %#lx-%#lx\n", start, end);
 		return -1;
 	}
-	if (premap_mixed)
+	if (premap_mixed) {
 		parallel_zero = compressed_restore_has_parallel_capacity(opts.decompress_threads);
+		parallel_uncompressed = !pr->use_direct && parallel_zero;
+	}
 
 	/* Find the first pagemap entry whose end is after start. */
 	right = pr->nr_pmes;
@@ -2303,6 +2453,11 @@ static int page_read_range_needs_decode(struct page_read *pr,
 			continue;
 		}
 		if (!pe->blocks) {
+			if (parallel_uncompressed && pagemap_present(pe)) {
+				uncompressed_bytes += overlap_end - overlap_start;
+				if (uncompressed_bytes >= PARALLEL_UNCOMPRESSED_MIN_BATCH_BYTES)
+					return 1;
+			}
 			have_previous_storage = false;
 			continue;
 		}
@@ -2341,6 +2496,11 @@ static int page_read_range_needs_decode(struct page_read *pr,
 				return -1;
 			if (storage == VMA_IO_ENCODED)
 				return 1;
+			if (parallel_uncompressed && storage == VMA_IO_PACKED_RAW) {
+				uncompressed_bytes += (unsigned long)block_pages * PAGE_SIZE;
+				if (uncompressed_bytes >= PARALLEL_UNCOMPRESSED_MIN_BATCH_BYTES)
+					return 1;
+			}
 			if (parallel_zero_entry && storage == VMA_IO_ZERO) {
 				uint64_t first_page = block;
 				unsigned long block_start;
@@ -2358,7 +2518,7 @@ static int page_read_range_needs_decode(struct page_read *pr,
 					zero_bytes += block_end - block_start;
 					zero_blocks++;
 					if (zero_blocks > 1 &&
-					    zero_bytes >= PARALLEL_RESTORE_MIN_BATCH_BYTES)
+					    zero_bytes >= PARALLEL_UNCOMPRESSED_MIN_BATCH_BYTES)
 						return 1;
 				}
 			} else {
@@ -2714,6 +2874,7 @@ void dup_page_read(struct page_read *src, struct page_read *dst)
 	dst->blk.cache_buf = NULL;
 	dst->blk.cache_vaddr = 0;
 	dst->blk.cache_size = 0;
+	dst->blk.wq = NULL;
 	dst->blk.encoded_ctx = NULL;
 	/*
 	 * UFFD fork readers are shallow duplicates and keep their root lpi alive
