@@ -2410,6 +2410,8 @@ int prepare_task_entries(void)
 	decompression_shared_budget_init(&task_entries->decompression_budget,
 					 opts.decompress_threads);
 	decompression_use_shared_budget(&task_entries->decompression_budget);
+	cr_work_budget_init(&task_entries->work_budget, 0);
+	cr_work_set_shared_budget(&task_entries->work_budget);
 
 	return 0;
 }

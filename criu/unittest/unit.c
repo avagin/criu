@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <sched.h>
 #include <sys/mman.h>
+#include <sys/wait.h>
 
 #include "log.h"
 #include "util.h"
@@ -18,6 +19,7 @@
 #include "pagemap.h"
 #include "cr_options.h"
 #include "plugin.h"
+#include "work-queue.h"
 
 int parse_statement(int i, char *line, char **configuration);
 
@@ -540,6 +542,118 @@ static void test_block_compression(void)
 
 #endif
 
+static pid_t test_wq_caller_tid;
+
+struct test_wq_shared {
+	struct cr_work_budget budget;
+	atomic_t total_completed;
+	atomic_t active_in_workers;
+	atomic_t max_observed_in_workers;
+};
+
+static int test_wq_inc_fn(void *arg)
+{
+	struct test_wq_shared *sh = arg;
+	pid_t tid = syscall(SYS_gettid);
+	int cur, max_obs;
+
+	if (tid != test_wq_caller_tid) {
+		cur = atomic_inc_return(&sh->active_in_workers);
+		max_obs = atomic_read(&sh->max_observed_in_workers);
+		while (cur > max_obs) {
+			if (atomic_cmpxchg(&sh->max_observed_in_workers, max_obs, cur) == max_obs)
+				break;
+			max_obs = atomic_read(&sh->max_observed_in_workers);
+		}
+		usleep(200);
+		atomic_dec(&sh->active_in_workers);
+	}
+
+	atomic_inc(&sh->total_completed);
+	return 0;
+}
+
+static int test_wq_fail_fn(void *arg)
+{
+	int *val = arg;
+
+	return *val;
+}
+
+static void test_work_queue(void)
+{
+	struct test_wq_shared *sh;
+	struct cr_work_queue q;
+	const int nr_items = CR_WORK_QUEUE_SIZE * 3;
+	const int nr_procs = 4;
+	int i, err_code = -42;
+
+	sh = mmap(NULL, sizeof(*sh), PROT_READ | PROT_WRITE,
+		  MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+	assert(sh != MAP_FAILED);
+	memset(sh, 0, sizeof(*sh));
+	test_wq_caller_tid = syscall(SYS_gettid);
+
+	cr_work_budget_init(&sh->budget, 2);
+	/* Force max_workers to 2 for cross-process slot cap testing */
+	sh->budget.max_workers = 2;
+
+	assert(cr_work_queue_init(&q, &sh->budget) == 0);
+	/* Lazy creation: zero workers created before cr_work_submit */
+	assert(q.nr_workers == 0);
+
+	for (i = 0; i < nr_items; i++)
+		assert(cr_work_submit(&q, test_wq_inc_fn, sh) == 0);
+
+	assert(cr_work_wait(&q) == 0);
+	assert(atomic_read(&sh->total_completed) == nr_items);
+	assert(q.nr_workers <= 2);
+
+	/* Error propagation check */
+	assert(cr_work_submit(&q, test_wq_fail_fn, &err_code) == 0);
+	assert(cr_work_wait(&q) == -42);
+	/* Subsequent wait after error reset should return 0 */
+	assert(cr_work_wait(&q) == 0);
+
+	cr_work_queue_destroy(&q);
+
+	/* Multi-process shared budget concurrency cap test */
+	atomic_set(&sh->total_completed, 0);
+	atomic_set(&sh->active_in_workers, 0);
+	atomic_set(&sh->max_observed_in_workers, 0);
+	cr_work_budget_init(&sh->budget, 2);
+	sh->budget.max_workers = 2;
+
+	for (i = 0; i < nr_procs; i++) {
+		pid_t pid = fork();
+
+		assert(pid >= 0);
+		if (pid == 0) {
+			struct cr_work_queue child_q;
+			int j;
+
+			test_wq_caller_tid = syscall(SYS_gettid);
+			assert(cr_work_queue_init(&child_q, &sh->budget) == 0);
+			for (j = 0; j < 32; j++)
+				assert(cr_work_submit(&child_q, test_wq_inc_fn, sh) == 0);
+			assert(cr_work_wait(&child_q) == 0);
+			cr_work_queue_destroy(&child_q);
+			_exit(0);
+		}
+	}
+
+	for (i = 0; i < nr_procs; i++) {
+		int status = 0;
+
+		assert(wait(&status) > 0);
+		assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+	}
+
+	assert(atomic_read(&sh->total_completed) == nr_procs * 32);
+	assert(atomic_read(&sh->max_observed_in_workers) <= 2);
+	munmap(sh, sizeof(*sh));
+}
+
 int main(int argc, char *argv[], char *envp[])
 {
 	char **configuration;
@@ -686,6 +800,7 @@ int main(int argc, char *argv[], char *envp[])
 	test_parallel_decompression();
 	test_block_compression();
 #endif
+	test_work_queue();
 
 	pr_msg("OK\n");
 	return 0;
