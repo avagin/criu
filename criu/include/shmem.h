@@ -18,13 +18,6 @@ extern int dump_one_sysv_shmem(void *addr, unsigned long size, unsigned long shm
 extern int restore_sysv_shmem_content(void *addr, unsigned long size, unsigned long shmid);
 extern int restore_shmem_fd_content(int fd, unsigned long shmid, unsigned long size);
 
-struct async_restore_shmem_args {
-	unsigned long shmid;
-	unsigned long size;
-};
-
-int async_restore_shmem_content(void *arg, int fd, pid_t pid);
-
 #define SYSV_SHMEM_SKIP_FD (0x7fffffff)
 
 #endif /* __CR_SHMEM_H__ */

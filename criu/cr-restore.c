@@ -56,7 +56,6 @@
 #include "crtools.h"
 #include "uffd.h"
 #include "namespaces.h"
-#include "asyncd.h"
 #include "compression.h"
 #include "mem.h"
 #include "mount.h"
@@ -1704,10 +1703,6 @@ static int __restore_task_with_children(void *_arg)
 			goto err;
 		fini_restore_mntns();
 
-		/* streamer serves each image once, one at a time; asyncd reads in parallel. */
-		if (!opts.stream && start_asyncd())
-			goto err;
-
 		__restore_switch_stage(CR_STATE_PRE_RESTORER);
 	} else {
 		if (restore_finish_stage(task_entries, CR_STATE_FORKING) < 0)
@@ -1723,13 +1718,6 @@ static int __restore_task_with_children(void *_arg)
 
 err:
 	cr_task_work_queue_destroy();
-	/*
-	 * Reap the async daemon before waking the coordinator: once the
-	 * abort is signalled the coordinator tears down the task tree and
-	 * may kill us mid-reap. stop_asyncd() is a no-op if no daemon was
-	 * started (asyncd_pid == 0).
-	 */
-	stop_asyncd();
 	if (current->parent == NULL)
 		futex_abort_and_wake(&task_entries->nr_in_progress);
 	exit(1);
@@ -3268,8 +3256,6 @@ static int sigreturn_restore(pid_t pid, struct task_restore_args *task_args, uns
 			goto err_nv;
 		if (root_ns_mask & CLONE_NEWNS && remount_readonly_mounts())
 			goto err_nv;
-		if (stop_asyncd())
-			goto err_nv;
 		__restore_switch_stage(CR_STATE_RESTORE);
 	} else {
 		if (restore_finish_stage(task_entries, CR_STATE_PRE_RESTORER) < 0)
@@ -3649,8 +3635,6 @@ err:
 	free_mappings(&self_vmas);
 err_nv:
 	cr_task_work_queue_destroy();
-	/* Reap the async daemon if it is still running (no-op otherwise). */
-	stop_asyncd();
 	/* Just to be sure */
 	exit(1);
 	return -1;

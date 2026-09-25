@@ -20,7 +20,6 @@ struct task_entries {
 	mutex_t cgroupd_sync_lock;
 	mutex_t last_pid_mutex;
 	struct cr_work_budget work_budget;
-	int asyncd_sk_id;
 };
 
 struct fdt {
