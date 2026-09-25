@@ -16,6 +16,7 @@
 #include "ipc_ns.h"
 #include "shmem.h"
 #include "types.h"
+#include "work-queue.h"
 
 #include "protobuf.h"
 #include "images/ipc-var.pb-c.h"
@@ -929,9 +930,11 @@ static int prepare_ipc_shm(int pid)
 		}
 	}
 
+	cr_task_work_queue_destroy();
 	close_image(img);
 	return 0;
 err:
+	cr_task_work_queue_destroy();
 	close_image(img);
 	return ret;
 }

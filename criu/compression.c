@@ -253,18 +253,6 @@ int decompress_jobs_parallel(struct cr_work_queue *wq,
 	return 0;
 }
 
-static struct cr_work_queue *encoded_read_ctx_get_wq(struct encoded_read_ctx *ctx)
-{
-	if (!ctx)
-		return NULL;
-	if (!ctx->wq_initialized) {
-		if (cr_work_queue_init(&ctx->wq, NULL))
-			return NULL;
-		ctx->wq_initialized = true;
-	}
-	return &ctx->wq;
-}
-
 void encoded_read_ctx_begin_work(struct encoded_read_ctx *ctx)
 {
 	BUG_ON(ctx->batch_acquired);
@@ -304,10 +292,6 @@ void encoded_read_ctx_fini(struct encoded_read_ctx *ctx)
 	if (!ctx)
 		return;
 	encoded_read_ctx_end_work(ctx);
-	if (ctx->wq_initialized) {
-		cr_work_queue_destroy(&ctx->wq);
-		ctx->wq_initialized = false;
-	}
 }
 
 void encoded_prefetch_read(void *arg)
@@ -758,7 +742,7 @@ static int process_encoded_async_read(int fd, struct page_read_iov *piov,
 	}
 
 	if (decompress_jobs_parallel(
-		    encoded_read_ctx_get_wq(ctx), jobs, nr_jobs, jobs_uncompressed,
+		    cr_task_work_queue(), jobs, nr_jobs, jobs_uncompressed,
 		    opts.decompress_threads,
 		    prefetch ? encoded_prefetch_read : NULL, prefetch))
 		goto out;
@@ -880,7 +864,7 @@ int encoded_stream_read_batch(int fd, void *buf, const uint32_t *block_sizes,
 		return -1;
 	}
 	if (nr_jobs &&
-	    decompress_jobs_parallel(encoded_read_ctx_get_wq(ctx), ctx->jobs,
+	    decompress_jobs_parallel(cr_task_work_queue(), ctx->jobs,
 				     nr_jobs, jobs_uncompressed,
 				     opts.decompress_threads, NULL, NULL)) {
 		pr_err("Unable to decompress streaming batch at page %lu\n",

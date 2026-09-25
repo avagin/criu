@@ -1583,6 +1583,9 @@ int prepare_mappings(struct pstree_item *t)
 	}
 
 out:
+	if (!task_entries ||
+	    task_entries->nr_tasks + task_entries->nr_helpers > 1)
+		cr_task_work_queue_destroy();
 	return ret;
 }
 

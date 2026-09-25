@@ -2240,6 +2240,7 @@ static int page_server_init_send(void)
 
 		if (page_pipe_from_pagemap(&pp, vpid(pi))) {
 			pr_err("%d: failed to open page-read\n", vpid(pi));
+			cr_task_work_queue_destroy();
 			return -1;
 		}
 
@@ -2252,6 +2253,7 @@ static int page_server_init_send(void)
 		dmpi(pi)->mem_pp = pp;
 	}
 
+	cr_task_work_queue_destroy();
 	return 0;
 }
 

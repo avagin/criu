@@ -7,6 +7,7 @@
 #include "crtools.h"
 #include "pagemap.h"
 #include "restorer.h"
+#include "work-queue.h"
 
 static int cr_dedup_one_pagemap(unsigned long img_id, int flags);
 
@@ -54,6 +55,7 @@ int cr_dedup(void)
 	}
 
 err:
+	cr_task_work_queue_destroy();
 	if (dirp) {
 		close_ret = closedir(dirp);
 		if (close_ret == -1)
