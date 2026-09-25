@@ -19,8 +19,8 @@ struct cr_work {
 
 /*
  * Global concurrency counter placed in shared memory on restore so all
- * CRIU processes (restore tasks, asyncd, etc.) share a single limit on
- * active worker threads and active batch working sets.
+ * CRIU processes share a single limit on active worker threads and
+ * active batch working sets.
  *
  * The lower 16 bits of active_workers hold the current number of active
  * worker threads (0 .. max_workers). The upper 16 bits hold a wakeup
@@ -65,6 +65,9 @@ extern void cr_work_batch_release(void);
 
 extern int cr_work_queue_init(struct cr_work_queue *q, struct cr_work_budget *budget);
 extern void cr_work_queue_destroy(struct cr_work_queue *q);
+
+extern struct cr_work_queue *cr_task_work_queue(void);
+extern void cr_task_work_queue_destroy(void);
 
 extern int cr_work_submit(struct cr_work_queue *q, work_func_t func, void *args);
 extern int cr_work_wait(struct cr_work_queue *q);

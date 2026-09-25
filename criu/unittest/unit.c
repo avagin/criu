@@ -285,6 +285,7 @@ static void test_encoded_stream_zero_batch(void)
 	assert(encoded_stream_read_batch(-1, pages, block_sizes, 2, 0, 0, NULL, 0) == 0);
 	for (i = 0; i < sizeof(pages); i++)
 		assert(pages[i] == 0);
+	cr_task_work_queue_destroy();
 }
 
 static unsigned int count_task_threads(void)
@@ -620,21 +621,24 @@ static void test_work_queue(void)
 	atomic_set(&sh->max_observed_in_workers, 0);
 	cr_work_budget_init(&sh->budget, 2);
 	sh->budget.max_workers = 2;
+	cr_work_set_shared_budget(&sh->budget);
 
 	for (i = 0; i < nr_procs; i++) {
 		pid_t pid = fork();
 
 		assert(pid >= 0);
 		if (pid == 0) {
-			struct cr_work_queue child_q;
+			struct cr_work_queue *child_q;
 			int j;
 
 			test_wq_caller_tid = syscall(SYS_gettid);
-			assert(cr_work_queue_init(&child_q, &sh->budget) == 0);
+			child_q = cr_task_work_queue();
+			assert(child_q);
+			assert(cr_task_work_queue() == child_q);
 			for (j = 0; j < 32; j++)
-				assert(cr_work_submit(&child_q, test_wq_inc_fn, sh) == 0);
-			assert(cr_work_wait(&child_q) == 0);
-			cr_work_queue_destroy(&child_q);
+				assert(cr_work_submit(child_q, test_wq_inc_fn, sh) == 0);
+			assert(cr_work_wait(child_q) == 0);
+			cr_task_work_queue_destroy();
 			_exit(0);
 		}
 	}
@@ -646,6 +650,7 @@ static void test_work_queue(void)
 		assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
 	}
 
+	cr_work_set_shared_budget(NULL);
 	assert(atomic_read(&sh->total_completed) == nr_procs * 32);
 	assert(atomic_read(&sh->max_observed_in_workers) <= 2);
 	munmap(sh, sizeof(*sh));

@@ -100,12 +100,11 @@ struct page_read_block_state {
 	size_t cache_size;
 
 	/*
-	 * Bounded encoded buffers and workers. All readers in an incremental
-	 * parent chain use the context owned by encoded_owner, so a sync
-	 * initiated by a parent cannot acquire a second batch lease and deadlock
-	 * against its child. Only the owner releases the context at close.
+	 * Bounded encoded buffers. All readers in an incremental parent chain
+	 * use the context owned by encoded_owner, so a sync initiated by a
+	 * parent cannot acquire a second batch lease and deadlock against its
+	 * child. Only the owner releases the context at close.
 	 */
-	struct cr_work_queue *wq;
 	struct encoded_read_ctx *encoded_ctx;
 	struct page_read *encoded_owner;
 };

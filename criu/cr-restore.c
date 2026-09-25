@@ -808,6 +808,7 @@ static int restore_one_zombie(CoreEntry *core)
 
 	prctl(PR_SET_NAME, (long)(void *)core->tc->comm, 0, 0, 0);
 
+	cr_task_work_queue_destroy();
 	restore_finish_stage(task_entries, CR_STATE_PRE_RESTORER);
 	if (task_entries != NULL) {
 		wait_exiting_children();
@@ -986,6 +987,7 @@ static int restore_one_helper(void)
 	if (prepare_fds(current))
 		return -1;
 
+	cr_task_work_queue_destroy();
 	restore_finish_stage(task_entries, CR_STATE_PRE_RESTORER);
 	if (wait_exiting_children())
 		return -1;
@@ -1720,6 +1722,7 @@ static int __restore_task_with_children(void *_arg)
 	return 0;
 
 err:
+	cr_task_work_queue_destroy();
 	/*
 	 * Reap the async daemon before waking the coordinator: once the
 	 * abort is signalled the coordinator tears down the task tree and
@@ -3258,6 +3261,7 @@ static int sigreturn_restore(pid_t pid, struct task_restore_args *task_args, uns
 	if (rst_prep_creds(pid, core, &creds_pos))
 		goto err_nv;
 
+	cr_task_work_queue_destroy();
 	if (current->parent == NULL) {
 		/* Wait when all tasks restored all files */
 		if (restore_wait_other_tasks())
@@ -3644,6 +3648,7 @@ static int sigreturn_restore(pid_t pid, struct task_restore_args *task_args, uns
 err:
 	free_mappings(&self_vmas);
 err_nv:
+	cr_task_work_queue_destroy();
 	/* Reap the async daemon if it is still running (no-op otherwise). */
 	stop_asyncd();
 	/* Just to be sure */

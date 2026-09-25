@@ -132,7 +132,7 @@ struct encoded_prefetch {
 /*
  * Reusable storage for encoded reads. The top-level page reader owns one
  * context for its whole parent chain. Buffers are reused during one active
- * read and then released; the work queue remains reusable across reads.
+ * read and then released.
  */
 struct encoded_read_ctx {
 	struct decompress_job *jobs;
@@ -145,8 +145,6 @@ struct encoded_read_ctx {
 	struct encoded_prefetch prefetch;
 	char *scratch;
 	size_t scratch_cap;
-	struct cr_work_queue wq;
-	bool wq_initialized;
 	bool batch_acquired;
 	bool prefetch_batch_acquired;
 };

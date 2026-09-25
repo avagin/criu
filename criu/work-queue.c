@@ -26,6 +26,7 @@
 
 static struct cr_work_budget *shared_work_budget;
 static struct cr_work_budget default_work_budget;
+static struct cr_work_queue task_work_queue;
 
 static unsigned int cr_work_available_cpus(void)
 {
@@ -451,7 +452,19 @@ void cr_work_queue_destroy(struct cr_work_queue *q)
 	pthread_mutex_destroy(&q->lock);
 
 	xfree(q->workers);
-	q->workers = NULL;
-	q->nr_workers = 0;
-	q->budget = NULL;
+	memset(q, 0, sizeof(*q));
+}
+
+struct cr_work_queue *cr_task_work_queue(void)
+{
+	if (!task_work_queue.budget) {
+		if (cr_work_queue_init(&task_work_queue, NULL))
+			return NULL;
+	}
+	return &task_work_queue;
+}
+
+void cr_task_work_queue_destroy(void)
+{
+	cr_work_queue_destroy(&task_work_queue);
 }

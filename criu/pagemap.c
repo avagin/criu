@@ -1709,25 +1709,6 @@ static bool page_read_chain_has_encoded_async(struct page_read *pr)
 	return pr->parent && page_read_chain_has_encoded_async(pr->parent);
 }
 
-static struct cr_work_queue *page_read_get_wq(struct page_read *pr)
-{
-	struct page_read *owner = pr->blk.encoded_owner ? pr->blk.encoded_owner : pr;
-
-	if (owner->blk.encoded_ctx && owner->blk.encoded_ctx->wq_initialized)
-		return &owner->blk.encoded_ctx->wq;
-	if (!owner->blk.wq) {
-		owner->blk.wq = xzalloc(sizeof(*owner->blk.wq));
-		if (!owner->blk.wq)
-			return NULL;
-		if (cr_work_queue_init(owner->blk.wq, NULL)) {
-			xfree(owner->blk.wq);
-			owner->blk.wq = NULL;
-			return NULL;
-		}
-	}
-	return owner->blk.wq;
-}
-
 struct uncompressed_work_task {
 	const struct iovec *iovs;
 	unsigned int first_iov;
@@ -1765,8 +1746,7 @@ static int uncompressed_work_task_fn(void *arg)
 	return 0;
 }
 
-static int parallel_read_piov(struct page_read *pr, int fd,
-			      struct page_read_iov *piov)
+static int parallel_read_piov(int fd, struct page_read_iov *piov)
 {
 	size_t total_bytes = (size_t)piov->n_pages * PAGE_SIZE;
 	struct uncompressed_work_task *tasks;
@@ -1783,7 +1763,7 @@ static int parallel_read_piov(struct page_read *pr, int fd,
 	    !cr_work_has_parallel_capacity(opts.decompress_threads))
 		return 0;
 
-	wq = page_read_get_wq(pr);
+	wq = cr_task_work_queue();
 	if (!wq)
 		return 0;
 
@@ -1898,7 +1878,7 @@ static int process_async_reads_ctx(struct page_read *pr,
 				ret = -1;
 				goto err;
 			}
-			par_ret = parallel_read_piov(pr, fd, piov);
+			par_ret = parallel_read_piov(fd, piov);
 			if (par_ret < 0)
 				goto err;
 			if (par_ret > 0)
@@ -1913,7 +1893,7 @@ static int process_async_reads_ctx(struct page_read *pr,
 				ret = -1;
 				goto err;
 			}
-			par_ret = parallel_read_piov(pr, fd, piov);
+			par_ret = parallel_read_piov(fd, piov);
 			if (par_ret < 0)
 				goto err;
 			if (par_ret > 0)
@@ -1937,7 +1917,7 @@ static int process_async_reads_ctx(struct page_read *pr,
 			goto err;
 		}
 
-		par_ret = parallel_read_piov(pr, fd, piov);
+		par_ret = parallel_read_piov(fd, piov);
 		if (par_ret < 0)
 			goto err;
 		if (par_ret > 0) {
@@ -2057,17 +2037,7 @@ static int process_async_reads(struct page_read *pr)
 static void close_page_read(struct page_read *pr)
 {
 	BUG_ON(!list_empty(&pr->async));
-	/*
-	 * Restore tasks close their page readers before they fork children or
-	 * remap the PIE bootstrap. Page-server readers close after their last
-	 * sync, so one pool also spans its bounded decode chunks.
-	 */
 	if (pr->blk.encoded_owner == pr) {
-		if (pr->blk.wq) {
-			cr_work_queue_destroy(pr->blk.wq);
-			xfree(pr->blk.wq);
-			pr->blk.wq = NULL;
-		}
 		encoded_read_ctx_destroy(pr->blk.encoded_ctx);
 		pr->blk.encoded_ctx = NULL;
 	}
@@ -2874,7 +2844,6 @@ void dup_page_read(struct page_read *src, struct page_read *dst)
 	dst->blk.cache_buf = NULL;
 	dst->blk.cache_vaddr = 0;
 	dst->blk.cache_size = 0;
-	dst->blk.wq = NULL;
 	dst->blk.encoded_ctx = NULL;
 	/*
 	 * UFFD fork readers are shallow duplicates and keep their root lpi alive
