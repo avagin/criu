@@ -311,6 +311,14 @@ enum {
 	 * purely to make sure all tasks be in sync.
 	 */
 	CR_STATE_FORKING,
+	/*
+	 * Tasks restore their resources (files, VMAs, shared memory, etc.)
+	 * and may spawn per-task worker threads for parallel page reads.
+	 * Each task destroys its work queue before finishing this stage so
+	 * that all worker threads have exited and released their TIDs before
+	 * any task enters CR_STATE_RESTORE to clone application threads via
+	 * clone3(set_tid).
+	 */
 	CR_STATE_PRE_RESTORER,
 	/*
 	 * Main restore stage. By the end of it all tasks are

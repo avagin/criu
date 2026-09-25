@@ -2686,7 +2686,6 @@ int probe_pages_o_direct(int fd)
 int open_page_read_at(int dfd, unsigned long img_id, struct page_read *pr, int pr_flags)
 {
 	int flags, i_typ;
-	/* Shared across asyncd fill-daemon workers, which open page-reads concurrently. */
 	static atomic_t ids = { 0 };
 	bool remote = pr_flags & PR_REMOTE;
 	bool streamed = opts.stream && !(pr_flags & PR_FORCE_LOCAL);

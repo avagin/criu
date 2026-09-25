@@ -38,7 +38,7 @@ static unsigned int current_loglevel = DEFAULT_LOGLEVEL;
 static void vprint_on_level(unsigned int, const char *, va_list);
 
 /*
- * Written once per task in log_init_by_pid(), before any asyncd worker
+ * Written once per task in log_init_by_pid(), before any worker
  * thread starts, then only read -- so it is safe to share while the
  * workers log concurrently. The timestamp and message are built per call
  * into a stack-local buffer (see vprint_on_level).

@@ -18,7 +18,6 @@
 #include "fdstore.h"
 #include "file-ids.h"
 #include "namespaces.h"
-#include "asyncd.h"
 #include "shmem.h"
 #include "hugetlb.h"
 
@@ -287,26 +286,8 @@ static int memfd_open_inode_nocache(struct memfd_restore_inode *inode)
 		goto err;
 	}
 
-	if (opts.stream) {
-		/*
-		 * criu-image-streamer serves the image in a single sequential
-		 * pass and does not reopen it. The async fill daemon reads the
-		 * memfd content out-of-band from a separate process, which
-		 * breaks that contract, so fill inline when restoring from a
-		 * stream.
-		 */
-		if (restore_shmem_fd_content(fd, mie->shmid, mie->size))
-			goto err;
-	} else {
-		struct async_restore_shmem_args async_arg = {
-			.shmid = mie->shmid,
-			.size = mie->size,
-		};
-
-		if (async_call(async_restore_shmem_content, 0,
-			       &async_arg, sizeof(async_arg), fd))
-			goto err;
-	}
+	if (restore_shmem_fd_content(fd, mie->shmid, mie->size))
+		goto err;
 
 	if (mie->has_mode)
 		ret = cr_fchperm(fd, mie->uid, mie->gid, mie->mode);
