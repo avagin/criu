@@ -176,6 +176,7 @@ int decompress_jobs_parallel(struct cr_work_queue *wq,
 	struct decompress_work_task single_task;
 	struct decompress_work_task *tasks = &single_task;
 	size_t max_tasks = 1, nr_tasks = 0, start = 0;
+	size_t task_bytes = PARALLEL_COMPRESSED_TASK_BYTES;
 	size_t i;
 	int ret;
 
@@ -187,8 +188,18 @@ int decompress_jobs_parallel(struct cr_work_queue *wq,
 	if (nr_jobs >= 2 &&
 	    total_uncompressed >= PARALLEL_COMPRESSED_MIN_BATCH_BYTES &&
 	    compressed_restore_has_parallel_capacity(requested_threads)) {
+		unsigned int thread_limit = requested_threads;
+
+		if (wq->budget)
+			thread_limit = cr_work_thread_limit(requested_threads,
+							    wq->budget->thread_capacity);
 		max_tasks = min(nr_jobs,
 				DIV_ROUND_UP(total_uncompressed, PARALLEL_COMPRESSED_TASK_BYTES));
+		if (thread_limit >= 2 && max_tasks > thread_limit) {
+			max_tasks = thread_limit;
+			task_bytes = max((size_t)PARALLEL_COMPRESSED_TASK_BYTES,
+					 DIV_ROUND_UP(total_uncompressed, max_tasks));
+		}
 		if (max_tasks < 2)
 			max_tasks = 2;
 		tasks = xmalloc(max_tasks * sizeof(*tasks));
@@ -206,7 +217,7 @@ int decompress_jobs_parallel(struct cr_work_queue *wq,
 			end = nr_jobs;
 		} else {
 			while (end < nr_jobs &&
-			       chunk_bytes < PARALLEL_COMPRESSED_TASK_BYTES &&
+			       chunk_bytes < task_bytes &&
 			       (nr_jobs - end) > (max_tasks - nr_tasks - 1)) {
 				chunk_bytes += (size_t)jobs[end].pages * PAGE_SIZE;
 				end++;

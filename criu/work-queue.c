@@ -13,6 +13,7 @@
 #include "common/compiler.h"
 #include "common/lock.h"
 #include "common/xmalloc.h"
+#include "cr_options.h"
 #include "util.h"
 #include "work-queue.h"
 
@@ -24,6 +25,7 @@
 
 static struct cr_work_budget *shared_work_budget;
 static struct cr_work_budget default_work_budget;
+static unsigned int default_work_budget_requested;
 static struct cr_work_queue task_work_queue;
 
 static unsigned int cr_work_available_cpus(void)
@@ -107,8 +109,12 @@ static struct cr_work_budget *cr_work_get_budget(struct cr_work_budget *budget)
 	if (shared_work_budget)
 		return shared_work_budget;
 
-	if (!default_work_budget.thread_capacity)
-		cr_work_budget_init(&default_work_budget, 0);
+	if (!default_work_budget.thread_capacity ||
+	    (!task_work_queue.budget &&
+	     default_work_budget_requested != opts.decompress_threads)) {
+		cr_work_budget_init(&default_work_budget, opts.decompress_threads);
+		default_work_budget_requested = opts.decompress_threads;
+	}
 
 	return &default_work_budget;
 }

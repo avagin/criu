@@ -557,6 +557,13 @@ static void test_parallel_decompression(void)
 	assert(count_task_threads() == baseline_threads + expected_threads - 1);
 	assert(cr_work_budget_active(&budget) == 0);
 
+	/* Explicit requested_threads=2 caps tasks and workers even on an 8-job batch. */
+	memset(decompressed, 0, src_size);
+	assert(decompress_jobs_parallel(&wq, jobs, nr_jobs, src_size, 2, NULL, NULL) == 0);
+	assert(memcmp(src, decompressed, src_size) == 0);
+	assert(wq.nr_workers == expected_threads - 1);
+	assert(cr_work_budget_active(&budget) == 0);
+
 	memset(decompressed, 0, src_size);
 	assert(decompress_jobs_parallel(&wq, jobs, nr_jobs, src_size, 0, NULL, NULL) == 0);
 	assert(memcmp(src, decompressed, src_size) == 0);
@@ -583,6 +590,13 @@ static void test_parallel_decompression(void)
 	cr_work_queue_destroy(&wq);
 	cr_work_set_shared_budget(NULL);
 	wait_for_task_threads(baseline_threads);
+
+	/* Verify default budget honors opts.decompress_threads when shared budget is unset. */
+	opts.decompress_threads = 2;
+	assert(cr_task_work_queue() != NULL);
+	assert(cr_task_work_queue()->budget->thread_capacity == min(available_threads, 2U));
+	cr_task_work_queue_destroy();
+	opts.decompress_threads = 0;
 
 	free(jobs);
 	free(decompressed);
