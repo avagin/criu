@@ -1542,17 +1542,24 @@ int prepare_mappings(struct pstree_item *t)
 	rsti(t)->premmapped_len = vmas->rst_priv_size;
 
 	ret = open_page_read(vpid(t), &pr, PR_TASK);
-	if (ret <= 0)
-		return -1;
+	if (ret <= 0) {
+		ret = -1;
+		goto out;
+	}
 
-	if (maybe_disable_thp(t, &pr))
-		return -1;
+	if (maybe_disable_thp(t, &pr)) {
+		pr.close(&pr);
+		ret = -1;
+		goto out;
+	}
 
 	pr.advance(&pr); /* shift to the 1st iovec */
 
 	ret = premap_priv_vmas(t, vmas, &addr, &pr);
-	if (ret < 0)
+	if (ret < 0) {
+		pr.close(&pr);
 		goto out;
+	}
 
 	pr.reset(&pr);
 
@@ -1583,9 +1590,7 @@ int prepare_mappings(struct pstree_item *t)
 	}
 
 out:
-	if (!task_entries ||
-	    task_entries->nr_tasks + task_entries->nr_helpers > 1)
-		cr_task_work_queue_destroy();
+	cr_task_work_queue_destroy();
 	return ret;
 }
 

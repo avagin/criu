@@ -4,6 +4,7 @@
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <sys/types.h>
 
 #include "common/lock.h"
 
@@ -58,7 +59,9 @@ struct cr_work_queue {
 	bool stop;
 
 	pthread_t *workers;
+	pid_t *worker_tids;
 	unsigned int nr_workers;
+	unsigned int nr_exited;
 	struct cr_work_budget *budget;
 };
 

@@ -30,6 +30,7 @@
 #include "kerndat.h"
 #include "util-caps.h"
 #include "filesystems.h"
+#include "work-queue.h"
 
 #include "protobuf.h"
 #include "util.h"
@@ -249,6 +250,15 @@ int switch_ns_by_fd(int nsfd, struct ns_desc *nd, int *rst)
 {
 	int ret = -1, old_ns = -1;
 
+	/*
+	 * The kernel forbids setns(CLONE_NEWNS) in a multi-threaded process
+	 * (check_mnt() requires atomic_read(&fs->users) == 1 and
+	 * !thread_group_empty(current)). Stop any task work-queue threads
+	 * before switching mount namespaces.
+	 */
+	if (nd == &mnt_ns_desc)
+		cr_task_work_queue_destroy();
+
 	if (rst) {
 		old_ns = open_proc(PROC_SELF, "ns/%s", nd->str);
 		if (old_ns < 0)
@@ -274,6 +284,9 @@ err_ns:
 int restore_ns(int rst, struct ns_desc *nd)
 {
 	int ret;
+
+	if (nd == &mnt_ns_desc)
+		cr_task_work_queue_destroy();
 
 	ret = setns(rst, nd->cflag);
 	if (ret < 0)

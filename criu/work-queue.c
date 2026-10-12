@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 #include "log.h"
@@ -253,6 +254,16 @@ static void *cr_worker_fn(void *arg)
 {
 	struct cr_work_queue *q = arg;
 
+	/*
+	 * Detach fs_struct from the main thread so that open_filemap() /
+	 * restore_Switching() in the main thread can call unshare(CLONE_FS) or
+	 * setns(..., CLONE_NEWNS) when switching mount namespaces.
+	 * Note: setns(CLONE_NEWNS) still requires a single-threaded process,
+	 * so mount namespace switching must also destroy the task work queue.
+	 */
+	if (unshare(CLONE_FS))
+		pr_perror("Unable to unshare CLONE_FS in worker");
+
 	pthread_mutex_lock(&q->lock);
 	while (1) {
 		struct cr_work item;
@@ -284,6 +295,8 @@ static void *cr_worker_fn(void *arg)
 		if (!q->inflight)
 			pthread_cond_broadcast(&q->empty_done);
 	}
+	if (q->worker_tids)
+		q->worker_tids[q->nr_exited++] = syscall(__NR_gettid);
 	pthread_mutex_unlock(&q->lock);
 
 	return NULL;
@@ -346,6 +359,12 @@ int cr_work_queue_init(struct cr_work_queue *q, struct cr_work_budget *budget)
 		q->workers = xmalloc(sizeof(pthread_t) * q->budget->max_workers);
 		if (!q->workers)
 			return -1;
+		q->worker_tids = xmalloc(sizeof(pid_t) * q->budget->max_workers);
+		if (!q->worker_tids) {
+			xfree(q->workers);
+			q->workers = NULL;
+			return -1;
+		}
 	}
 
 	if (pthread_mutex_init(&q->lock, NULL))
@@ -366,6 +385,8 @@ err_not_empty:
 err_mutex:
 	pthread_mutex_destroy(&q->lock);
 err_free:
+	xfree(q->worker_tids);
+	q->worker_tids = NULL;
 	xfree(q->workers);
 	q->workers = NULL;
 	return -1;
@@ -439,6 +460,7 @@ int cr_work_wait(struct cr_work_queue *q)
 void cr_work_queue_destroy(struct cr_work_queue *q)
 {
 	unsigned int i;
+	pid_t tgid;
 
 	if (!q->budget)
 		return;
@@ -455,11 +477,25 @@ void cr_work_queue_destroy(struct cr_work_queue *q)
 	for (i = 0; i < q->nr_workers; i++)
 		pthread_join(q->workers[i], NULL);
 
+	/*
+	 * pthread_join() wakes in exit_mm() -> mm_release() before the kernel
+	 * removes the exiting thread from signal->thread_head and pid_ns->idr
+	 * in exit_notify() -> release_task() -> __exit_signal(). Wait until
+	 * tgkill(..., 0) returns ESRCH so subsequent setns(CLONE_NEWNS) or
+	 * fork_with_pid() calls never race with an exiting worker thread.
+	 */
+	tgid = getpid();
+	for (i = 0; i < q->nr_exited; i++) {
+		while (syscall(__NR_tgkill, tgid, q->worker_tids[i], 0) == 0)
+			sched_yield();
+	}
+
 	pthread_cond_destroy(&q->empty_done);
 	pthread_cond_destroy(&q->not_full);
 	pthread_cond_destroy(&q->not_empty);
 	pthread_mutex_destroy(&q->lock);
 
+	xfree(q->worker_tids);
 	xfree(q->workers);
 	memset(q, 0, sizeof(*q));
 }
