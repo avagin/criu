@@ -553,12 +553,16 @@ static void test_parallel_decompression(void)
 	assert(memcmp(src, decompressed, 2 * job_bytes) == 0);
 	expected_threads = min(available_threads, 2U);
 	assert(overlap_calls == (expected_threads > 1));
-	assert((wq.nr_workers > 0) == (expected_threads > 1));
+	assert(wq.nr_workers == expected_threads - 1);
+	assert(count_task_threads() == baseline_threads + expected_threads - 1);
 	assert(cr_work_budget_active(&budget) == 0);
 
 	memset(decompressed, 0, src_size);
 	assert(decompress_jobs_parallel(&wq, jobs, nr_jobs, src_size, 0, NULL, NULL) == 0);
 	assert(memcmp(src, decompressed, src_size) == 0);
+	expected_threads = min(available_threads, (unsigned int)nr_jobs);
+	assert(wq.nr_workers == expected_threads - 1);
+	assert(count_task_threads() == baseline_threads + expected_threads - 1);
 	assert(cr_work_budget_active(&budget) == 0);
 
 	/* Zero jobs use the same serial fallback and persistent worker pool. */

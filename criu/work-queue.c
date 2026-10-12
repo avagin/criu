@@ -295,20 +295,21 @@ static void cr_work_worker_signal_mask(sigset_t *set)
 	sigdelset(set, SIGTRAP);
 }
 
-static void cr_work_spawn_worker_locked(struct cr_work_queue *q)
+static bool cr_work_spawn_worker_locked(struct cr_work_queue *q)
 {
 	pthread_attr_t attr;
 	sigset_t mask, oldmask;
 	size_t stack_size = CR_WORK_STACK_SIZE;
+	bool spawned = false;
 	int err;
 
 	if (q->nr_workers >= q->budget->max_workers)
-		return;
+		return false;
 
 	err = pthread_attr_init(&attr);
 	if (err) {
 		pr_warn("Unable to init pthread attr: %s\n", strerror(err));
-		return;
+		return false;
 	}
 	if (stack_size < PTHREAD_STACK_MIN)
 		stack_size = PTHREAD_STACK_MIN;
@@ -318,13 +319,16 @@ static void cr_work_spawn_worker_locked(struct cr_work_queue *q)
 	if (pthread_sigmask(SIG_SETMASK, &mask, &oldmask) == 0) {
 		err = pthread_create(&q->workers[q->nr_workers], &attr, cr_worker_fn, q);
 		pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
-		if (!err)
+		if (!err) {
 			q->nr_workers++;
-		else
+			spawned = true;
+		} else {
 			pr_warn("Unable to create worker thread: %s\n", strerror(err));
+		}
 	}
 
 	pthread_attr_destroy(&attr);
+	return spawned;
 }
 
 int cr_work_queue_init(struct cr_work_queue *q, struct cr_work_budget *budget)
@@ -387,10 +391,13 @@ int cr_work_submit(struct cr_work_queue *q, work_func_t func, void *args)
 	q->inflight++;
 
 	if ((q->end - q->start) > 1) {
-		if (q->idle_workers > 0)
+		if (q->inflight - 1 > q->nr_workers &&
+		    q->nr_workers < q->budget->max_workers &&
+		    cr_work_spawn_worker_locked(q)) {
+			/* Newly spawned worker will drain the queue on startup. */
+		} else if (q->idle_workers > 0) {
 			pthread_cond_signal(&q->not_empty);
-		else if (q->nr_workers < q->budget->max_workers)
-			cr_work_spawn_worker_locked(q);
+		}
 	}
 
 	pthread_mutex_unlock(&q->lock);
