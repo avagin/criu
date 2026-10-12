@@ -543,7 +543,7 @@ static void test_parallel_decompression(void)
 	assert(overlap_calls == 0);
 	assert(wq.nr_workers == 0);
 	assert(count_task_threads() == baseline_threads);
-	assert(futex_get(&budget.active_workers) == 0);
+	assert(cr_work_budget_active(&budget) == 0);
 
 	/* A 1 MiB batch creates workers when at least two CPUs are available. */
 	memset(decompressed, 0, src_size);
@@ -554,12 +554,12 @@ static void test_parallel_decompression(void)
 	expected_threads = min(available_threads, 2U);
 	assert(overlap_calls == (expected_threads > 1));
 	assert((wq.nr_workers > 0) == (expected_threads > 1));
-	assert(futex_get(&budget.active_workers) == 0);
+	assert(cr_work_budget_active(&budget) == 0);
 
 	memset(decompressed, 0, src_size);
 	assert(decompress_jobs_parallel(&wq, jobs, nr_jobs, src_size, 0, NULL, NULL) == 0);
 	assert(memcmp(src, decompressed, src_size) == 0);
-	assert(futex_get(&budget.active_workers) == 0);
+	assert(cr_work_budget_active(&budget) == 0);
 
 	/* Zero jobs use the same serial fallback and persistent worker pool. */
 	memset(decompressed, 0xa5, src_size);
@@ -734,7 +734,7 @@ static void test_work_queue(void)
 		assert(cr_work_submit(&q, test_wq_inc_fn, sh) == 0);
 
 	assert(cr_work_wait(&q) == 0);
-	assert(futex_get(&sh->budget.active_workers) == 0);
+	assert(cr_work_budget_active(&sh->budget) == 0);
 	assert(atomic_read(&sh->total_completed) == nr_items);
 	assert(q.nr_workers <= 2);
 
@@ -743,9 +743,32 @@ static void test_work_queue(void)
 	assert(cr_work_wait(&q) == -42);
 	/* Subsequent wait after error reset should return 0 */
 	assert(cr_work_wait(&q) == 0);
-	assert(futex_get(&sh->budget.active_workers) == 0);
+	assert(cr_work_budget_active(&sh->budget) == 0);
+
+	/*
+	 * Verify that workers blocked waiting for a global slot wake up
+	 * when the caller drains the local queue or destroys the queue,
+	 * even if all global slots remain occupied by another process.
+	 */
+	futex_set(&sh->budget.active_workers, sh->budget.max_workers);
+	for (i = 0; i < 8; i++)
+		assert(cr_work_submit(&q, test_wq_inc_fn, sh) == 0);
+	for (i = 0; i < 1000; i++) {
+		unsigned int waiters;
+
+		pthread_mutex_lock(&q.lock);
+		waiters = q.slot_waiters;
+		pthread_mutex_unlock(&q.lock);
+		if (waiters > 0)
+			break;
+		usleep(1000);
+	}
+	assert(cr_work_wait(&q) == 0);
+	assert(cr_work_budget_active(&sh->budget) == sh->budget.max_workers);
+	assert((futex_get(&sh->budget.active_workers) >> 16) > 0);
 
 	cr_work_queue_destroy(&q);
+	futex_set(&sh->budget.active_workers, 0);
 
 	/* Multi-process shared budget concurrency cap test */
 	atomic_set(&sh->total_completed, 0);
@@ -785,7 +808,7 @@ static void test_work_queue(void)
 	cr_work_set_shared_budget(NULL);
 	assert(atomic_read(&sh->total_completed) == nr_procs * 32);
 	assert(atomic_read(&sh->max_observed_in_workers) <= 2);
-	assert(futex_get(&sh->budget.active_workers) == 0);
+	assert(cr_work_budget_active(&sh->budget) == 0);
 	munmap(sh, sizeof(*sh));
 }
 

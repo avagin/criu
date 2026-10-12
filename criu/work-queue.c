@@ -175,6 +175,12 @@ void cr_work_batch_release(void)
 	futex_wake(&budget->batches);
 }
 
+static void cr_work_wake_slot_waiters(struct cr_work_budget *budget)
+{
+	atomic_add(CR_WORK_GEN_INC, &budget->active_workers.raw);
+	futex_wake(&budget->active_workers);
+}
+
 static bool cr_work_acquire_slot_locked(struct cr_work_queue *q)
 {
 	struct cr_work_budget *budget = q->budget;
@@ -183,18 +189,20 @@ static bool cr_work_acquire_slot_locked(struct cr_work_queue *q)
 		uint32_t cur = futex_get(&budget->active_workers);
 		int ret;
 
-		if (cur < budget->max_workers) {
+		if ((cur & CR_WORK_ACTIVE_MASK) < budget->max_workers) {
 			if ((uint32_t)atomic_cmpxchg(&budget->active_workers.raw,
 						     cur, cur + 1) == cur)
 				return true;
 			continue;
 		}
 
+		q->slot_waiters++;
 		pthread_mutex_unlock(&q->lock);
 		ret = sys_futex((uint32_t *)&budget->active_workers.raw.counter,
 				FUTEX_WAIT, cur, NULL, NULL, 0);
 		LOCK_BUG_ON(ret < 0 && ret != -EWOULDBLOCK && ret != -EINTR);
 		pthread_mutex_lock(&q->lock);
+		q->slot_waiters--;
 	}
 
 	return false;
@@ -214,8 +222,12 @@ static bool cr_work_pop_locked(struct cr_work_queue *q, struct cr_work *item)
 	q->start++;
 	pthread_cond_signal(&q->not_full);
 
-	if (q->start != q->end && q->idle_workers > 0)
-		pthread_cond_signal(&q->not_empty);
+	if (q->start != q->end) {
+		if (q->idle_workers > 0)
+			pthread_cond_signal(&q->not_empty);
+	} else if (q->slot_waiters > 0) {
+		cr_work_wake_slot_waiters(q->budget);
+	}
 
 	return true;
 }
@@ -423,7 +435,8 @@ void cr_work_queue_destroy(struct cr_work_queue *q)
 	pthread_mutex_lock(&q->lock);
 	q->stop = true;
 	pthread_cond_broadcast(&q->not_empty);
-	futex_wake(&q->budget->active_workers);
+	if (q->slot_waiters > 0)
+		cr_work_wake_slot_waiters(q->budget);
 	pthread_mutex_unlock(&q->lock);
 
 	for (i = 0; i < q->nr_workers; i++)

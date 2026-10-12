@@ -9,6 +9,8 @@
 
 #define CR_WORK_QUEUE_SIZE 256
 #define CR_WORK_MAX_BATCHES 2
+#define CR_WORK_ACTIVE_MASK 0xffffU
+#define CR_WORK_GEN_INC (1U << 16)
 
 typedef int (*work_func_t)(void *arg);
 
@@ -34,6 +36,11 @@ struct cr_work_budget {
 	unsigned int thread_capacity;
 };
 
+static inline unsigned int cr_work_budget_active(const struct cr_work_budget *budget)
+{
+	return futex_get((futex_t *)&budget->active_workers) & CR_WORK_ACTIVE_MASK;
+}
+
 struct cr_work_queue {
 	struct cr_work buf[CR_WORK_QUEUE_SIZE];
 	unsigned int start;
@@ -46,6 +53,7 @@ struct cr_work_queue {
 
 	unsigned int inflight;
 	unsigned int idle_workers;
+	unsigned int slot_waiters;
 	int error;
 	bool stop;
 
