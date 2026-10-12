@@ -927,7 +927,6 @@ int pagemap_enqueue_iovec(struct page_read *pr, void *buf, unsigned long len, st
 	unsigned long nr_pages = len / PAGE_SIZE;
 	bool has_lz4;
 	bool mixed_direct;
-	bool parallel_zero = false;
 	off_t pi_off;
 	size_t saved_block_idx;
 	unsigned int saved_block_offset;
@@ -946,7 +945,6 @@ int pagemap_enqueue_iovec(struct page_read *pr, void *buf, unsigned long len, st
 	if (compressed_request_has_lz4(pr, nr_pages, &has_lz4,
 					&mixed_direct))
 		return -1;
-	(void)parallel_zero;
 
 	pi_off = pr->pi_off;
 	saved_block_idx = pr->blk.block_idx;
@@ -2351,6 +2349,7 @@ static int page_read_range_needs_decode(struct page_read *pr,
 	bool parallel_zero = false;
 	bool parallel_uncompressed = false;
 	unsigned long uncompressed_bytes = 0;
+	unsigned long raw_bytes = 0;
 	int left = 0;
 	int right;
 	int i;
@@ -2397,8 +2396,13 @@ static int page_read_range_needs_decode(struct page_read *pr,
 
 		if (pe_start >= end)
 			break;
-		if (pe_end <= start)
+		if (pe_end <= start) {
+			if (pagemap_present(pe) && !pagemap_in_parent(pe)) {
+				uncompressed_bytes = 0;
+				raw_bytes = 0;
+			}
 			continue;
+		}
 
 		overlap_start = max(start, pe_start);
 		overlap_end = min(end, pe_end);
@@ -2416,23 +2420,33 @@ static int page_read_range_needs_decode(struct page_read *pr,
 							   premap_mixed);
 			if (ret)
 				return ret;
+			uncompressed_bytes = 0;
+			raw_bytes = 0;
 			have_previous_storage = false;
 			continue;
 		}
 		if (!pe->blocks) {
 			if (parallel_uncompressed && pagemap_present(pe)) {
+				if (overlap_start > pe_start)
+					uncompressed_bytes = 0;
 				uncompressed_bytes += overlap_end - overlap_start;
 				if (uncompressed_bytes >= PARALLEL_UNCOMPRESSED_MIN_BATCH_BYTES)
 					return 1;
+				if (overlap_end < pe_end)
+					uncompressed_bytes = 0;
 			}
+			raw_bytes = 0;
 			have_previous_storage = false;
 			continue;
 		}
+		uncompressed_bytes = 0;
 
 		cur_block_pages = pagemap_block_pages(pe);
 		if (have_previous_storage &&
-		    cur_block_pages != previous_block_pages)
+		    cur_block_pages != previous_block_pages) {
+			raw_bytes = 0;
 			have_previous_storage = false;
+		}
 		if (cur_block_pages) {
 			uint64_t first_page =
 				(overlap_start - pe_start) / PAGE_SIZE;
@@ -2448,6 +2462,8 @@ static int page_read_range_needs_decode(struct page_read *pr,
 			first_block = (overlap_start - pe_start) / PAGE_SIZE;
 			last_block = (overlap_end - pe_start) / PAGE_SIZE;
 		}
+		if (!parallel_zero_entry)
+			raw_bytes = 0;
 
 		if (last_block > pe->blocks->n_block_sizes) {
 			pr_err("LZ4 range block index %zu exceeds %zu blocks\n",
@@ -2463,10 +2479,26 @@ static int page_read_range_needs_decode(struct page_read *pr,
 				return -1;
 			if (storage == VMA_IO_ENCODED)
 				return 1;
-			if (parallel_uncompressed && storage == VMA_IO_PACKED_RAW) {
-				uncompressed_bytes += (unsigned long)block_pages * PAGE_SIZE;
-				if (uncompressed_bytes >= PARALLEL_UNCOMPRESSED_MIN_BATCH_BYTES)
-					return 1;
+			if (parallel_uncompressed && parallel_zero_entry &&
+			    storage == VMA_IO_PACKED_RAW) {
+				uint64_t first_page = block;
+				unsigned long block_start;
+				unsigned long block_end;
+
+				if (cur_block_pages)
+					first_page *= cur_block_pages;
+				block_start = pe_start + first_page * PAGE_SIZE;
+				block_end = block_start + (unsigned long)block_pages * PAGE_SIZE;
+
+				if (block_start < overlap_start || block_end > overlap_end) {
+					raw_bytes = 0;
+				} else {
+					raw_bytes += block_end - block_start;
+					if (raw_bytes >= PARALLEL_UNCOMPRESSED_MIN_BATCH_BYTES)
+						return 1;
+				}
+			} else {
+				raw_bytes = 0;
 			}
 			if (parallel_zero_entry && storage == VMA_IO_ZERO) {
 				uint64_t first_page = block;
