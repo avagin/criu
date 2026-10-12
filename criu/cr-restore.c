@@ -1529,6 +1529,7 @@ static int __restore_task_with_children(void *_arg)
 	int ret;
 
 	current = ca->item;
+	atomic_inc(&task_entries->nr_forked);
 
 	if (current != root_item) {
 		char buf[12];
@@ -2423,6 +2424,7 @@ int prepare_task_entries(void)
 	task_entries->nr_threads = 0;
 	task_entries->nr_tasks = 0;
 	task_entries->nr_helpers = 0;
+	atomic_set(&task_entries->nr_forked, 0);
 	futex_set(&task_entries->start, CR_STATE_FAIL);
 	mutex_init(&task_entries->userns_sync_lock);
 	mutex_init(&task_entries->cgroupd_sync_lock);

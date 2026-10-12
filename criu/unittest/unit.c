@@ -509,6 +509,9 @@ static void test_parallel_decompression(void)
 	budget.thread_capacity = available_threads;
 	assert(!compressed_restore_has_parallel_capacity(1));
 	assert(compressed_restore_has_parallel_capacity(0) == (available_threads > 1));
+	cr_work_set_can_spawn(false);
+	assert(!compressed_restore_has_parallel_capacity(0));
+	cr_work_set_can_spawn(true);
 
 	src = malloc(src_size);
 	compressed = malloc(nr_jobs * compressed_stride);
@@ -762,6 +765,20 @@ static void test_work_queue(void)
 	/* Subsequent wait after error reset should return 0 */
 	assert(cr_work_wait(&q) == 0);
 	assert(cr_work_budget_active(&sh->budget) == 0);
+
+	/* Disabling worker spawning falls back to synchronous caller execution */
+	cr_work_queue_destroy(&q);
+	cr_work_set_can_spawn(false);
+	assert(!cr_work_has_parallel_capacity(0));
+	assert(cr_work_queue_init(&q, &sh->budget) == 0);
+	atomic_set(&sh->total_completed, 0);
+	for (i = 0; i < 8; i++)
+		assert(cr_work_submit(&q, test_wq_inc_fn, sh) == 0);
+	assert(cr_work_wait(&q) == 0);
+	assert(q.nr_workers == 0);
+	assert(atomic_read(&sh->total_completed) == 8);
+	cr_work_set_can_spawn(true);
+	assert(cr_work_has_parallel_capacity(0));
 
 	/*
 	 * Verify that workers blocked waiting for a global slot wake up

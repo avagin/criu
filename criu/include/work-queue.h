@@ -68,6 +68,7 @@ struct cr_work_queue {
 extern unsigned int cr_work_thread_limit(unsigned int requested, unsigned int available_cpus);
 extern void cr_work_budget_init(struct cr_work_budget *budget, unsigned int requested_threads);
 extern void cr_work_set_shared_budget(struct cr_work_budget *budget);
+extern void cr_work_set_can_spawn(bool can_spawn);
 extern bool cr_work_has_parallel_capacity(unsigned int requested_threads);
 
 extern void cr_work_batch_acquire(void);

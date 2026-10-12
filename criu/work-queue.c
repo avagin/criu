@@ -28,6 +28,7 @@ static struct cr_work_budget *shared_work_budget;
 static struct cr_work_budget default_work_budget;
 static unsigned int default_work_budget_requested;
 static struct cr_work_queue task_work_queue;
+static bool task_can_spawn_workers = true;
 
 static unsigned int cr_work_available_cpus(void)
 {
@@ -103,6 +104,11 @@ void cr_work_set_shared_budget(struct cr_work_budget *budget)
 	shared_work_budget = budget;
 }
 
+void cr_work_set_can_spawn(bool can_spawn)
+{
+	task_can_spawn_workers = can_spawn;
+}
+
 static struct cr_work_budget *cr_work_get_budget(struct cr_work_budget *budget)
 {
 	if (budget)
@@ -124,7 +130,7 @@ bool cr_work_has_parallel_capacity(unsigned int requested_threads)
 {
 	struct cr_work_budget *budget = cr_work_get_budget(NULL);
 
-	if (requested_threads == 1 || !budget)
+	if (!task_can_spawn_workers || requested_threads == 1 || !budget)
 		return false;
 
 	return cr_work_thread_limit(requested_threads, budget->thread_capacity) > 1 &&
@@ -322,7 +328,7 @@ static bool cr_work_spawn_worker_locked(struct cr_work_queue *q)
 	bool spawned = false;
 	int err;
 
-	if (q->nr_workers >= q->budget->max_workers)
+	if (!task_can_spawn_workers || q->nr_workers >= q->budget->max_workers)
 		return false;
 
 	err = pthread_attr_init(&attr);

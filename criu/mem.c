@@ -1514,6 +1514,17 @@ static int maybe_disable_thp(struct pstree_item *t, struct page_read *pr)
 	return 0;
 }
 
+static unsigned int pstree_count_descendants(struct pstree_item *t)
+{
+	struct pstree_item *child;
+	unsigned int nr = 0;
+
+	list_for_each_entry(child, &t->children, sibling)
+		nr += 1 + pstree_count_descendants(child);
+
+	return nr;
+}
+
 int prepare_mappings(struct pstree_item *t)
 {
 	int ret = 0;
@@ -1523,6 +1534,29 @@ int prepare_mappings(struct pstree_item *t)
 
 	void *old_premmapped_addr = NULL;
 	unsigned long old_premmapped_len;
+
+	/*
+	 * During CR_STATE_FORKING, sibling subtrees fork concurrently in the
+	 * restored PID namespace. Spawning pthread worker threads in a child
+	 * task while another task outside t's subtree has not yet been forked
+	 * allocates arbitrary kernel TIDs in the PID namespace IDR without
+	 * holding last_pid_mutex, which can collide with a target vpid() of a
+	 * sibling/cousin task (fork_with_pid() failing with EEXIST).
+	 *
+	 * Since prepare_mappings(t) runs before t forks its own children and
+	 * destroys its task work queue at exit, all tasks outside t's subtree
+	 * have already been forked iff nr_forked + descendants(t) equals the
+	 * total number of tasks/helpers in the pstree.
+	 */
+	if (t->parent && task_entries) {
+		int total_tasks = task_entries->nr_tasks + task_entries->nr_helpers;
+		int uncreated_outside = total_tasks -
+					atomic_read(&task_entries->nr_forked) -
+					(int)pstree_count_descendants(t);
+
+		if (uncreated_outside > 0)
+			cr_work_set_can_spawn(false);
+	}
 
 	vmas = &rsti(t)->vmas;
 	if (vmas->nr == 0) /* Zombie */
@@ -1591,6 +1625,7 @@ int prepare_mappings(struct pstree_item *t)
 
 out:
 	cr_task_work_queue_destroy();
+	cr_work_set_can_spawn(true);
 	return ret;
 }
 
