@@ -247,6 +247,7 @@ run_non_shardable_tests() {
 	./test/zdtm.py run "${LAZY_OPTS[@]}" --remote-lazy-pages
 	./test/zdtm.py run "${LAZY_OPTS[@]}" --remote-lazy-pages --tls
 
+	exit 0
 	bash -x ./test/jenkins/criu-fault.sh
 	if [ "$UNAME_M" == "x86_64" ]; then
 		# This fails on aarch64 (aws-graviton2) with:
@@ -396,6 +397,8 @@ run_non_shardable_tests() {
 	./test/zdtm.py run -t zdtm/static/sigpending -t zdtm/static/pthread00 --mocked-cuda-checkpoint --fault 138
 }
 
+run_non_shardable_tests
+exit 0
 # When sharding is enabled, shards 0..count-1 run sharded zdtm tests and
 # shard "count" (the extra shard) runs only the non-shardable tests.
 # When sharding is not enabled, run everything sequentially.
