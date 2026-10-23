@@ -1189,7 +1189,6 @@ int libsoccr_mptcp_restore(struct libsoccr_sk *sk, struct libsoccr_mptcp_sk_data
 	struct mptcp_repair_keys keys = {};
 	struct mptcp_repair_seq seq = {};
 	struct mptcp_repair_subflow sf = {};
-	__u64 target_snd_nxt;
 
 	if (data_size < sizeof(*data))
 		return -1;
@@ -1204,29 +1203,6 @@ int libsoccr_mptcp_restore(struct libsoccr_sk *sk, struct libsoccr_mptcp_sk_data
 	}
 
 	/*
-	 * If we have unacknowledged data in the output queue, msk->snd_nxt must
-	 * be aligned with where the subflow TCP layer will actually resume wire
-	 * transmission (sf_snd_nxt / sf_rel_write_seq).
-	 *
-	 * At dump time, msk->snd_nxt might have advanced further because MPTCP
-	 * pushed skbs into ssk->sk_write_queue that had not yet been transmitted
-	 * on the wire. On restore, ssk->sk_write_queue is empty and the entire
-	 * MPTCP write queue is repushed from msk->rtx_queue starting at
-	 * sf_rel_write_seq.
-	 *
-	 * If outq_len == 0 (no data payload, e.g. already sent or FIN_WAIT1/LAST_ACK),
-	 * data->snd_nxt is preserved directly to ensure mptcp_data_fin_enabled()
-	 * remains valid.
-	 */
-	target_snd_nxt = data->snd_nxt;
-	if (data->outq_len && data->sf_idsn) {
-		__u64 sf_snd_nxt = data->sf_idsn + data->sf_rel_write_seq;
-
-		if (sf_snd_nxt >= data->snd_una && sf_snd_nxt < data->snd_nxt)
-			target_snd_nxt = sf_snd_nxt;
-	}
-
-	/*
 	 * 2. Restore 64-bit Sequences
 	 *
 	 * When outq_len > 0, write_seq is temporarily initialized to snd_una before
@@ -1238,7 +1214,7 @@ int libsoccr_mptcp_restore(struct libsoccr_sk *sk, struct libsoccr_mptcp_sk_data
 	 * injection, then re-synced to data->rcv_nxt.
 	 */
 	seq.write_seq = data->outq_len ? data->snd_una : data->write_seq;
-	seq.snd_nxt = target_snd_nxt;
+	seq.snd_nxt = data->snd_nxt;
 	seq.snd_una = data->snd_una;
 	seq.rcv_nxt = data->inq_len ? (data->rcv_nxt - data->inq_len) : data->rcv_nxt;
 	seq.rcv_wnd_sent = data->rcv_wnd_sent;
@@ -1319,7 +1295,7 @@ int libsoccr_mptcp_restore(struct libsoccr_sk *sk, struct libsoccr_mptcp_sk_data
 	if (data->inq_len || data->outq_len) {
 		/* Re-sync final sequences after queue restoration */
 		seq.write_seq = data->write_seq;
-		seq.snd_nxt = target_snd_nxt;
+		seq.snd_nxt = data->snd_nxt;
 		seq.rcv_nxt = data->rcv_nxt;
 		if (setsockopt(sk->fd, SOL_MPTCP, MPTCP_REPAIR_SEQ, &seq, sizeof(seq)) < 0) {
 			logerr("Failed to re-sync MPTCP_REPAIR_SEQ");
