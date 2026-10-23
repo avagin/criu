@@ -199,6 +199,16 @@ static int dump_mptcp_conn_state(struct inet_sk_desc *sk)
 	mse.sf_ssn_offset = data.sf_ssn_offset;
 	mse.has_sf_rel_write_seq = true;
 	mse.sf_rel_write_seq = data.sf_rel_write_seq;
+	mse.has_sf_subflow_id = true;
+	mse.sf_subflow_id = data.sf_subflow_id;
+	mse.has_sf_local_id = true;
+	mse.sf_local_id = data.sf_local_id;
+	mse.has_sf_remote_id = true;
+	mse.sf_remote_id = data.sf_remote_id;
+	mse.has_sf_backup = true;
+	mse.sf_backup = data.sf_backup;
+	mse.has_sf_mp_join = true;
+	mse.sf_mp_join = data.sf_mp_join;
 
 	img = open_image(CR_FD_MPTCP_STREAM, O_DUMP, sk->sd.ino);
 	if (!img)
@@ -270,7 +280,7 @@ static int read_mptcp_queue(struct libsoccr_sk *sk, int queue, u32 len, struct c
 static int restore_mptcp_conn_state(int sk, struct libsoccr_sk *socr, struct inet_sk_info *ii)
 {
 	struct cr_img *img;
-	MptcpStreamEntry *mse;
+	MptcpStreamEntry *mse = NULL;
 	struct libsoccr_mptcp_sk_data data = {};
 	union libsoccr_addr sa_src, sa_dst;
 
@@ -305,6 +315,7 @@ static int restore_mptcp_conn_state(int sk, struct libsoccr_sk *socr, struct ine
 	data.outq_len = mse->outq_len;
 	data.unsq_len = mse->has_unsq_len ? mse->unsq_len : mse->outq_len;
 
+	data.sf_subflow_id = mse->has_sf_subflow_id ? mse->sf_subflow_id : 0;
 	data.sf_snd_una = mse->sf_snd_una;
 	data.sf_snd_nxt = mse->sf_snd_nxt;
 	data.sf_rcv_nxt = mse->sf_rcv_nxt;
@@ -316,8 +327,12 @@ static int restore_mptcp_conn_state(int sk, struct libsoccr_sk *socr, struct ine
 	data.sf_tsoffset = mse->has_sf_tsoffset ? mse->sf_tsoffset : 0;
 	data.sf_snd_wscale = mse->has_sf_snd_wscale ? mse->sf_snd_wscale : 0;
 	data.sf_rcv_wscale = mse->has_sf_rcv_wscale ? mse->sf_rcv_wscale : 0;
+	data.sf_local_id = mse->has_sf_local_id ? mse->sf_local_id : 0;
+	data.sf_remote_id = mse->has_sf_remote_id ? mse->sf_remote_id : 0;
 	data.sf_sack_ok = mse->has_sf_sack_ok ? mse->sf_sack_ok : 0;
 	data.sf_timestamps = mse->has_sf_timestamps ? mse->sf_timestamps : 0;
+	data.sf_backup = mse->has_sf_backup ? mse->sf_backup : 0;
+	data.sf_mp_join = mse->has_sf_mp_join ? mse->sf_mp_join : 0;
 
 	data.sf_idsn = mse->has_sf_idsn ? mse->sf_idsn : 0;
 	data.sf_map_seq = mse->has_sf_map_seq ? mse->sf_map_seq : 0;
@@ -333,6 +348,9 @@ static int restore_mptcp_conn_state(int sk, struct libsoccr_sk *socr, struct ine
 	libsoccr_set_addr(socr, 1, &sa_src, 0);
 	libsoccr_set_addr(socr, 0, &sa_dst, 0);
 
+	if (restore_prepare_socket(sk))
+		goto err_c;
+
 	if (data.inq_len && read_mptcp_queue(socr, TCP_RECV_QUEUE, data.inq_len, img))
 		goto err_c;
 	if (data.outq_len && read_mptcp_queue(socr, TCP_SEND_QUEUE, data.outq_len, img))
@@ -346,7 +364,8 @@ static int restore_mptcp_conn_state(int sk, struct libsoccr_sk *socr, struct ine
 	return 0;
 
 err_c:
-	mptcp_stream_entry__free_unpacked(mse, NULL);
+	if (mse)
+		mptcp_stream_entry__free_unpacked(mse, NULL);
 	close_image(img);
 err:
 	return -1;
@@ -373,6 +392,7 @@ int restore_one_mptcp(int fd, struct inet_sk_info *ii)
 		return -1;
 	}
 
+	libsoccr_release(sk);
 	return 0;
 }
 

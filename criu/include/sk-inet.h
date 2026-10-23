@@ -118,12 +118,6 @@ extern int restore_tcp_opts(int sk, TcpOptsEntry *toe);
 #define SK_EST_PARAM	  "tcp-established"
 #define SK_INFLIGHT_PARAM "skip-in-flight"
 #define SK_CLOSE_PARAM	  "tcp-close"
-#ifndef SOL_MPTCP
-#define SOL_MPTCP 284
-#endif
-#ifndef MPTCP_REPAIR
-#define MPTCP_REPAIR 10
-#endif
 
 struct task_restore_args;
 int prepare_tcp_socks(struct task_restore_args *);

@@ -816,15 +816,14 @@ static int do_collect_req(int nl, struct sock_diag_req *req, int size,
 	return tmp;
 }
 
-static int collect_err(int err, struct ns_id *ns, void *arg)
+static int __collect_err(int err, unsigned int family_num, unsigned int proto_num)
 {
-	struct sock_diag_greq *gr = arg;
 	char family[32], proto[32];
 	char msg[256];
 
 	snprintf(msg, sizeof(msg), "Sockets collect procedure family %s proto %s",
-		 socket_family_name(gr->family, family, sizeof(family)),
-		 socket_proto_name(gr->protocol, proto, sizeof(proto)));
+		 socket_family_name(family_num, family, sizeof(family)),
+		 socket_proto_name(proto_num, proto, sizeof(proto)));
 
 	/*
 	 * If module is not compiled or unloaded,
@@ -846,9 +845,9 @@ static int collect_err(int err, struct ns_id *ns, void *arg)
 		 * Note: IPPROTO_UDPLITE support was removed
 		 * from the kernel starting with v7.1.
 		 */
-		if (gr->protocol == IPPROTO_RAW ||
-		    gr->protocol == IPPROTO_UDPLITE ||
-		    gr->protocol == IPPROTO_MPTCP)
+		if (proto_num == IPPROTO_RAW ||
+		    proto_num == IPPROTO_UDPLITE ||
+		    proto_num == IPPROTO_MPTCP)
 			return 0;
 		return -ENOENT;
 	}
@@ -858,7 +857,7 @@ static int collect_err(int err, struct ns_id *ns, void *arg)
 	 * may return EINVAL on older kernels.
 	 */
 	if (err == -EINVAL) {
-		if (gr->family == AF_UNIX || gr->family == AF_PACKET || gr->family == AF_NETLINK) {
+		if (family_num == AF_UNIX || family_num == AF_PACKET || family_num == AF_NETLINK) {
 			pr_debug("%s: %d\n", msg, err);
 			return -EINVAL;
 		}
@@ -876,6 +875,13 @@ static int collect_err(int err, struct ns_id *ns, void *arg)
 	return err;
 }
 
+static int collect_err(int err, struct ns_id *ns, void *arg)
+{
+	struct sock_diag_greq *gr = arg;
+
+	return __collect_err(err, gr->family, gr->protocol);
+}
+
 #ifndef INET_DIAG_REQ_PROTOCOL
 #define INET_DIAG_REQ_PROTOCOL 3
 #endif
@@ -889,17 +895,19 @@ struct sock_diag_mptcp_req {
 
 static int mptcp_receive_one(struct nlmsghdr *h, struct ns_id *ns, void *arg)
 {
-	struct sock_diag_greq *gr = arg;
-	return inet_collect_one(h, gr->family, SOCK_STREAM, ns);
+	struct inet_diag_req_v2 *i = arg;
+	return inet_collect_one(h, i->sdiag_family, SOCK_STREAM, ns);
+}
+
+static int mptcp_collect_err(int err, struct ns_id *ns, void *arg)
+{
+	struct inet_diag_req_v2 *i = arg;
+	return __collect_err(err, i->sdiag_family, IPPROTO_MPTCP);
 }
 
 static int collect_mptcp_sockets(int nl, int family, struct ns_id *ns)
 {
 	struct sock_diag_mptcp_req req;
-	struct sock_diag_greq gr = {
-		.family = family,
-		.protocol = IPPROTO_TCP,
-	};
 	int tmp;
 
 	memset(&req, 0, sizeof(req));
@@ -916,7 +924,7 @@ static int collect_mptcp_sockets(int nl, int family, struct ns_id *ns)
 	req.rta.rta_len = RTA_LENGTH(sizeof(__u32));
 	req.proto = IPPROTO_MPTCP;
 
-	tmp = do_rtnl_req(nl, &req, sizeof(req), mptcp_receive_one, collect_err, ns, &gr);
+	tmp = do_rtnl_req(nl, &req, sizeof(req), mptcp_receive_one, mptcp_collect_err, ns, &req.r);
 	if (tmp == 0)
 		set_collect_bit(family, IPPROTO_MPTCP);
 	return tmp;

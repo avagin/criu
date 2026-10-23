@@ -614,6 +614,10 @@ static int do_dump_one_inet_fd(int lfd, u32 id, const struct fd_parms *p, int fa
 		if (sk->shutdown)
 			sk_encode_shutdown(&ie, sk->shutdown);
 
+		err = dump_tcp_opts(lfd, &tcpopts);
+		if (err < 0)
+			goto err;
+
 		err = dump_one_mptcp(lfd, sk, &skopts);
 		if (err < 0)
 			goto err;
@@ -1008,11 +1012,12 @@ done:
 	if (restore_socket_opts(sk, ie->opts))
 		goto err;
 
-	if (ie->proto == IPPROTO_TCP && restore_tcp_opts(sk, ie->tcp_opts))
+	if ((ie->proto == IPPROTO_TCP || ie->proto == IPPROTO_MPTCP) && restore_tcp_opts(sk, ie->tcp_opts))
 		goto err;
 
 	if (ie->has_shutdown &&
-	    (ie->proto == IPPROTO_UDP || ie->proto == IPPROTO_UDPLITE || ie->proto == IPPROTO_TCP)) {
+	    (ie->proto == IPPROTO_UDP || ie->proto == IPPROTO_UDPLITE ||
+	     ie->proto == IPPROTO_TCP || ie->proto == IPPROTO_MPTCP)) {
 		if (shutdown(sk, sk_decode_shutdown(ie->shutdown))) {
 			if (ie->state != TCP_CLOSE && errno != ENOTCONN) {
 				pr_perror("Can't shutdown socket into %d", sk_decode_shutdown(ie->shutdown));
