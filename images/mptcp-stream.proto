@@ -45,4 +45,9 @@ message mptcp_stream_entry {
 	optional uint32		sf_map_subflow_seq = 31;
 	optional uint32		sf_ssn_offset	= 32;
 	optional uint32		sf_rel_write_seq = 33;
+	optional uint32		sf_subflow_id	= 34;
+	optional uint32		sf_local_id	= 35;
+	optional uint32		sf_remote_id	= 36;
+	optional bool		sf_backup	= 37;
+	optional bool		sf_mp_join	= 38;
 }
