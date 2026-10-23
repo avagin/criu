@@ -1049,6 +1049,7 @@ int libsoccr_mptcp_save(struct libsoccr_sk *sk, struct libsoccr_mptcp_sk_data *d
 		logerr("Failed to getsockopt MPTCP_REPAIR_SUBFLOW");
 		return -1;
 	}
+	data->sf_subflow_id = sf.subflow_id;
 	data->sf_snd_una = sf.snd_una;
 	data->sf_snd_nxt = sf.snd_nxt;
 	data->sf_rcv_nxt = sf.rcv_nxt;
@@ -1060,8 +1061,12 @@ int libsoccr_mptcp_save(struct libsoccr_sk *sk, struct libsoccr_mptcp_sk_data *d
 	data->sf_tsoffset = sf.tsoffset;
 	data->sf_snd_wscale = sf.snd_wscale;
 	data->sf_rcv_wscale = sf.rcv_wscale;
+	data->sf_local_id = sf.local_id;
+	data->sf_remote_id = sf.remote_id;
 	data->sf_sack_ok = !!(sf.flags & MPTCP_SUBFLOW_REPAIR_FLAG_SACK_OK);
 	data->sf_timestamps = !!(sf.flags & MPTCP_SUBFLOW_REPAIR_FLAG_TIMESTAMPS);
+	data->sf_backup = !!(sf.flags & MPTCP_SUBFLOW_REPAIR_FLAG_BACKUP);
+	data->sf_mp_join = !!(sf.flags & MPTCP_SUBFLOW_REPAIR_FLAG_JOIN);
 	data->sf_idsn = sf.idsn;
 	data->sf_map_seq = sf.map_seq;
 	data->sf_map_subflow_seq = sf.map_subflow_seq;
@@ -1091,7 +1096,10 @@ int libsoccr_mptcp_save(struct libsoccr_sk *sk, struct libsoccr_mptcp_sk_data *d
 		int aux = MPTCP_RECV_QUEUE;
 		int ret;
 
-		setsockopt(sk->fd, SOL_MPTCP, MPTCP_REPAIR_QUEUE, &aux, sizeof(aux));
+		if (setsockopt(sk->fd, SOL_MPTCP, MPTCP_REPAIR_QUEUE, &aux, sizeof(aux)) < 0) {
+			logerr("Can't set MPTCP repair recv queue");
+			return -1;
+		}
 		sk->recv_queue = malloc(data->inq_len);
 		if (!sk->recv_queue)
 			return -1;
@@ -1115,7 +1123,10 @@ int libsoccr_mptcp_save(struct libsoccr_sk *sk, struct libsoccr_mptcp_sk_data *d
 		int aux = MPTCP_SEND_QUEUE;
 		int ret;
 
-		setsockopt(sk->fd, SOL_MPTCP, MPTCP_REPAIR_QUEUE, &aux, sizeof(aux));
+		if (setsockopt(sk->fd, SOL_MPTCP, MPTCP_REPAIR_QUEUE, &aux, sizeof(aux)) < 0) {
+			logerr("Can't set MPTCP repair send queue");
+			return -1;
+		}
 		sk->send_queue = malloc(data->outq_len);
 		if (!sk->send_queue)
 			return -1;
@@ -1207,7 +1218,13 @@ int libsoccr_mptcp_restore(struct libsoccr_sk *sk, struct libsoccr_mptcp_sk_data
 	 * data->snd_nxt is preserved directly to ensure mptcp_data_fin_enabled()
 	 * remains valid.
 	 */
-	target_snd_nxt = (data->outq_len && data->sf_idsn) ? (data->sf_idsn + data->sf_rel_write_seq) : data->snd_nxt;
+	target_snd_nxt = data->snd_nxt;
+	if (data->outq_len && data->sf_idsn) {
+		__u64 sf_snd_nxt = data->sf_idsn + data->sf_rel_write_seq;
+
+		if (sf_snd_nxt >= data->snd_una && sf_snd_nxt < data->snd_nxt)
+			target_snd_nxt = sf_snd_nxt;
+	}
 
 	/*
 	 * 2. Restore 64-bit Sequences
@@ -1251,6 +1268,7 @@ int libsoccr_mptcp_restore(struct libsoccr_sk *sk, struct libsoccr_mptcp_sk_data
 		else if (sk->dst_addr->sa.sa_family == AF_INET6)
 			memcpy(&sf.addrs.sin6_remote, &sk->dst_addr->v6, sizeof(sk->dst_addr->v6));
 	}
+	sf.subflow_id = data->sf_subflow_id;
 	sf.snd_una = data->sf_snd_una;
 	sf.snd_nxt = data->sf_snd_nxt;
 	sf.rcv_nxt = data->sf_rcv_nxt;
@@ -1262,10 +1280,16 @@ int libsoccr_mptcp_restore(struct libsoccr_sk *sk, struct libsoccr_mptcp_sk_data
 	sf.tsoffset = data->sf_tsoffset;
 	sf.snd_wscale = data->sf_snd_wscale;
 	sf.rcv_wscale = data->sf_rcv_wscale;
+	sf.local_id = data->sf_local_id;
+	sf.remote_id = data->sf_remote_id;
 	if (data->sf_sack_ok)
 		sf.flags |= MPTCP_SUBFLOW_REPAIR_FLAG_SACK_OK;
 	if (data->sf_timestamps)
 		sf.flags |= MPTCP_SUBFLOW_REPAIR_FLAG_TIMESTAMPS;
+	if (data->sf_backup)
+		sf.flags |= MPTCP_SUBFLOW_REPAIR_FLAG_BACKUP;
+	if (data->sf_mp_join)
+		sf.flags |= MPTCP_SUBFLOW_REPAIR_FLAG_JOIN;
 	sf.idsn = data->sf_idsn;
 	sf.map_seq = data->sf_map_seq;
 	sf.map_subflow_seq = data->sf_map_subflow_seq;
@@ -1305,5 +1329,3 @@ int libsoccr_mptcp_restore(struct libsoccr_sk *sk, struct libsoccr_mptcp_sk_data
 
 	return 0;
 }
-
-

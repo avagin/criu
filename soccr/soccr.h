@@ -55,41 +55,41 @@ enum {
 #endif
 
 #ifndef MPTCP_REPAIR
-#define MPTCP_REPAIR		10
-#define MPTCP_REPAIR_KEYS	11
-#define MPTCP_REPAIR_SEQ	12
-#define MPTCP_REPAIR_SUBFLOW	13
-#define MPTCP_REPAIR_QUEUE	14
+#define MPTCP_REPAIR	     10
+#define MPTCP_REPAIR_KEYS    11
+#define MPTCP_REPAIR_SEQ     12
+#define MPTCP_REPAIR_SUBFLOW 13
+#define MPTCP_REPAIR_QUEUE   14
 
-#define MPTCP_REPAIR_OFF	0
-#define MPTCP_REPAIR_ON		1
-#define MPTCP_REPAIR_OFF_NO_WP	2
+#define MPTCP_REPAIR_OFF       0
+#define MPTCP_REPAIR_ON	       1
+#define MPTCP_REPAIR_OFF_NO_WP 2
 
-#define MPTCP_KEY_FLAG_CSUM_ENABLED	(1U << 0)
-#define MPTCP_KEY_FLAG_64BIT_ACK	(1U << 1)
-#define MPTCP_KEY_FLAG_FALLBACK		(1U << 2)
+#define MPTCP_KEY_FLAG_CSUM_ENABLED (1U << 0)
+#define MPTCP_KEY_FLAG_64BIT_ACK    (1U << 1)
+#define MPTCP_KEY_FLAG_FALLBACK	    (1U << 2)
 
 /* Flags for MPTCP_REPAIR_SEQ */
-#define MPTCP_SEQ_FLAG_RCV_DATA_FIN		(1U << 0)
-#define MPTCP_SEQ_FLAG_SND_DATA_FIN_ENABLE	(1U << 1)
-#define MPTCP_SEQ_FLAG_ALLOW_INFINITE_FALLBACK	(1U << 2)
+#define MPTCP_SEQ_FLAG_RCV_DATA_FIN	       (1U << 0)
+#define MPTCP_SEQ_FLAG_SND_DATA_FIN_ENABLE     (1U << 1)
+#define MPTCP_SEQ_FLAG_ALLOW_INFINITE_FALLBACK (1U << 2)
 
 struct mptcp_repair_keys {
-	uint64_t	local_key;
-	uint64_t	remote_key;
-	uint32_t	token;
-	uint32_t	flags;
+	uint64_t local_key;
+	uint64_t remote_key;
+	uint32_t token;
+	uint32_t flags;
 };
 
 struct mptcp_repair_seq {
-	uint64_t	write_seq;
-	uint64_t	snd_nxt;
-	uint64_t	snd_una;
-	uint64_t	rcv_nxt;
-	uint64_t	rcv_wnd_sent;
-	uint64_t	rcv_data_fin_seq;
-	uint32_t	mptcp_state;
-	uint32_t	flags;
+	uint64_t write_seq;
+	uint64_t snd_nxt;
+	uint64_t snd_una;
+	uint64_t rcv_nxt;
+	uint64_t rcv_wnd_sent;
+	uint64_t rcv_data_fin_seq;
+	uint32_t mptcp_state;
+	uint32_t flags;
 };
 
 struct mptcp_subflow_addrs {
@@ -109,35 +109,35 @@ struct mptcp_subflow_addrs {
 };
 
 /* Flags for MPTCP_REPAIR_SUBFLOW */
-#define MPTCP_SUBFLOW_REPAIR_FLAG_SACK_OK	(1U << 0)
-#define MPTCP_SUBFLOW_REPAIR_FLAG_TIMESTAMPS	(1U << 1)
-#define MPTCP_SUBFLOW_REPAIR_FLAG_BACKUP	(1U << 2)
-#define MPTCP_SUBFLOW_REPAIR_FLAG_JOIN		(1U << 3)
+#define MPTCP_SUBFLOW_REPAIR_FLAG_SACK_OK    (1U << 0)
+#define MPTCP_SUBFLOW_REPAIR_FLAG_TIMESTAMPS (1U << 1)
+#define MPTCP_SUBFLOW_REPAIR_FLAG_BACKUP     (1U << 2)
+#define MPTCP_SUBFLOW_REPAIR_FLAG_JOIN	     (1U << 3)
 
 struct mptcp_repair_subflow {
 	struct mptcp_subflow_addrs addrs;
-	uint32_t	subflow_id;
-	uint32_t	snd_una;
-	uint32_t	snd_nxt;
-	uint32_t	rcv_nxt;
-	uint32_t	snd_wnd;
-	uint32_t	rcv_wnd;
-	uint32_t	mss_clamp;
-	uint32_t	ts_recent;
-	uint32_t	ts_recent_stamp;
-	uint32_t	tsoffset;
-	uint16_t	flags;
-	uint8_t		snd_wscale;
-	uint8_t		rcv_wscale;
-	uint8_t		local_id;
-	uint8_t		remote_id;
-	uint16_t	reserved;
-	uint64_t	idsn;
-	uint64_t	map_seq;
-	uint32_t	map_subflow_seq;
-	uint32_t	ssn_offset;
-	uint32_t	rel_write_seq;
-	uint32_t	reserved2;
+	uint32_t subflow_id;
+	uint32_t snd_una;
+	uint32_t snd_nxt;
+	uint32_t rcv_nxt;
+	uint32_t snd_wnd;
+	uint32_t rcv_wnd;
+	uint32_t mss_clamp;
+	uint32_t ts_recent;
+	uint32_t ts_recent_stamp;
+	uint32_t tsoffset;
+	uint16_t flags;
+	uint8_t snd_wscale;
+	uint8_t rcv_wscale;
+	uint8_t local_id;
+	uint8_t remote_id;
+	uint16_t reserved;
+	uint64_t idsn;
+	uint64_t map_seq;
+	uint32_t map_subflow_seq;
+	uint32_t ssn_offset;
+	uint32_t rel_write_seq;
+	uint32_t reserved2;
 };
 
 enum {
@@ -150,49 +150,54 @@ enum {
 
 struct libsoccr_mptcp_sk_data {
 	/* Keys & Token */
-	uint64_t	local_key;
-	uint64_t	remote_key;
-	uint32_t	token;
-	uint32_t	key_flags;
+	uint64_t local_key;
+	uint64_t remote_key;
+	uint32_t token;
+	uint32_t key_flags;
 
 	/* MPTCP Sequence Numbers & State */
-	uint64_t	write_seq;
-	uint64_t	snd_nxt;
-	uint64_t	snd_una;
-	uint64_t	rcv_nxt;
-	uint64_t	rcv_wnd_sent;
-	uint64_t	rcv_data_fin_seq;
-	uint32_t	mptcp_state;
-	uint8_t		rcv_data_fin;
-	uint8_t		snd_data_fin_enable;
-	uint8_t		allow_infinite_fallback;
+	uint64_t write_seq;
+	uint64_t snd_nxt;
+	uint64_t snd_una;
+	uint64_t rcv_nxt;
+	uint64_t rcv_wnd_sent;
+	uint64_t rcv_data_fin_seq;
+	uint32_t mptcp_state;
+	uint8_t rcv_data_fin;
+	uint8_t snd_data_fin_enable;
+	uint8_t allow_infinite_fallback;
 
 	/* Queue lengths */
-	uint32_t	inq_len;
-	uint32_t	outq_len;
-	uint32_t	unsq_len;
+	uint32_t inq_len;
+	uint32_t outq_len;
+	uint32_t unsq_len;
 
 	/* Master subflow TCP parameters */
-	uint32_t	sf_snd_una;
-	uint32_t	sf_snd_nxt;
-	uint32_t	sf_rcv_nxt;
-	uint32_t	sf_snd_wnd;
-	uint32_t	sf_rcv_wnd;
-	uint32_t	sf_mss_clamp;
-	uint32_t	sf_ts_recent;
-	uint32_t	sf_ts_recent_stamp;
-	uint32_t	sf_tsoffset;
-	uint8_t		sf_snd_wscale;
-	uint8_t		sf_rcv_wscale;
-	uint8_t		sf_sack_ok;
-	uint8_t		sf_timestamps;
+	uint32_t sf_subflow_id;
+	uint32_t sf_snd_una;
+	uint32_t sf_snd_nxt;
+	uint32_t sf_rcv_nxt;
+	uint32_t sf_snd_wnd;
+	uint32_t sf_rcv_wnd;
+	uint32_t sf_mss_clamp;
+	uint32_t sf_ts_recent;
+	uint32_t sf_ts_recent_stamp;
+	uint32_t sf_tsoffset;
+	uint8_t sf_snd_wscale;
+	uint8_t sf_rcv_wscale;
+	uint8_t sf_local_id;
+	uint8_t sf_remote_id;
+	uint8_t sf_sack_ok;
+	uint8_t sf_timestamps;
+	uint8_t sf_backup;
+	uint8_t sf_mp_join;
 
 	/* Master subflow MPTCP mapping */
-	uint64_t	sf_idsn;
-	uint64_t	sf_map_seq;
-	uint32_t	sf_map_subflow_seq;
-	uint32_t	sf_ssn_offset;
-	uint32_t	sf_rel_write_seq;
+	uint64_t sf_idsn;
+	uint64_t sf_map_seq;
+	uint32_t sf_map_subflow_seq;
+	uint32_t sf_ssn_offset;
+	uint32_t sf_rel_write_seq;
 };
 
 struct libsoccr_sk *libsoccr_mptcp_pause(int fd);
